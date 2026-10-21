@@ -5,11 +5,11 @@
 
 paths:
   # pi 会话日志根目录（只读）
-  sessions_dir: "C:\\Users\\lvan\\.pi\\agent\\sessions"
-  # 管线数据根目录（raw / gold / train / state）
-  data_dir: "D:\\ai_projects\\dataset_sync\\data"
+  sessions_dir: "~/.pi/agent/sessions"
+  # 管线数据根目录（raw / gold / train / state），相对路径按项目根目录解析
+  data_dir: "data"
   # pi 模型配置（读取 provider / baseUrl / apiKey）
-  pi_models_json: "C:\\Users\\lvan\\.pi\\agent\\models.json"
+  pi_models_json: "~/.pi/agent/models.json"
 
 llm:
   # 模型参与环节统一使用该模型（通过 pi models.json 里的 provider 调用）

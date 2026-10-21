@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .common import pilog
-from .common.config import config_hash, data_root, load_config, section_hash, stage_dirs
+from .common.config import config_hash, data_root, load_config, resolve_path, section_hash, stage_dirs
 from .turnclassify import classify_session
 from .common.quality import analyze_step_quality
 from .common.store import (
@@ -90,14 +90,15 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     raw_root.mkdir(parents=True, exist_ok=True)
     dirs["state"].mkdir(parents=True, exist_ok=True)
 
-    sessions_dir = Path(cfg["paths"]["sessions_dir"])
+    sessions_dir = resolve_path(cfg["paths"]["sessions_dir"])
     if not sessions_dir.exists():
         raise FileNotFoundError(f"会话目录不存在: {sessions_dir}")
 
     max_tool_chars = int(cfg["synth"].get("max_tool_output_chars", 12000))
     overrides = read_json(dirs["state"] / "labels.json", default={}) or {}
+    hash_cfg = {**cfg, "paths": {**cfg["paths"], "sessions_dir": str(sessions_dir)}}
     cfgh = section_hash(
-        cfg, ["admission", "labeling", "turns", "llm.model", "paths.sessions_dir", "synth.max_tool_output_chars"]
+        hash_cfg, ["admission", "labeling", "turns", "llm.model", "paths.sessions_dir", "synth.max_tool_output_chars"]
     )
     state = read_json(_prev_state_path(cfg), default={}) or {}
     prev_files: Dict[str, Any] = state.get("files", {}) if state.get("config_hash") == cfgh else {}

@@ -44,8 +44,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 # 默认配置与常量
 # ---------------------------------------------------------------------------
 
-DEFAULT_SESSIONS_DIR = Path(r"C:\Users\lvan\.pi\agent\sessions")
-DEFAULT_OUTPUT_DIR = Path(r"D:\ai_projects\dataset_sync\output")
+DEFAULT_SESSIONS_DIR = Path.home() / ".pi" / "agent" / "sessions"
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 # 严格限定 Teacher 模型范围（仅 DeepSeek V4 与 GLM-5 系列作为 SFT 正样本主干；Qwen3.8-27B 作为被诊断/对齐的 Student 模型）
 DEFAULT_TEACHER_PATTERNS = [

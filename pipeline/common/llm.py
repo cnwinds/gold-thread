@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from .config import data_root, load_config
+from .config import data_root, load_config, resolve_path
 from .store import read_json, sha256_text, write_json_atomic
 
 PROMPT_VERSION = "v1"
@@ -39,7 +39,7 @@ def _resolve_api_key(raw: Any) -> str:
 
 def load_pi_models(path: Optional[str] = None) -> Dict[str, Any]:
     cfg = load_config()
-    p = Path(path or cfg["paths"]["pi_models_json"])
+    p = resolve_path(path or cfg["paths"]["pi_models_json"])
     data = read_json(p, default={}) or {}
     return data.get("providers", {}) or {}
 

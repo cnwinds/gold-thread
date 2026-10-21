@@ -22,7 +22,7 @@ pi 会话日志 (.jsonl)
 ## 快速开始
 
 ```bash
-cd D:\ai_projects\dataset_sync
+cd gold-thread          # 仓库根目录，下文命令均在此执行
 
 python serve.py                 # 打开 http://127.0.0.1:8765
 python serve.py --port 9000 --no-browser
@@ -40,7 +40,7 @@ python -m pipeline.run review            # 模型评审（正例 + 待定）
 ## 目录
 
 ```
-dataset_sync/
+gold-thread/
 ├── config/pipeline.yaml          # 全部规则（准入、标签、回合、提纯、合成）
 ├── pipeline/
 │   ├── common/                   # pilog 解析 · quality 检测 · llm 调用 · format 转换
@@ -120,6 +120,8 @@ dataset_sync/
 ## 配置要点
 
 ```yaml
+paths.data_dir: "data"                          # 相对仓库根目录，可改绝对路径
+paths.sessions_dir: "~/.pi/agent/sessions"       # 支持 ~ 与绝对路径
 admission.workspace_prefixes: ["--d--crack-"]   # 新项目自动准入
 labeling.positive_model_patterns: ["^deepseek", "^glm-"]
 labeling.negative_model_patterns: ["qwen"]

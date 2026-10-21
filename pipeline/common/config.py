@@ -12,11 +12,20 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "config" / "pipeline.yaml"
 
+
+def resolve_path(value: str | Path) -> Path:
+    """解析配置里的路径：展开 ``~``，相对路径一律按项目根目录解析。"""
+    p = Path(value).expanduser()
+    if not p.is_absolute():
+        p = ROOT / p
+    return p.resolve()
+
+
 DEFAULTS: Dict[str, Any] = {
     "paths": {
-        "sessions_dir": r"C:\Users\lvan\.pi\agent\sessions",
-        "data_dir": str(ROOT / "data"),
-        "pi_models_json": r"C:\Users\lvan\.pi\agent\models.json",
+        "sessions_dir": "~/.pi/agent/sessions",
+        "data_dir": "data",
+        "pi_models_json": "~/.pi/agent/models.json",
     },
     "llm": {
         "model": "deepseek-v4.1-flash-1017",
@@ -147,7 +156,7 @@ def section_hash(cfg: Dict[str, Any], keys: list[str]) -> str:
 
 
 def data_root(cfg: Dict[str, Any]) -> Path:
-    return Path(cfg["paths"]["data_dir"]).expanduser()
+    return resolve_path(cfg["paths"]["data_dir"])
 
 
 def stage_dirs(cfg: Dict[str, Any]) -> Dict[str, Path]:

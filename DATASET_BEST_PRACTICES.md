@@ -117,9 +117,9 @@
 
 ---
 
-## 四、 当前纯净版工程分析数据集产出统计（`D:\ai_projects\dataset_sync\output\`）
+## 四、 当前纯净版工程分析数据集产出统计（`output/`）
 
-运行 `python "D:\ai_projects\dataset_sync\sync_pi_datasets.py" --force-rebuild` 后：
+运行 `python sync_pi_datasets.py --force-rebuild` 后：
 - **已扫描并准入项目会话**：`11 个`（自动忽略其余 `95 个` 非目标杂音会话，并在 11 个项目会话内部自动剥离了 `45 个` 模型配置/`hi`/硬件闲聊回合）；
 - **`sft_gold_trajectories_sharegpt.jsonl`（4 条完整黄金长轨迹）**：
   - `gold_traj::01a15375`（`jigsawcard` DeepSeek，257 步纯净自主轨迹）
