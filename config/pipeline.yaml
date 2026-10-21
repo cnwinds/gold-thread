@@ -1,0 +1,185 @@
+# =============================================================================
+# Agent 训练数据管线配置 (stage1 -> stage2 -> stage3)
+# 修改此文件后，Web 控制台点「重跑」即可，无需改代码。
+# =============================================================================
+
+paths:
+  # pi 会话日志根目录（只读）
+  sessions_dir: "C:\\Users\\lvan\\.pi\\agent\\sessions"
+  # 管线数据根目录（raw / gold / train / state）
+  data_dir: "D:\\ai_projects\\dataset_sync\\data"
+  # pi 模型配置（读取 provider / baseUrl / apiKey）
+  pi_models_json: "C:\\Users\\lvan\\.pi\\agent\\models.json"
+
+llm:
+  # 模型参与环节统一使用该模型（通过 pi models.json 里的 provider 调用）
+  model: "deepseek-v4.1-flash-1017"
+  temperature: 0.2
+  max_tokens: 8192
+  timeout_seconds: 180
+  # 结果按 (prompt_version + 输入内容) 缓存，重跑零成本
+  cache: true
+
+# ---------------------------------------------------------------------------
+# 第 1 层：会话级准入（从所有 pi 会话中挑出「目标项目」会话）
+# ---------------------------------------------------------------------------
+admission:
+  # 只准入这些工作区目录前缀（相对 sessions_dir 的文件夹名，小写比较）
+  workspace_prefixes:
+    - "--d--crack-"
+  # 明确排除的文件夹（例如 crack 根目录下的泛化问答）
+  exclude_folders:
+    - "--d--crack--"
+  # 迁移/复制产生的重复会话前缀副本（按 session_id 前缀排除，可留空）
+  dedupe_duplicate_prefix: true
+
+# ---------------------------------------------------------------------------
+# 第 2 层：标签（正例 / 反例 / 待定）
+# 规则：按会话的主导模型判定；未命中任何规则的进 pending/ 目录人工复核
+# ---------------------------------------------------------------------------
+labeling:
+  positive_model_patterns:
+    - "^deepseek"
+    - "^glm-"
+  negative_model_patterns:
+    - "qwen"
+  # 主导模型出现歧义（第二模型占比超过该值）时降到 pending 待复核
+  dominant_ratio_min: 0.6
+  unknown_label: "pending"
+
+# ---------------------------------------------------------------------------
+# 第 3 层：回合级过滤
+# ---------------------------------------------------------------------------
+turns:
+  # 是否让模型做回合语义分类（根任务/任务/环境准备/噪音/催促/纠偏）
+  # 关闭则完全依赖下方正则规则（更快，但新项目容易误判）
+  use_model: true
+  model_max_turn_chars: 800
+  # 根任务指令识别（命中第一条后，之前的一切回合视为前置噪音）
+  root_task_patterns:
+    - "\\.xapk"
+    - "\\.apk"
+    - "我要破解"
+    - "帮我破解"
+    - "帮我分析"
+    - "自己研究破解"
+    - "安全研究员"
+    - "还原成明文"
+  # 未命中根任务正则时，是否把首个非噪音回合当作根任务（新项目更稳）
+  fallback_first_turn_as_root: true
+
+  # 与任务无关的回合（配置模型 / hi 测试 / API 报错 / 硬件闲聊）
+  irrelevant_patterns:
+    - "^hi$"
+    - "^hello$"
+    - "^/modle"
+    - "^/model"
+    - "^/clear$"
+    - "^继续$"
+    - "models\\.json"
+    - "sub2api"
+    - "openwebui"
+    - "ollama"
+    - "gpt-image-2"
+    - "增加.*模型"
+    - "添加.*model"
+    - "隔壁的会话报错了"
+    - "选这个模型报错"
+  # 命中以下模式的短回合不被判为噪音（避免误杀真正的任务指令）
+  irrelevant_whitelist_patterns:
+    - "破解"
+    - "\\.apk"
+    - "\\.xapk"
+
+  # 过程催促 / 确认 / 纪律纠偏：折叠进主线，不产生「无头 Prompt」
+  continuation_patterns:
+    - "^继续$"
+    - "^继续[A-Za-z]?$"
+    - "^可以$"
+    - "^可以。?$"
+    - "^好的?$"
+    - "^补全结构$"
+    - "^所有的文件都要还原成明文$"
+  correction_patterns:
+    - "不要参考其他的目录"
+    - "你不要看其他的目录"
+    - "不要看别的目录"
+    - "专心干自己的目录"
+  # 折叠时是否删掉上一轮「停下来请示用户」的纯文本消息
+  fold_await_user_messages: true
+
+# ---------------------------------------------------------------------------
+# 第 4 层：黄金提纯（stage2，脚本部分）
+# ---------------------------------------------------------------------------
+gold:
+  # write 后紧跟对同一文件的 edit -> 折叠为一步
+  state_folding: true
+  # 折叠时允许同一条 assistant 消息里出现多个 edit（edits 数组）
+  max_fold_edits: 8
+  # 手滑/低级命令错误 -> 剪除并转 DPO
+  detour_pruning: true
+  # 空 thinking 且调用工具的步骤：报错剪除，成功则用 SAY 文本补齐
+  fix_missing_thinking: true
+  # 中间工具步清空对外播报文本（静默执行）
+  silent_intermediate_steps: true
+  # 超过该长度的 thinking 视为过度反刍
+  max_thinking_chars: 2400
+  # 压缩目标上限（脚本启发式；开启模型重写后以此为目标）
+  target_thinking_chars: 1600
+  # 单会话至少保留多少步才算有效黄金轨迹
+  min_gold_steps: 10
+
+# 模型参与的评审（stage2 --review）
+review:
+  enabled: false
+  # 只对这些标签做评审
+  labels: ["positive", "pending"]
+  # 1) thinking 压缩：只处理超过阈值的长 CoT
+  compress_thinking_over: 1200
+  # 送给裁决模型的步数上限（超出则均匀抽样）
+  max_steps_per_session: 40
+  judge_max_think_chars: 3000
+  # 评审温度：0 更稳定可复现
+  temperature: 0.0
+  # 重写分批：每批步数 / 最多批数（超出部分保留脚本压缩结果）
+  rewrite_batch_size: 4
+  max_rewrite_batches: 6
+  # 2) 黄金存废裁决
+  judge_gold: true
+  judge_min_score: 60
+  # 低于该置信度 -> needs_review（不直接淘汰）
+  judge_confidence_min: 0.7
+
+# ---------------------------------------------------------------------------
+# 第 5 层：训练数据合成（stage3）
+# ---------------------------------------------------------------------------
+synth:
+  # 单步窗口历史步数（不含 system + root task 锚定）
+  window_turns: 8
+  # 工具输出截断
+  max_tool_output_chars: 12000
+  # 阶段过采样权重
+  weights:
+    opening: 3
+    key_decision: 2
+    closing: 3
+    routine: 1
+  # 只从这些标签的黄金会话生成 SFT 正样本
+  sft_labels: ["positive"]
+  # 允许「个别反例会话内的高分成功子段」进入 SFT（留空=不启用）
+  sft_allow_subsegments: []
+  # 跨项目全局打乱（防止优化器偏向单一游戏）
+  shuffle: true
+  seed: 42
+  # 按项目整包切分验证集，防止相邻步数据泄漏
+  eval_projects: []
+  eval_ratio: 0.25
+  # 输出格式
+  formats:
+    sharegpt: true
+    openai: true
+  # DPO 负例来源
+  dpo:
+    from_pruned_steps: true      # 折叠/剪枝产生的天然对
+    from_negative_steps: true    # 反例会话病态步（chosen=压缩修正版）
+    min_thinking_chars: 80

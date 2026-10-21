@@ -1,0 +1,1452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GoldThread</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='6' width='24' height='5' rx='2.5' fill='%238d9ab2'/%3E%3Crect x='4' y='13.5' width='18' height='5' rx='2.5' fill='%23d9b467'/%3E%3Crect x='4' y='21' width='10' height='5' rx='2.5' fill='%235fb9c4'/%3E%3C/svg%3E" />
+<style>
+  :root{
+    --ink-0:#16191f; --ink-1:#1c2028; --ink-2:#232832; --ink-3:#2b313c;
+    --line:#313845; --line-soft:#262b35;
+    --text:#e7e4dc; --text-2:#a9aeb8; --text-3:#737a89;
+    --ore:#8d9ab2; --gold:#d9b467; --gold-ink:#2a2110; --mint:#5fb9c4;
+    --pos:#8fc47f; --neg:#e3735f; --pend:#a9b2dc;
+    --f-sans:"Microsoft YaHei UI","Microsoft YaHei","HarmonyOS Sans SC","PingFang SC","Segoe UI",system-ui,sans-serif;
+    --f-num:"Bahnschrift","DIN Alternate","DIN 2014","Roboto Condensed",var(--f-sans);
+    --f-mono:"Cascadia Code","JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+    --rail:236px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{background:var(--ink-0);color:var(--text);font:14px/1.6 var(--f-sans);
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  a{color:var(--gold)}
+  ::selection{background:rgba(217,180,103,.32)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#363d4a;border-radius:10px;border:2px solid transparent;background-clip:padding-box}
+  ::-webkit-scrollbar-thumb:hover{background-color:#465063}
+  ::-webkit-scrollbar-track{background:transparent}
+  :focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  .num{font-family:var(--f-num);font-variant-numeric:tabular-nums;letter-spacing:.01em}
+  .mono{font-family:var(--f-mono);font-size:12px}
+  .muted{color:var(--text-2)}
+  .faint{color:var(--text-3)}
+  .hidden{display:none!important}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .grow{flex:1}
+
+  /* ---------- 控件 ---------- */
+  button,.btn{font:inherit;font-size:13px;color:var(--text);background:var(--ink-2);border:1px solid var(--line);
+    border-radius:7px;padding:6px 13px;cursor:pointer;transition:background .15s,border-color .15s,color .15s;line-height:1.4}
+  button:hover{background:var(--ink-3);border-color:#3e4655}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--gold);border-color:var(--gold);color:var(--gold-ink);font-weight:600}
+  button.primary:hover{background:#e6c47c;border-color:#e6c47c}
+  button.ghost{background:transparent;border-color:transparent;color:var(--text-2)}
+  button.ghost:hover{background:var(--ink-2);color:var(--text)}
+  button.danger{background:transparent;border-color:rgba(227,115,95,.4);color:#f0a091}
+  button.danger:hover{background:rgba(227,115,95,.1);border-color:var(--neg)}
+  input,select,textarea{font:inherit;font-size:13px;color:var(--text);background:var(--ink-0);border:1px solid var(--line);
+    border-radius:7px;padding:6px 10px;outline:none;transition:border-color .15s}
+  input:hover,select:hover{border-color:#3e4655}
+  input:focus,select:focus,textarea:focus{border-color:var(--gold)}
+  input::placeholder{color:var(--text-3)}
+  select{padding-right:28px;appearance:none;cursor:pointer;
+    background:var(--ink-0) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a9aeb8' fill='none' stroke-width='1.4'/%3E%3C/svg%3E") no-repeat right 10px center}
+  .seg-ctl{display:inline-flex;background:var(--ink-0);border:1px solid var(--line);border-radius:8px;padding:2px}
+  .seg-ctl button{background:transparent;border:none;border-radius:6px;padding:4px 11px;color:var(--text-2)}
+  .seg-ctl button:hover{color:var(--text);background:transparent}
+  .seg-ctl button.on{background:var(--ink-3);color:var(--text)}
+  .kbd{font-family:var(--f-mono);font-size:10.5px;border:1px solid var(--line);border-bottom-width:2px;
+    border-radius:4px;padding:0 5px;color:var(--text-2);margin-left:4px}
+
+  /* ---------- 骨架：左侧导航轨 ---------- */
+  .app{display:grid;grid-template-columns:var(--rail) 1fr;min-height:100vh}
+  .rail{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:18px;padding:20px 14px 16px;
+    background:var(--ink-1);border-right:1px solid var(--line-soft);overflow:auto}
+  .brand{display:flex;gap:11px;align-items:center;padding:0 6px}
+  .brand svg{flex:none}
+  .brand-name{font-weight:700;font-size:15px;letter-spacing:.02em}
+  .brand-sub{font-size:11.5px;color:var(--text-3);margin-top:1px}
+  #tabs{display:flex;flex-direction:column;gap:2px}
+  #tabs button{display:flex;align-items:center;gap:10px;width:100%;background:transparent;border:none;
+    padding:8px 10px;border-radius:8px;color:var(--text-2);text-align:left;font-size:13.5px}
+  #tabs button:hover{background:var(--ink-2);color:var(--text)}
+  #tabs button.active{background:var(--ink-2);color:var(--text)}
+  #tabs button em{margin-left:auto;font-style:normal;font-family:var(--f-num);font-size:12.5px;color:var(--text-3)}
+  #tabs .ico{width:16px;height:16px;flex:none;opacity:.8}
+  .nav-cap{font-size:11.5px;color:var(--text-3);padding:14px 10px 6px}
+  .steps{position:relative}
+  .steps::before{content:"";position:absolute;left:17.5px;top:22px;bottom:22px;width:1px;
+    background:linear-gradient(var(--ore),var(--gold) 50%,var(--mint))}
+  .steps button .node{position:relative;z-index:1;width:16px;height:16px;flex:none;display:grid;place-items:center}
+  .steps button .node::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--ink-1);
+    border:2px solid var(--c);box-sizing:border-box;transition:background .15s}
+  .steps button.active .node::after,.steps button:hover .node::after{background:var(--c)}
+  .s-raw{--c:var(--ore)} .s-gold{--c:var(--gold)} .s-train{--c:var(--mint)}
+  .rail-foot{margin-top:auto;display:flex;flex-direction:column;gap:14px}
+  .rail-foot .primary{width:100%;padding:9px 12px}
+  .rail-meta{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 10px;font-size:11.5px;padding:12px 8px 0;
+    border-top:1px solid var(--line-soft)}
+  .rail-meta dt{color:var(--text-3)}
+  .rail-meta dd{margin:0;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+
+  .page{min-width:0;display:flex;flex-direction:column}
+  .page-head{display:flex;align-items:flex-end;gap:16px;padding:26px 36px 18px;max-width:1480px;width:100%}
+  .page-head h1{margin:0;font-size:22px;font-weight:700;letter-spacing:.02em}
+  .page-head p{margin:4px 0 0;color:var(--text-2);font-size:13px;max-width:72ch}
+  main{padding:0 36px 72px;max-width:1480px;width:100%}
+
+  /* ---------- 面板 ---------- */
+  .panel{background:var(--ink-1);border:1px solid var(--line-soft);border-radius:12px;margin-bottom:18px;overflow:hidden}
+  .panel-h{display:flex;align-items:baseline;gap:10px;padding:13px 18px;border-bottom:1px solid var(--line-soft)}
+  .panel-h h3{margin:0;font-size:14px;font-weight:600}
+  .panel-h .hint{font-size:12px;color:var(--text-3)}
+  .panel-b{padding:16px 18px}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line-soft)}
+  .toolbar input[type=text]{min-width:260px}
+  .toolbar.bottom{border-bottom:none;border-top:1px solid var(--line-soft)}
+  .count{font-size:12.5px;color:var(--text-3)}
+  .count b{font-family:var(--f-num);color:var(--text-2);font-weight:500;font-size:13.5px}
+  .grid2{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:18px}
+  .grid2.even{grid-template-columns:1fr 1fr}
+
+  /* ---------- 表格 ---------- */
+  .scroll{max-height:calc(100vh - 250px);overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{position:sticky;top:0;z-index:1;text-align:left;font-size:12px;color:var(--text-3);font-weight:500;
+    padding:9px 12px;background:var(--ink-1);border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{padding-left:18px}
+  th:last-child,td:last-child{padding-right:18px}
+  td{padding:10px 12px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+  tbody tr:last-child td{border-bottom:none}
+  tr.clickable{cursor:pointer}
+  tr.clickable:hover td{background:rgba(255,255,255,.025)}
+  tr.clickable:hover td:first-child{box-shadow:inset 2px 0 0 var(--gold)}
+  td.n,th.n{text-align:right;font-family:var(--f-num);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .sid{font-family:var(--f-mono);font-size:12px;color:var(--text)}
+  .clip{max-width:340px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .empty{padding:40px 18px;text-align:center;color:var(--text-3)}
+
+  /* ---------- 标签 ---------- */
+  .tag{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);white-space:nowrap}
+  .tag::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c,var(--text-3))}
+  .t-positive{--c:var(--pos)} .t-negative{--c:var(--neg)} .t-pending{--c:var(--pend)}
+  .t-done{--c:var(--pos)} .t-failed{--c:var(--neg)} .t-running{--c:var(--gold)}
+  .t-gold{--c:var(--gold)} .t-reject{--c:var(--neg)}
+  .t-running::before{animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.25}}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 9px;border-radius:999px;
+    background:var(--ink-2);border:1px solid var(--line-soft);color:var(--text-2);white-space:nowrap}
+  .chip b{font-family:var(--f-num);font-weight:500;color:var(--text)}
+  .chip.train{color:var(--mint);border-color:rgba(95,185,196,.3)}
+  .chip.eval{color:var(--pend);border-color:rgba(169,178,220,.3)}
+  .chip.model{color:var(--gold);border-color:rgba(217,180,103,.3)}
+
+  /* ---------- 分段条 ---------- */
+  .seg{display:flex;height:6px;border-radius:6px;overflow:hidden;background:var(--ink-3);gap:2px;min-width:60px}
+  .seg i{display:block;height:100%}
+  .seg.thick{height:10px}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:12px;color:var(--text-2)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:8px;height:8px;border-radius:2px;display:inline-block}
+  .legend b{font-family:var(--f-num);font-weight:500;color:var(--text)}
+
+  /* ---------- 概览：精炼带 ---------- */
+  .assay{position:relative;margin:4px 0 26px;padding-bottom:22px;border-bottom:1px solid var(--line-soft)}
+  .stations{display:grid;grid-template-columns:repeat(3,1fr)}
+  .station{padding:0 20px 0 16px;border-left:1px solid var(--line)}
+  .station .cap{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2)}
+  .station .cap i{width:8px;height:8px;border-radius:50%;background:var(--c)}
+  .station .big{font-family:var(--f-num);font-size:46px;line-height:1.05;font-weight:400;margin:6px 0 4px;
+    font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .station .unit{font-size:13px;color:var(--text-3);margin-left:6px;font-family:var(--f-sans)}
+  .station .sub{font-size:12.5px;color:var(--text-2);min-height:20px}
+  .station .seg{margin-top:10px;max-width:220px}
+  .band{display:block;width:100%;height:104px;margin-top:18px;animation:pour 1.1s cubic-bezier(.2,.7,.2,1) both}
+  .band.static{animation:none}
+  @keyframes pour{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+  .byproducts{display:grid;grid-template-columns:repeat(3,1fr);margin-top:14px}
+  .byproducts>div{padding-left:16px;font-size:12.5px;color:var(--text-2)}
+  .byproducts .figs{display:flex;gap:22px;flex-wrap:wrap;margin-top:4px}
+  .byproducts .figs span{display:flex;align-items:baseline;gap:7px}
+  .byproducts .figs b{font-family:var(--f-num);font-size:22px;font-weight:400;color:var(--text)}
+
+  /* 病态条 */
+  .patho{display:grid;grid-template-columns:minmax(150px,200px) 1fr 48px;gap:6px 14px;align-items:center}
+  .patho .name{font-size:13px;line-height:1.3}
+  .patho .name small{display:block;font-family:var(--f-mono);font-size:10.5px;color:var(--text-3)}
+  .patho .track{height:6px;border-radius:6px;background:var(--ink-3);overflow:hidden}
+  .patho .track i{display:block;height:100%;background:linear-gradient(90deg,#b2503f,var(--neg));border-radius:6px}
+  .patho b{font-family:var(--f-num);font-weight:400;text-align:right;font-size:15px}
+
+  .timeline-list{display:flex;flex-direction:column}
+  .timeline-list .it{display:grid;grid-template-columns:16px 1fr auto;gap:12px;align-items:center;padding:9px 0;
+    border-bottom:1px dashed var(--line-soft)}
+  .timeline-list .it:last-child{border-bottom:none}
+  .timeline-list .dot{width:9px;height:9px;border-radius:50%;border:2px solid var(--c);justify-self:center}
+  .timeline-list .dot.on{background:var(--c)}
+  .timeline-list .t{font-size:12.5px;color:var(--text-2);text-align:right}
+  .timeline-list .t small{display:block;font-family:var(--f-mono);font-size:10.5px;color:var(--text-3)}
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:8px 14px;font-size:13px;align-items:baseline}
+  .kv>.k{color:var(--text-3);font-size:12.5px}
+  .kv .path{font-family:var(--f-mono);font-size:11.5px;color:var(--text-2);word-break:break-all}
+  .sub-h{font-size:12.5px;color:var(--text-3);margin:18px 0 8px}
+  .sub-h:first-child{margin-top:0}
+
+  /* ---------- 抽屉 ---------- */
+  .scrim{position:fixed;inset:0;background:rgba(8,10,14,.55);opacity:0;pointer-events:none;transition:opacity .2s;z-index:39}
+  .scrim.open{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;width:min(1080px,96vw);height:100%;background:var(--ink-1);
+    border-left:1px solid var(--line);box-shadow:-30px 0 60px rgba(0,0,0,.35);transform:translateX(102%);
+    transition:transform .24s cubic-bezier(.2,.7,.2,1);z-index:40;display:flex;flex-direction:column}
+  .drawer.open{transform:none}
+  .drawer .dh{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line-soft)}
+  .drawer .dh b{font-size:15px}
+  .drawer .dc{overflow:auto;padding:18px 20px;flex:1}
+  .drawer .df{padding:12px 20px;border-top:1px solid var(--line-soft);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .drawer .df:empty{display:none}
+  .drawer .panel{background:var(--ink-0)}
+  .drawer pre.json{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--f-mono);font-size:12px;color:var(--text-2)}
+
+  /* 回合时间线 */
+  .turns{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+  .tl{font-size:11.5px;padding:2px 8px;border-radius:5px;border:1px solid var(--line);color:var(--text-2);cursor:default}
+  .tl.root{border-color:rgba(217,180,103,.5);color:var(--gold)}
+  .tl.task{color:var(--text)}
+  .tl.setup{color:#c9a46a;border-color:#4a3c22}
+  .tl.noise{color:var(--text-3);border-color:var(--line-soft);text-decoration:line-through}
+  .tl.continuation{color:var(--mint);border-color:rgba(95,185,196,.35)}
+  .tl.correction{color:var(--pend);border-color:rgba(169,178,220,.35)}
+
+  /* 消息流 */
+  .msgs{display:flex;flex-direction:column;gap:10px}
+  .msg{border-radius:9px;background:var(--ink-1);border:1px solid var(--line-soft);position:relative;overflow:hidden}
+  .msg::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c,var(--line))}
+  .msg .hd{display:flex;gap:8px;align-items:center;padding:7px 12px 7px 15px;font-size:12px;color:var(--text-3);flex-wrap:wrap}
+  .msg .bd{padding:0 14px 11px 15px;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.65}
+  .msg.role-system{--c:var(--text-3)}
+  .msg.role-user{--c:var(--pend);background:#1d2130}
+  .msg.role-assistant{--c:var(--gold)}
+  .msg.role-tool{--c:#4a5262;background:transparent}
+  .msg.role-tool.err{--c:var(--neg);background:rgba(227,115,95,.06)}
+  .msg details{margin:2px 0 6px}
+  .msg details summary{cursor:pointer;color:var(--text-3);font-size:12px;user-select:none;list-style:none;display:inline-flex;gap:6px;align-items:center}
+  .msg details summary::-webkit-details-marker{display:none}
+  .msg details summary::before{content:"";width:0;height:0;border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+  .msg details[open]>summary::before{transform:rotate(90deg)}
+  .msg details summary:hover{color:var(--text-2)}
+  .msg pre{margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font-family:var(--f-mono);font-size:12px;line-height:1.55;
+    background:var(--ink-0);border:1px solid var(--line-soft);border-radius:7px;padding:10px 12px;color:var(--text-2)}
+  .msg pre.think{font-family:var(--f-sans);font-size:12.5px;line-height:1.7;color:#c4bfb1;border-color:rgba(217,180,103,.14)}
+  .role{font-size:11.5px;font-weight:600;color:var(--c,var(--text-2))}
+  .lb{display:inline-block;font-size:11px;padding:0 7px;border-radius:5px;background:var(--ink-3);color:var(--text-2)}
+  .lb.fold{background:rgba(169,178,220,.13);color:var(--pend)}
+  .lb.prune{background:rgba(227,115,95,.13);color:#f0a091}
+  .lb.backfill{background:rgba(95,185,196,.13);color:var(--mint)}
+  .lb.err{background:rgba(227,115,95,.16);color:#f0a091}
+  button.tl{background:transparent;padding:2px 8px;font-size:11.5px;border-radius:5px;line-height:1.6}
+  button.tl:hover{background:var(--ink-3);border-color:var(--text-3)}
+
+  /* 对话：提问 → 执行过程 → 回复 */
+  .panel.flow{overflow:visible}
+  .flow-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid var(--line-soft)}
+  .flow-h h3{margin:0;font-size:14px;font-weight:600}
+  .flow-h .hint{font-size:12px;color:var(--text-3)}
+  .flow-h input{width:220px}
+  .flow-b{padding:18px;display:flex;flex-direction:column;gap:12px}
+  .flow summary{cursor:pointer;user-select:none;list-style:none;display:flex;gap:7px;align-items:center}
+  .flow summary::-webkit-details-marker{display:none}
+  .flow summary::before,.trace-bar .caret{content:"";flex:none;width:0;height:0;border-left:5px solid currentColor;
+    border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+  .flow details[open]>summary::before,.trace.open .trace-bar .caret{transform:rotate(90deg)}
+  .flow mark{background:rgba(217,180,103,.38);color:inherit;border-radius:2px;padding:0 1px}
+
+  .sys{font-size:12.5px;color:var(--text-3);border:1px dashed var(--line);border-radius:9px;padding:8px 12px}
+  .sys summary:hover{color:var(--text-2)}
+  .sys-body{margin-top:8px;white-space:pre-wrap;word-break:break-word;color:var(--text-2);line-height:1.7;max-height:320px;overflow:auto}
+
+  .bubble{border-radius:12px;padding:12px 16px 14px}
+  .bubble .who{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-3);margin-bottom:6px}
+  .bubble .who .role{font-size:12.5px}
+  .bubble time{font-family:var(--f-num);font-size:12px}
+  .bubble .txt{white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.75}
+  .md{font-size:14px;line-height:1.75;word-break:break-word}
+  .md>:first-child{margin-top:0}
+  .md>:last-child{margin-bottom:0}
+  .md p{margin:0 0 10px}
+  .md h3,.md h4,.md h5,.md h6{margin:16px 0 6px;font-size:14.5px;font-weight:600;color:var(--text)}
+  .md h3{font-size:15.5px}
+  .md ul,.md ol{margin:0 0 10px;padding-left:22px}
+  .md li{margin:2px 0}
+  .md li::marker{color:var(--text-3)}
+  .md code{font-family:var(--f-mono);font-size:12px;background:var(--ink-3);border-radius:4px;padding:1px 5px;color:#e6dcc3}
+  .md strong{color:var(--text);font-weight:600}
+  .md blockquote{margin:0 0 10px;padding:2px 0 2px 14px;border-left:3px solid rgba(217,180,103,.5);color:var(--text)}
+  .md hr{border:none;border-top:1px solid var(--line-soft);margin:14px 0}
+  .md pre.md-code{margin:0 0 10px;padding:10px 12px;background:var(--ink-0);border:1px solid var(--line-soft);border-radius:7px;
+    font-family:var(--f-mono);font-size:12px;line-height:1.55;white-space:pre-wrap;color:var(--text-2)}
+  .md-table{overflow:auto;margin:0 0 12px;border:1px solid var(--line-soft);border-radius:8px}
+  .md-table table{font-size:12.5px}
+  .md-table th{position:static;background:var(--ink-2);padding:6px 10px}
+  .md-table td{padding:6px 10px}
+  .md-table th:first-child,.md-table td:first-child{padding-left:10px}
+  .md.clamp{max-height:340px;overflow:hidden;-webkit-mask-image:linear-gradient(#000 70%,transparent);mask-image:linear-gradient(#000 70%,transparent)}
+  .bubble .txt.clamp{max-height:200px;overflow:hidden;-webkit-mask-image:linear-gradient(#000 65%,transparent);mask-image:linear-gradient(#000 65%,transparent)}
+  .bubble .more{margin-top:4px;padding:2px 8px;font-size:12px}
+  .bubble.user{--c:var(--pend);background:#20253a;border:1px solid rgba(169,178,220,.22);scroll-margin-top:12px}
+  .bubble.reply{--c:var(--gold);background:var(--ink-1);border:1px solid rgba(217,180,103,.32)}
+
+  .trace{margin-left:14px;padding-left:16px;border-left:2px solid var(--line)}
+  .trace-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;width:100%;text-align:left;padding:8px 12px;
+    background:var(--ink-1);border:1px solid var(--line-soft);border-radius:9px;color:var(--text-2)}
+  .trace-bar:hover{background:var(--ink-2)}
+  .trace-bar .tt{color:var(--text);font-size:13px}
+  .trace-bar .tt b{font-weight:500;font-size:14px}
+  .trace-bar .tm{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-3)}
+  .trace-bar .tm b{font-weight:400;color:var(--text-2)}
+  .trace-bar .tm .e,.trace-bar .tm .e b{color:#f0a091}
+  .trace-bar .tm .mono{font-size:11px}
+  .trace-bar .hits{margin-left:auto;font-size:12px;color:var(--gold)}
+  .trace-bar .hits.none{color:var(--text-3)}
+  .trace.open>.trace-head{position:sticky;top:-18px;z-index:3;background:var(--ink-0);padding-top:6px;margin-top:-6px;
+    box-shadow:0 10px 14px -8px rgba(10,12,16,.7)}
+  .trace.open .trace-bar{background:var(--ink-2)}
+  .ticks{display:flex;align-items:flex-end;gap:2px;height:26px;padding:4px 2px 0}
+  .tk{flex:1 1 0;min-width:2px;max-width:8px;border-radius:1.5px;background:var(--gold);opacity:.45;cursor:pointer;transition:opacity .1s}
+  .tk:hover{opacity:1}
+  .tk.f{background:var(--pend)}
+  .tk.e{background:var(--neg);opacity:.9}
+  .tk.dim{opacity:.1}
+  .tk.hit{opacity:1;background:#f4dca4}
+
+  .steps-list{margin-top:8px;border:1px solid var(--line-soft);border-radius:9px;overflow:hidden;background:var(--ink-1)}
+  .steps-list:empty{display:none}
+  .step{border-bottom:1px solid var(--line-soft);scroll-margin-top:96px}
+  .step:last-child{border-bottom:none}
+  .step-row{display:grid;grid-template-columns:30px minmax(0,1.1fr) minmax(0,1fr);gap:14px;align-items:center;width:100%;
+    background:transparent;border:none;border-radius:0;padding:7px 12px;text-align:left}
+  .step-row:hover{background:rgba(255,255,255,.03)}
+  .step.open>.step-row{background:var(--ink-2)}
+  .step-row .no{font-size:12px;color:var(--text-3);text-align:right}
+  .step.err .step-row .no{color:var(--neg)}
+  .step.flagged .step-row .no{color:var(--pend)}
+  .step-row .gist{font-size:13px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .step.open .step-row .gist{color:var(--text)}
+  .step-row .calls{display:flex;gap:12px;min-width:0;align-items:center}
+  .call{min-width:0;flex:0 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--f-mono);font-size:11.5px;color:var(--text-3)}
+  .call b{font-weight:500;color:var(--mint);margin-right:7px}
+  .call.e b{color:var(--neg)}
+  .more-calls{flex:none;font-size:11.5px;color:var(--text-3)}
+  .step.flash>.step-row{animation:flash 1.4s ease-out}
+  @keyframes flash{from{background:rgba(217,180,103,.28)}}
+  .step-d{display:flex;flex-direction:column;gap:10px;padding:6px 16px 16px 56px;background:var(--ink-2)}
+  .step-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11.5px;color:var(--text-3)}
+  .step-meta time{font-family:var(--f-num)}
+  .think-full{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.8;color:#d3cdbd;
+    border-left:2px solid rgba(217,180,103,.4);padding:2px 0 2px 14px}
+  .said{white-space:pre-wrap;word-break:break-word;font-size:13.5px;line-height:1.75;color:var(--text)}
+  .call-d{border:1px solid var(--line-soft);border-radius:8px;background:var(--ink-0);overflow:hidden}
+  .call-d.e{border-color:rgba(227,115,95,.45)}
+  .call-h{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px}
+  .call-h b{font-family:var(--f-mono);font-weight:500;color:var(--mint)}
+  .call-d.e .call-h b{color:var(--neg)}
+  .call-h .mono{font-size:10.5px}
+  .call-d pre{margin:0;padding:9px 12px;font-family:var(--f-mono);font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;
+    max-height:380px;overflow:auto;color:var(--text-2);border-top:1px solid var(--line-soft)}
+  .call-d pre.cmd{color:#dcd7ca;background:#12151a}
+  .call-d details summary{padding:6px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--line-soft)}
+  .call-d details summary:hover{color:var(--text-2)}
+  .no-out{padding:6px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--line-soft)}
+
+  .pruned-item{padding:10px 0;border-bottom:1px dashed var(--line-soft)}
+  .pruned-item:last-child{border-bottom:none}
+
+  /* ---------- 运行 ---------- */
+  .pipeline{display:grid;grid-template-columns:repeat(3,1fr) 22px 1fr;gap:0;align-items:stretch}
+  .pipe-step{position:relative;padding:16px 18px;border:1px solid var(--line-soft);background:var(--ink-1);display:flex;flex-direction:column;gap:8px}
+  .pipe-step:first-child{border-radius:12px 0 0 12px}
+  .pipe-step:nth-child(3){border-radius:0 12px 12px 0}
+  .pipe-step+.pipe-step:not(.solo){border-left:none}
+  .pipe-step.solo{border-radius:12px;border-style:dashed}
+  .pipe-step .no{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--text-3)}
+  .pipe-step .no i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-style:normal;
+    font-family:var(--f-num);font-size:12px;color:var(--ink-0);background:var(--c)}
+  .pipe-step .no i.r{background:transparent;border:1.5px solid var(--c);color:var(--c)}
+  .pipe-step h4{margin:0;font-size:15px;font-weight:600}
+  .pipe-step .d{font-size:12.5px;color:var(--text-2);flex:1}
+  .pipe-step .when{font-size:12px;color:var(--text-3)}
+  .pipe-step .acts{display:flex;gap:6px;margin-top:4px}
+  .pipe-step .acts button{padding:5px 11px;font-size:12.5px}
+  .pipe-step:not(:nth-child(3)):not(.solo)::after{content:"";position:absolute;right:-7px;top:50%;width:12px;height:12px;
+    background:var(--ink-1);border-top:1px solid var(--line-soft);border-right:1px solid var(--line-soft);
+    transform:translateY(-50%) rotate(45deg);z-index:1}
+  .run-all{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:16px 0 22px}
+  .console-wrap{border-radius:12px;overflow:hidden;border:1px solid var(--line-soft);margin-bottom:18px;background:#111419}
+  .console-h{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line-soft);background:var(--ink-1)}
+  .console-h h3{margin:0;font-size:14px;font-weight:600}
+  .console{font-family:var(--f-mono);font-size:12px;line-height:1.65;white-space:pre-wrap;height:360px;overflow:auto;
+    color:#a9b4c2;padding:12px 16px}
+  .console .err{color:#f0a091}
+  .console .ok{color:var(--pos)}
+
+  /* ---------- 配置 ---------- */
+  textarea.editor{display:block;width:100%;height:calc(100vh - 300px);min-height:360px;font-family:var(--f-mono);font-size:12.5px;
+    line-height:1.6;tab-size:2;border:none;border-radius:0;background:#111419;padding:16px 18px;resize:vertical;color:#d6d2c6}
+  textarea.editor:focus{box-shadow:inset 0 0 0 1px rgba(217,180,103,.5)}
+  .note{font-size:12.5px;color:var(--text-2);padding:11px 18px;border-top:1px solid var(--line-soft)}
+
+  /* ---------- 提示 ---------- */
+  .toasts{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:8px;z-index:60}
+  .toast{display:flex;gap:10px;align-items:flex-start;background:var(--ink-2);border:1px solid var(--line);
+    padding:10px 14px;border-radius:10px;font-size:13px;box-shadow:0 12px 30px rgba(0,0,0,.4);max-width:400px;
+    animation:toastIn .22s cubic-bezier(.2,.7,.2,1)}
+  .toast::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:var(--gold);margin-top:7px}
+  .toast.err::before{background:var(--neg)}
+  .toast.ok::before{background:var(--pos)}
+  @keyframes toastIn{from{transform:translateY(8px);opacity:0}}
+  .loading{padding:60px 0;text-align:center;color:var(--text-3)}
+  .error-box{padding:20px;border:1px solid rgba(227,115,95,.35);border-radius:12px;background:rgba(227,115,95,.06)}
+  .error-box b{color:#f0a091}
+
+  @media (max-width:1100px){
+    .grid2,.grid2.even{grid-template-columns:1fr}
+    .pipeline{grid-template-columns:1fr}
+    .pipeline>.spacer{display:none}
+    .pipe-step,.pipe-step:first-child,.pipe-step:nth-child(3){border-radius:12px;border-left:1px solid var(--line-soft)!important;margin-bottom:10px}
+    .pipe-step::after{display:none}
+  }
+  @media (max-width:860px){
+    .app{grid-template-columns:1fr}
+    .rail{position:sticky;height:auto;z-index:30;flex-direction:row;align-items:center;gap:10px;padding:10px 14px;overflow-x:auto;border-right:none;border-bottom:1px solid var(--line-soft)}
+    .brand-sub,.nav-cap,.rail-meta,.steps::before,#tabs .ico,.steps .node{display:none}
+    #tabs{flex-direction:row}
+    #tabs .steps{display:flex}
+    #tabs button{white-space:nowrap}
+    #tabs button em{display:none}
+    .rail-foot{margin:0 0 0 auto}
+    .rail-foot .primary{width:auto;white-space:nowrap}
+    .page-head{padding:20px 16px 14px}
+    main{padding:0 16px 60px}
+    .stations,.byproducts{grid-template-columns:1fr}
+    .station{padding:10px 0 10px 14px}
+    .band{display:none}
+    .toolbar input[type=text]{min-width:0;flex:1}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="4" y="6" width="24" height="5" rx="2.5" fill="#8d9ab2"/>
+        <rect x="4" y="13.5" width="18" height="5" rx="2.5" fill="#d9b467"/>
+        <rect x="4" y="21" width="10" height="5" rx="2.5" fill="#5fb9c4"/>
+      </svg>
+      <div><div class="brand-name">GoldThread</div><div class="brand-sub">会话 → 黄金 → 训练集</div></div>
+    </div>
+    <nav id="tabs">
+      <button data-tab="overview">
+        <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+        概览</button>
+      <div class="nav-cap">管线阶段</div>
+      <div class="steps">
+        <button data-tab="raw" class="s-raw"><span class="node"></span>原始数据<em id="navRaw"></em></button>
+        <button data-tab="gold" class="s-gold"><span class="node"></span>黄金数据<em id="navGold"></em></button>
+        <button data-tab="train" class="s-train"><span class="node"></span>训练数据<em id="navTrain"></em></button>
+      </div>
+      <div class="nav-cap">操作</div>
+      <button data-tab="runs">
+        <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5 3.5v9l7-4.5z" stroke-linejoin="round"/></svg>
+        运行</button>
+      <button data-tab="config">
+        <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.4" fill="var(--ink-1)"/><circle cx="10.5" cy="8" r="1.4" fill="var(--ink-1)"/><circle cx="5" cy="12" r="1.4" fill="var(--ink-1)"/></svg>
+        配置</button>
+    </nav>
+    <div class="rail-foot">
+      <button id="btnRunAll" class="primary">运行全流程</button>
+      <dl class="rail-meta" id="hdrMeta"></dl>
+    </div>
+  </aside>
+
+  <div class="page">
+    <header class="page-head">
+      <div class="grow"><h1 id="pageTitle"></h1><p id="pageDesc"></p></div>
+    </header>
+    <main>
+      <section id="view-overview"></section>
+      <section id="view-raw" class="hidden"></section>
+      <section id="view-gold" class="hidden"></section>
+      <section id="view-train" class="hidden"></section>
+      <section id="view-config" class="hidden"></section>
+      <section id="view-runs" class="hidden"></section>
+    </main>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+  <div class="dh"><b id="drawerTitle"></b><span id="drawerSub" class="muted" style="font-size:12.5px"></span>
+    <span class="grow"></span><button class="ghost" onclick="closeDrawer()">关闭<span class="kbd">Esc</span></button></div>
+  <div class="dc" id="drawerBody"></div>
+  <div class="df" id="drawerFoot"></div>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+const $ = (s, el=document) => el.querySelector(s);
+const $$ = (s, el=document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => (n === undefined || n === null) ? "–" : Number(n).toLocaleString();
+const short = (s, n=80) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n) + "…" : s; };
+const sum = o => Object.values(o || {}).reduce((a, b) => a + (+b || 0), 0);
+
+const COLORS = {ore:"#8d9ab2", gold:"#d9b467", mint:"#5fb9c4", pos:"#8fc47f", neg:"#e3735f", pend:"#a9b2dc"};
+const LABEL_ZH = {positive:"正例", negative:"反例", pending:"待定"};
+const VERDICT_ZH = {gold:"入选黄金", reject:"剔除", revise:"需修订", maybe:"存疑", needs_review:"待人工复核"};
+const SCRIPT_ZH = {gold:"黄金", negative_source:"反例素材", raw_only:"仅保留原始", needs_review:"待复核"};
+const RUN_ZH = {done:"完成", failed:"失败", running:"运行中"};
+const PATHO_ZH = {
+  missing_thinking_block:"缺失思考块", tool_execution_error:"工具执行报错", over_rumination_length:"思考过长",
+  over_rumination_doubt_loop:"反复自我怀疑", mental_hex_checkmark:"心算十六进制自证", tool_logical_failure:"工具逻辑失败",
+  cross_dir_violation:"跨目录越界", hallucinated_source_search:"臆造源码搜索",
+};
+const PHASE = [["opening","开局","#8d9ab2"],["key_decision","关键决策","#d9b467"],["routine","常规推进","#5fb9c4"],["closing","收尾","#a9b2dc"]];
+const DPO_SRC_ZH = {stage2_pruned:"剪掉的弯路", negative_step:"反例中的坏步"};
+const SKIP_ZH = {non_crack_folder:"非目标目录", excluded_folder:"排除目录", empty:"空会话"};
+const PAGES = {
+  overview: ["概览", "原始会话经过提纯与合成后，每一阶段留下了多少，又剪掉了多少。"],
+  raw:      ["原始数据", "从 pi 会话目录准入的不可变副本，附回合标注。点开会话可查看消息流并修改标签。"],
+  gold:     ["黄金数据", "经过状态折叠、弯路剪枝与思维链去噪后的会话。模型只输出标注，不直接改动数据。"],
+  train:    ["训练数据", "stage3 合成的 SFT 与 DPO 数据集，可逐条查看样本。"],
+  runs:     ["运行", "按阶段增量运行或全量重建。模型调用已缓存，重跑不会重复计费。"],
+  config:   ["配置", "直接编辑 pipeline.yaml，保存后重跑管线生效。"],
+};
+
+let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:""}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:""}, job: null, drawerData: null, poured: false };
+
+async function api(path, opts={}) {
+  const res = await fetch(path, {headers: {"Content-Type":"application/json"}, ...opts});
+  const text = await res.text();
+  let data; try { data = text ? JSON.parse(text) : {}; } catch { data = {raw:text}; }
+  if (!res.ok) throw new Error(data.error || data.detail || (res.status + " " + res.statusText));
+  return data;
+}
+function toast(msg, kind="") {
+  const el = document.createElement("div");
+  el.className = "toast " + kind; el.textContent = msg;
+  $("#toasts").appendChild(el);
+  setTimeout(() => el.remove(), kind === "err" ? 7000 : 3500);
+}
+function ago(iso) {
+  if (!iso) return "未运行";
+  const t = new Date(iso).getTime(); if (isNaN(t)) return esc(iso);
+  const s = (Date.now() - t) / 1000;
+  if (s < 60) return "刚刚";
+  if (s < 3600) return Math.floor(s/60) + " 分钟前";
+  if (s < 86400) return Math.floor(s/3600) + " 小时前";
+  return Math.floor(s/86400) + " 天前";
+}
+const stamp = iso => iso ? String(iso).replace("T", " ").replace(/[+-]\d\d:\d\d$/, "") : "";
+function labelBadge(l) { return `<span class="tag t-${esc(l||"none")}">${esc(LABEL_ZH[l] || l || "未知")}</span>`; }
+function runTag(s) { return `<span class="tag t-${esc(s)}">${esc(RUN_ZH[s] || s)}</span>`; }
+function verdictTag(v) { return `<span class="tag t-${v==="gold"?"gold":v==="reject"?"reject":"pending"}">${esc(VERDICT_ZH[v] || v)}</span>`; }
+function segbar(parts, cls="") {
+  return `<span class="seg ${cls}">${parts.filter(p => p.v > 0).map(p =>
+    `<i style="flex:${p.v};background:${p.c}" title="${esc(p.t)}：${p.v}"></i>`).join("")}</span>`;
+}
+function labelSeg(o, cls="") {
+  return segbar([{v:o.positive||0,c:COLORS.pos,t:"正例"},{v:o.negative||0,c:COLORS.neg,t:"反例"},{v:o.pending||0,c:COLORS.pend,t:"待定"}], cls);
+}
+function labelSeg_ctl(id, cur) {
+  return `<div class="seg-ctl" id="${id}">${[["","全部"],["positive","正例"],["negative","反例"],["pending","待定"]]
+    .map(([v,t]) => `<button data-v="${v}" class="${cur===v?"on":""}">${t}</button>`).join("")}</div>`;
+}
+function emptyRow(cols, text) { return `<tr><td colspan="${cols}" class="empty">${text}</td></tr>`; }
+
+function setTab(tab) {
+  if (!PAGES[tab]) tab = "overview";
+  STATE.tab = tab;
+  closeDrawer();
+  if (location.hash.slice(1) !== tab) history.replaceState(null, "", "#" + tab);
+  $$("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  $("#pageTitle").textContent = PAGES[tab][0];
+  $("#pageDesc").textContent = PAGES[tab][1];
+  document.title = PAGES[tab][0] + " · GoldThread";
+  for (const t of Object.keys(PAGES)) $("#view-"+t).classList.toggle("hidden", t !== tab);
+  const loaders = {overview: loadOverview, raw: loadRaw, gold: loadGold, train: loadTrain, config: loadConfig, runs: loadRuns};
+  const view = $("#view-"+tab);
+  if (!view.innerHTML.trim()) view.innerHTML = `<div class="loading">加载中…</div>`;
+  loaders[tab]().catch(e => {
+    view.innerHTML = `<div class="error-box"><b>加载失败</b><div class="muted" style="margin:6px 0 12px">${esc(e.message)}</div>
+      <button onclick="setTab('${tab}')">重新加载</button></div>`;
+  });
+}
+$$("#tabs button").forEach(b => b.onclick = () => setTab(b.dataset.tab));
+
+/* ------------------------------ 侧栏元信息 ------------------------------ */
+async function refreshMeta() {
+  const d = await api("/api/overview");
+  STATE.overview = d;
+  $("#hdrMeta").innerHTML = `
+    <dt>模型</dt><dd title="${esc(d.config.model)}">${esc(d.config.model)}</dd>
+    <dt>回合分类</dt><dd>${d.config.use_model_turns ? "模型判定" : "正则规则"}</dd>
+    <dt>配置版本</dt><dd class="mono" style="font-size:11px">${esc(d.config.hash)}</dd>
+    <dt>数据目录</dt><dd title="${esc(d.config.data_dir)}">${esc(d.config.data_dir)}</dd>`;
+  $("#navRaw").textContent = fmt(d.stages?.stage1?.sessions);
+  $("#navGold").textContent = fmt(d.stages?.stage2?.sessions);
+  $("#navTrain").textContent = fmt(d.train?.counts?.["sft_step_windows_sharegpt.jsonl"]);
+  return d;
+}
+
+/* ------------------------------ 概览 ------------------------------ */
+function assayBand(raw, gold, win) {
+  const max = Math.max(raw, gold, win, 1), H = 104, c = H / 2;
+  const h = v => 8 + (H - 12) * Math.sqrt(v / max);
+  const [a, b, w] = [h(raw), h(gold), h(win)];
+  const X1 = 333.33, X2 = 666.67;
+  const top = `M0 ${c-a/2} C 200 ${c-a/2}, 140 ${c-b/2}, ${X1} ${c-b/2} C 530 ${c-b/2}, 470 ${c-w/2}, ${X2} ${c-w/2} L 1000 ${c-w/2}`;
+  const bot = `L 1000 ${c+w/2} L ${X2} ${c+w/2} C 470 ${c+w/2}, 530 ${c+b/2}, ${X1} ${c+b/2} C 140 ${c+b/2}, 200 ${c+a/2}, 0 ${c+a/2} Z`;
+  return `<svg class="band ${STATE.poured ? "static" : ""}" viewBox="0 0 1000 ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="g-flow" x1="0" x2="1000" y1="0" y2="0" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="${COLORS.ore}" stop-opacity=".55"/>
+        <stop offset=".333" stop-color="${COLORS.gold}" stop-opacity=".85"/>
+        <stop offset=".667" stop-color="${COLORS.mint}" stop-opacity=".8"/>
+        <stop offset="1" stop-color="${COLORS.mint}" stop-opacity=".25"/>
+      </linearGradient>
+      <pattern id="g-strata" width="1000" height="6" patternUnits="userSpaceOnUse">
+        <rect width="1000" height="1" fill="#000" opacity=".14"/>
+      </pattern>
+    </defs>
+    <path d="${top} ${bot}" fill="url(#g-flow)"/>
+    <path d="${top} ${bot}" fill="url(#g-strata)"/>
+    ${[0, X1, X2].map(x => `<line x1="${x}" x2="${x}" y1="0" y2="${H}" stroke="#313845" vector-effect="non-scaling-stroke"/>`).join("")}
+  </svg>`;
+}
+
+async function loadOverview() {
+  const d = await refreshMeta();
+  const labels = d.labels || {};
+  const tra = d.train?.counts || {};
+  const sessions = sum(labels);
+  const raw = d.raw_steps || 0, gold = d.gold_steps || 0;
+  const win = tra["sft_step_windows_sharegpt.jsonl"] || 0;
+  const cut = Math.max(0, raw - gold);
+  const patho = d.train?.diagnostics_by_pathology || {};
+  const maxp = Math.max(1, ...Object.values(patho));
+  const byStage = d.train?.by_stage || {};
+  const split = d.train?.split || {};
+  const byProj = d.train?.by_project || {};
+  const dpoSrc = d.train?.dpo_by_source || {};
+  const skipped = d.skipped || {};
+  const stageRows = [
+    ["stage1", "原始提取", d.stages.stage1.last_run, COLORS.ore],
+    ["stage2", "黄金提纯", d.stages.stage2.last_run, COLORS.gold],
+    ["stage3", "训练合成", d.stages.stage3.last_run, COLORS.mint],
+    ["review", "模型评审", d.stages.review?.last_run, COLORS.pend],
+  ];
+
+  $("#view-overview").innerHTML = `
+    <div class="assay">
+      <div class="stations">
+        <div class="station" style="--c:${COLORS.ore}">
+          <div class="cap"><i></i>原始助手步</div>
+          <div class="big">${fmt(raw)}</div>
+          <div class="sub">${fmt(sessions)} 个会话：正例 ${labels.positive||0}，反例 ${labels.negative||0}，待定 ${labels.pending||0}</div>
+          ${labelSeg(labels)}
+        </div>
+        <div class="station" style="--c:${COLORS.gold}">
+          <div class="cap"><i></i>黄金步</div>
+          <div class="big">${fmt(gold)}</div>
+          <div class="sub">${raw ? `折叠与剪枝去掉 ${fmt(cut)} 步，保留 ${(gold/raw*100).toFixed(1)}%` : "尚未提纯"}</div>
+        </div>
+        <div class="station" style="--c:${COLORS.mint}">
+          <div class="cap"><i></i>SFT 单步窗口</div>
+          <div class="big">${fmt(win)}</div>
+          <div class="sub">加权后 ${fmt(d.train?.weighted_steps)}，另有 ${fmt(tra["sft_gold_trajectories_sharegpt.jsonl"] || 0)} 条完整轨迹</div>
+        </div>
+      </div>
+      ${assayBand(raw, gold, win)}
+      <div class="byproducts">
+        <div></div>
+        <div style="grid-column:span 2">剪下来的部分没有丢弃，而是沉淀为负样本
+          <div class="figs">
+            <span><b>${fmt(tra["dpo_preference_pairs.jsonl"])}</b>DPO 偏好对</span>
+            <span><b>${fmt(tra["negative_diagnostics.jsonl"])}</b>病态诊断</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-h"><h3>项目</h3><span class="hint">按会话数排序</span></div>
+        <table><thead><tr><th>项目</th><th>会话构成</th><th class="n">原始步</th><th class="n">训练窗口</th><th>切分</th></tr></thead><tbody>
+        ${(d.projects||[]).map(p => `<tr>
+          <td class="sid">${esc(p.project)}</td>
+          <td><div class="row" style="gap:10px;flex-wrap:nowrap">${labelSeg(p)}<span class="faint num" style="white-space:nowrap">${p.positive||0} / ${p.negative||0} / ${p.pending||0}</span></div></td>
+          <td class="n">${fmt(p.steps)}</td>
+          <td class="n">${fmt(byProj[p.project])}</td>
+          <td>${split[p.project] ? `<span class="chip ${esc(split[p.project])}">${esc(split[p.project])}</span>` : `<span class="faint">–</span>`}</td>
+        </tr>`).join("") || emptyRow(5, "还没有数据，先运行 stage1")}
+        </tbody></table>
+        <div class="legend" style="padding:0 18px 14px">
+          <span><i style="background:${COLORS.pos}"></i>正例</span><span><i style="background:${COLORS.neg}"></i>反例</span><span><i style="background:${COLORS.pend}"></i>待定</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-h"><h3>病态行为</h3><span class="hint">负例诊断库中各类问题的出现次数</span></div>
+        <div class="panel-b"><div class="patho">
+          ${Object.entries(patho).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `
+            <span class="name">${esc(PATHO_ZH[k] || k)}<small>${esc(k)}</small></span>
+            <span class="track"><i style="width:${Math.max(2, Math.round(v/maxp*100))}%"></i></span>
+            <b>${fmt(v)}</b>`).join("") || `<span class="faint">暂无诊断</span>`}
+        </div></div>
+      </div>
+    </div>
+
+    <div class="grid2 even">
+      <div class="panel">
+        <div class="panel-h"><h3>训练样本构成</h3></div>
+        <div class="panel-b">
+          <div class="sub-h">按会话阶段</div>
+          ${segbar(PHASE.map(([k,t,c]) => ({v:byStage[k]||0, c, t})), "thick")}
+          <div class="legend">${PHASE.map(([k,t,c]) => `<span><i style="background:${c}"></i>${t} <b>${fmt(byStage[k]||0)}</b></span>`).join("")}</div>
+          <div class="sub-h">DPO 偏好对来源</div>
+          <div class="row">${Object.entries(dpoSrc).map(([k,v]) => `<span class="chip">${esc(DPO_SRC_ZH[k]||k)} <b>${fmt(v)}</b></span>`).join("") || `<span class="faint">–</span>`}</div>
+          <div class="sub-h">准入时跳过的会话</div>
+          <div class="row">${Object.entries(skipped).map(([k,v]) => `<span class="chip">${esc(SKIP_ZH[k]||k)} <b>${fmt(v)}</b></span>`).join("") || `<span class="faint">–</span>`}</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h3>最近运行</h3></div>
+        <div class="panel-b">
+          <div class="timeline-list">
+            ${stageRows.map(([s, n, t, c]) => `<div class="it" style="--c:${c}">
+              <span class="dot ${t?"on":""}"></span>
+              <span>${n} <span class="faint mono" style="font-size:11px;margin-left:4px">${s}</span></span>
+              <span class="t">${ago(t)}${t?`<small>${esc(stamp(t))}</small>`:""}</span></div>`).join("")}
+          </div>
+          <div class="sub-h">路径</div>
+          <div class="kv">
+            <span class="k">会话目录</span><span class="path">${esc(d.config.sessions_dir)}</span>
+            <span class="k">配置文件</span><span class="path">${esc(d.config.path)}</span>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  STATE.poured = true;
+}
+
+/* ------------------------------ 原始数据 ------------------------------ */
+async function loadRaw() {
+  const f = STATE.raw;
+  const d = await api(`/api/raw/sessions?label=${encodeURIComponent(f.label)}&project=${encodeURIComponent(f.project)}&q=${encodeURIComponent(f.q)}`);
+  if (!STATE.overview) await refreshMeta().catch(() => {});
+  const projects = [...new Set((STATE.overview?.projects||[]).map(p=>p.project))];
+  $("#view-raw").innerHTML = `
+    <div class="panel">
+      <div class="toolbar">
+        ${labelSeg_ctl("rawLabel", f.label)}
+        <select id="rawProject"><option value="">全部项目</option>
+          ${projects.map(p=>`<option value="${esc(p)}" ${f.project===p?"selected":""}>${esc(p)}</option>`).join("")}
+        </select>
+        <input type="text" id="rawSearch" placeholder="搜索会话 ID、根任务或目录，回车确认" value="${esc(f.q)}">
+        <span class="grow"></span>
+        <span class="count"><b>${d.total}</b> 个会话</span>
+        <button id="rawReload" class="ghost">刷新</button>
+      </div>
+      <div class="scroll"><table><thead><tr>
+        <th>会话</th><th>标签</th><th>项目</th><th>模型</th><th class="n" title="助手步数 / 其中干净步数">步数 / 干净</th><th class="n" title="保留回合 / 总回合">回合</th><th>根任务</th><th>回合标注</th>
+      </tr></thead><tbody>
+      ${d.sessions.map(s => `<tr class="clickable" data-sid="${esc(s.session_id)}" tabindex="0">
+        <td class="sid">${esc(s.session_id.slice(0,8))}</td>
+        <td>${labelBadge(s.label)}</td>
+        <td class="sid muted">${esc(s.project_group||"")}</td>
+        <td class="muted" style="font-size:12px;white-space:nowrap" title="${esc(Object.entries(s.models||{}).map(([m,c])=>`${m}：${c} 步`).join("\n"))}">${(() => {
+          const ms = Object.entries(s.models||{}).sort((a,b) => b[1]-a[1]);
+          return ms.length ? `${esc(short(ms[0][0], 20))}${ms.length > 1 ? ` <span class="faint">+${ms.length-1}</span>` : ""}` : "";
+        })()}</td>
+        <td class="n">${fmt(s.stats?.assistant_steps)}<span class="faint"> / ${fmt(s.stats?.clean_steps)}</span></td>
+        <td class="n">${s.stats?.turns_kept ?? "–"}<span class="faint"> / ${s.stats?.turns_total ?? "–"}</span></td>
+        <td class="muted"><div class="clip">${esc(short(s.stats?.root_prompt, 140))}</div></td>
+        <td>${s.annotation==="model" ? `<span class="chip model">模型</span>` : `<span class="chip">规则</span>`}</td>
+      </tr>`).join("") || emptyRow(8, "没有符合条件的会话")}
+      </tbody></table></div>
+    </div>`;
+  $$("#rawLabel button").forEach(b => b.onclick = () => { STATE.raw.label = b.dataset.v; loadRaw(); });
+  $("#rawProject").onchange = e => { STATE.raw.project = e.target.value; loadRaw(); };
+  $("#rawReload").onclick = loadRaw;
+  $("#rawSearch").onkeydown = e => { if (e.key === "Enter") { STATE.raw.q = e.target.value; loadRaw(); } };
+  bindRows("#view-raw", tr => openRaw(tr.dataset.sid));
+}
+
+function bindRows(scope, fn) {
+  $$(scope + " tr.clickable").forEach(tr => {
+    tr.onclick = () => fn(tr);
+    tr.onkeydown = e => { if (e.key === "Enter") fn(tr); };
+  });
+}
+
+async function openRaw(sid) {
+  openDrawer(`原始会话 ${sid.slice(0,8)}`, "stage1 视图，已应用回合过滤");
+  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
+  const d = await api(`/api/raw/session/${sid}`);
+  const meta = d.meta || {}, st = meta.stats || {};
+  $("#drawerSub").innerHTML = `${labelBadge(meta.label)} <span class="faint" style="margin-left:6px">${esc(meta.project_group)}</span>`;
+  $("#drawerBody").innerHTML = `
+    <div class="panel"><div class="panel-h"><h3>会话信息</h3></div><div class="panel-b kv">
+      <span class="k">会话 ID</span><span class="mono">${esc(sid)}</span>
+      <span class="k">标签</span><span>${labelBadge(meta.label)} <span class="muted" style="margin-left:6px">${esc(meta.label_reason)}</span></span>
+      <span class="k">项目</span><span class="mono">${esc(meta.project_group)}</span>
+      <span class="k">工作目录</span><span class="path">${esc(meta.cwd)}</span>
+      <span class="k">模型</span><span class="row" style="gap:6px">${Object.entries(meta.models||{}).map(([m,c])=>`<span class="chip">${esc(m)} <b>${fmt(c)}</b></span>`).join("") || "–"}</span>
+      <span class="k">步数</span><span><span class="num">${fmt(st.assistant_steps)}</span> 步，其中干净 <span class="num">${fmt(st.clean_steps)}</span>，质量均分 <span class="num">${fmt(st.quality_avg)}</span></span>
+      <span class="k">回合</span><span>保留 <span class="num">${st.turns_kept}</span> / 共 <span class="num">${st.turns_total}</span>
+        ${Object.entries(st.dropped||{}).map(([k,v])=>`<span class="chip" style="margin-left:6px">丢弃 ${esc(k)} <b>${fmt(v)}</b></span>`).join("")}</span>
+      <span class="k">根任务</span><span>${esc(st.root_prompt || "未识别")}</span>
+      <span class="k">内化约束</span><span>${(st.constraints||[]).map(c=>`<div>${esc(c)}</div>`).join("") || "–"}</span>
+    </div></div>
+    <div class="panel"><div class="panel-h"><h3>回合标注</h3><span class="hint">点击保留的回合可跳到对应提问；划线的回合已被剥离或折叠，悬停查看判定理由</span></div><div class="panel-b">
+      <div class="turns">${(d.turns||[]).map(t => t.dropped
+        ? `<span class="tl ${esc(t.kind)}" title="${esc(t.reason||"")}（${t.assistant_steps} 步）">#${t.turn_index} ${esc(TURN_KIND_ZH[t.kind] || t.kind)} ✕</span>`
+        : `<button class="tl ${esc(t.kind)}" title="${esc(t.reason||"")}（${t.assistant_steps} 步）" onclick="jumpTurn(${t.turn_index})">#${t.turn_index} ${esc(TURN_KIND_ZH[t.kind] || t.kind)}</button>`).join("")}</div>
+    </div></div>
+    ${renderMessages(d.messages||[], d.turns)}`;
+  $("#drawerFoot").innerHTML = `
+    <span class="muted" style="font-size:12.5px">改标签为</span>
+    <button onclick="relabel('${sid}','positive')"><span class="tag t-positive">正例</span></button>
+    <button onclick="relabel('${sid}','negative')"><span class="tag t-negative">反例</span></button>
+    <button onclick="relabel('${sid}','pending')"><span class="tag t-pending">待定</span></button>
+    <span class="grow"></span>
+    <span class="faint" style="font-size:12px">修改后需重跑 stage1 生效</span>`;
+}
+
+async function relabel(sid, label) {
+  try { await api(`/api/raw/session/${sid}/relabel`, {method:"POST", body: JSON.stringify({label})});
+    toast(`已将 ${sid.slice(0,8)} 标为${LABEL_ZH[label]}，重跑 stage1 后生效`, "ok"); } catch (e) { toast(e.message, "err"); }
+}
+
+/* ------------------------------ 黄金数据 ------------------------------ */
+async function loadGold() {
+  const f = STATE.gold;
+  const d = await api(`/api/gold/sessions?label=${encodeURIComponent(f.label)}&project=${encodeURIComponent(f.project)}&q=${encodeURIComponent(f.q)}`);
+  $("#view-gold").innerHTML = `
+    <div class="panel">
+      <div class="toolbar">
+        ${labelSeg_ctl("goldLabel", f.label)}
+        <input type="text" id="goldSearch" placeholder="搜索会话 ID 或根任务，回车确认" value="${esc(f.q)}">
+        <span class="grow"></span>
+        <span class="count"><b>${d.total}</b> 个会话</span>
+        <button id="goldReload" class="ghost">刷新</button>
+      </div>
+      <div class="scroll"><table><thead><tr>
+        <th>会话</th><th>标签</th><th>项目</th><th>原始 → 黄金</th><th class="n">折叠</th><th class="n">剪枝</th><th class="n">DPO</th><th>模型评审</th><th>脚本判定</th>
+      </tr></thead><tbody>
+      ${d.sessions.map(s => {
+        const r = s.stats?.raw_steps || 0, g = s.stats?.gold_steps || 0;
+        return `<tr class="clickable" data-sid="${esc(s.session_id)}" tabindex="0">
+        <td class="sid">${esc(s.session_id.slice(0,8))}</td>
+        <td>${labelBadge(s.label)}</td>
+        <td class="sid muted">${esc(s.project_group||"")}</td>
+        <td><div class="row" style="gap:10px;flex-wrap:nowrap">
+          <span class="num faint" style="min-width:34px;text-align:right">${fmt(r)}</span>
+          <span class="seg" style="width:70px">${r ? `<i style="flex:${g};background:${COLORS.gold}"></i><i style="flex:${Math.max(0,r-g)};background:${COLORS.neg};opacity:.55"></i>` : ""}</span>
+          <span class="num">${fmt(g)}</span></div></td>
+        <td class="n">${fmt(s.stats?.folded)}</td>
+        <td class="n">${fmt(s.stats?.pruned_detours)}</td>
+        <td class="n">${fmt(s.dpo_count ?? (s.stats?.pruned_detours||0))}</td>
+        <td>${s.review_status ? verdictTag(s.review_status) : `<span class="faint">未评审</span>`}</td>
+        <td class="muted" title="${esc(s.script_status||s.status||"")}">${esc(SCRIPT_ZH[s.script_status||s.status] || s.script_status || s.status || "")}</td>
+      </tr>`;}).join("") || emptyRow(9, "还没有黄金数据，先运行 stage2")}
+      </tbody></table></div>
+    </div>`;
+  $$("#goldLabel button").forEach(b => b.onclick = () => { STATE.gold.label = b.dataset.v; loadGold(); });
+  $("#goldSearch").onkeydown = e => { if (e.key==="Enter"){ STATE.gold.q = e.target.value; loadGold(); } };
+  $("#goldReload").onclick = loadGold;
+  bindRows("#view-gold", tr => openGold(tr.dataset.sid));
+}
+
+async function openGold(sid) {
+  openDrawer(`黄金会话 ${sid.slice(0,8)}`, "stage2 视图，模型只输出标注，不直接改数据");
+  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
+  const d = await api(`/api/gold/session/${sid}`);
+  const rec = d.record, st = rec.stats || {}, ann = d.annotation || {}, mr = ann.model_review || {};
+  STATE.drawerData = d;
+  $("#drawerSub").innerHTML = `${labelBadge(rec.label)} <span class="faint" style="margin-left:6px">${esc(rec.project_group)}</span>`;
+  $("#drawerBody").innerHTML = `
+    <div class="panel"><div class="panel-h"><h3>提纯结果</h3></div><div class="panel-b kv">
+      <span class="k">原始 → 黄金</span><span><span class="num">${fmt(st.raw_steps)}</span> → <b class="num">${fmt(st.gold_steps)}</b> 步
+        <span class="row" style="gap:6px;margin-top:6px"><span class="chip">折叠 <b>${fmt(st.folded)}</b></span><span class="chip">剪枝 <b>${fmt(st.pruned_detours)}</b></span><span class="chip">思维链压缩 <b>${fmt(st.thinking_compressed)}</b></span></span></span>
+      <span class="k">根任务</span><span>${esc(st.root_prompt || "–")}</span>
+      <span class="k">内化约束</span><span>${(st.constraints||[]).map(c=>`<div>${esc(c)}</div>`).join("") || "–"}</span>
+      <span class="k">脚本判定</span><span>${esc(SCRIPT_ZH[ann.status] || ann.status)} <span class="mono faint" style="font-size:11px">${esc(ann.status)}</span> ${ann.reasons?.length?`<div class="muted">${esc(ann.reasons.join("；"))}</div>`:""}</span>
+      <span class="k">模型评审</span><span>${mr.verdict ? `${verdictTag(mr.verdict)} <span class="muted" style="margin-left:8px">置信度 <span class="num">${fmt(mr.confidence)}</span>，改写 <span class="num">${(mr.thinking_rewrites||[]).length}</span> 处</span>` : `<span class="faint">未评审</span>`}</span>
+      ${mr.reasons?.length ? `<span class="k">评审理由</span><span>${mr.reasons.map(r=>`<div>${esc(r)}</div>`).join("")}</span>`:""}
+    </div></div>
+    ${d.pruned?.length ? `<div class="panel"><div class="panel-h"><h3>被剪除或折叠的弯路</h3><span class="hint">${d.pruned.length} 处</span></div>
+      <div class="panel-b scroll" style="max-height:260px;padding-top:4px;padding-bottom:4px">
+      ${d.pruned.map(p=>`<div class="pruned-item"><div class="row" style="gap:8px"><span class="lb prune">${esc(p.reason)}</span>
+        <span class="mono faint" style="font-size:11px">${esc(p.dropped_msg_id||"")}</span></div>
+        <div class="muted" style="white-space:pre-wrap;font-size:12.5px;margin-top:6px">${esc(short(p.rejected_thinking, 300))}</div></div>`).join("")}
+    </div></div>` : ""}
+    ${renderMessages(rec.messages||[])}`;
+  $("#drawerFoot").innerHTML = `
+    <button class="primary" onclick="reviewOne('${sid}')">让模型评审此会话</button>
+    <button onclick="showJson(STATE.drawerData.annotation)">查看标注 JSON</button>
+    <span class="grow"></span>
+    <span class="faint" style="font-size:12px">评审结果需重跑 stage3 才会进入训练集</span>`;
+}
+
+async function reviewOne(sid) {
+  try {
+    const {job_id} = await api(`/api/gold/session/${sid}/review`, {method:"POST"});
+    toast("已提交模型评审，日志在「运行」页", "ok");
+    setTab("runs"); watchJob(job_id);
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* ------------------------------ 消息渲染 ------------------------------ */
+const ROLE_ZH = {system:"系统", user:"用户", assistant:"助手", tool:"工具", human:"用户", gpt:"助手", observation:"工具结果", function_call:"工具调用"};
+/* 会话按「提问 → 执行过程 → 回复」重组：执行过程默认折叠，逐层展开到单步的完整思考与工具输出。 */
+const TURN_KIND_ZH = {root:"根任务", task:"新任务", continuation:"续接", correction:"纠偏", setup:"准备", noise:"噪音"};
+const FLOW = {items: [], traces: {}, mode: "talk", q: "", openTraces: new Set(), openSteps: new Set(), turnKinds: {}};
+
+const oneLine = s => String(s ?? "").replace(/\s+/g, " ").trim();
+const firstLine = s => oneLine(String(s ?? "").split(/\n\s*\n|\n/).find(l => l.trim()) || "");
+const hhmm = iso => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? d.toTimeString().slice(0, 5) : ""; };
+const chars = n => n >= 10000 ? (n / 10000).toFixed(1) + " 万字" : fmt(n) + " 字";
+function dur(ms) {
+  if (!(ms > 0)) return "";
+  const s = ms / 1000;
+  return s < 60 ? Math.round(s) + " 秒" : s < 3600 ? Math.round(s / 60) + " 分钟" : (s / 3600).toFixed(1) + " 小时";
+}
+function hl(s) {
+  s = String(s ?? "");
+  const q = FLOW.q;
+  if (!q) return esc(s);
+  const low = s.toLowerCase();
+  let out = "", i = 0, j;
+  while ((j = low.indexOf(q, i)) !== -1) { out += esc(s.slice(i, j)) + "<mark>" + esc(s.slice(j, j + q.length)) + "</mark>"; i = j + q.length; }
+  return out + esc(s.slice(i));
+}
+function mdInline(s) {
+  return hl(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+}
+function md(src) {
+  const lines = String(src ?? "").replace(/\r/g, "").split("\n");
+  const out = [];
+  let i = 0;
+  const isTableSep = l => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+  const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) {
+      const buf = []; i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push(`<pre class="md-code">${hl(buf.join("\n"))}</pre>`); continue;
+    }
+    const h = l.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { const n = Math.min(h[1].length + 2, 6); out.push(`<h${n}>${mdInline(h[2])}</h${n}>`); i++; continue; }
+    if (/^\s*\|/.test(l) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      const head = cells(l); i += 2;
+      const rows = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(cells(lines[i++]));
+      out.push(`<div class="md-table"><table><thead><tr>${head.map(c => `<th>${mdInline(c)}</th>`).join("")}</tr></thead><tbody>${
+        rows.map(r => `<tr>${r.map(c => `<td>${mdInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      continue;
+    }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const ordered = /^\s*\d/.test(l), buf = [];
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) buf.push(lines[i++].replace(/^\s*([-*+]|\d+[.)])\s+/, ""));
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>${buf.map(b => `<li>${mdInline(b)}</li>`).join("")}</${tag}>`); continue;
+    }
+    if (/^\s*>/.test(l)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ""));
+      out.push(`<blockquote>${md(buf.join("\n"))}</blockquote>`); continue;
+    }
+    if (/^\s*(---+|\*\*\*+)\s*$/.test(l)) { out.push("<hr>"); i++; continue; }
+    if (!l.trim()) { i++; continue; }
+    const buf = [];
+    while (i < lines.length && lines[i].trim() && !/^\s*(```|#{1,6}\s|\||>|[-*+]\s|\d+[.)]\s)/.test(lines[i])) buf.push(lines[i++]);
+    if (!buf.length) buf.push(lines[i++]);
+    out.push(`<p>${buf.map(mdInline).join("<br>")}</p>`);
+  }
+  return out.join("");
+}
+function callGist(c) {
+  const a = c.arguments;
+  if (a && typeof a === "object") {
+    const v = a.command ?? a.path ?? a.file_path ?? a.filePath ?? a.pattern ?? a.query ?? Object.values(a).find(x => typeof x === "string");
+    return v != null ? String(v) : JSON.stringify(a);
+  }
+  return a != null ? String(a) : (c.result?.content || "");
+}
+
+function buildFlow(msgs) {
+  const items = [], traces = {};
+  const covered = new Set(msgs.flatMap(m => (m.tool_results || []).map(r => r.tool_call_id)));
+  let cur = null, seq = 0, lastTurn = null;
+  const flush = () => { if (cur && cur.steps.length) { items.push(cur); traces[cur.id] = cur; } cur = null; };
+  const open = turn => cur || (cur = {type: "trace", id: "tr" + (++seq), turn, steps: []});
+  const addStep = (m, calls) => {
+    const no = cur.steps.length + 1;
+    const think = m?.thinking || "";
+    const blob = [think, m?.text, ...calls.flatMap(c => [c.name, JSON.stringify(c.arguments ?? ""), c.result?.content])].join("\n").toLowerCase();
+    cur.steps.push({id: `${cur.id}-${no}`, no, m, calls, think, blob,
+      err: calls.some(c => c.result?.isError),
+      flagged: !!(m && (m.pruned_detour || m.folded_from || (m.flags || []).length))});
+  };
+  for (const m of msgs) {
+    if (m.role === "system") { flush(); items.push({type: "system", m}); continue; }
+    if (m.role === "user") { flush(); lastTurn = m.turn_index; items.push({type: "user", m}); continue; }
+    if (m.role === "tool") {
+      if (covered.has(m.tool_call_id)) continue;
+      open(m.turn_index ?? lastTurn);
+      const call = {id: m.tool_call_id, name: m.name, arguments: null, result: m};
+      const last = cur.steps[cur.steps.length - 1];
+      if (last) { last.calls.push(call); last.err ||= !!m.isError; last.blob += "\n" + String(m.content || "").toLowerCase(); }
+      else addStep(null, [call]);
+      continue;
+    }
+    if (m.thinking || (m.tool_calls || []).length) {
+      open(m.turn_index ?? lastTurn);
+      const res = Object.fromEntries((m.tool_results || []).map(r => [r.tool_call_id, r]));
+      addStep(m, (m.tool_calls || []).map(tc => ({id: tc.id, name: tc.name, arguments: tc.arguments, result: res[tc.id]})));
+    }
+    const said = m.text || (typeof m.content === "string" ? m.content : "");
+    if (said) { flush(); items.push({type: "reply", m, text: said}); }
+  }
+  flush();
+  return {items, traces};
+}
+
+function traceStats(t) {
+  const calls = t.steps.reduce((a, s) => a + s.calls.length, 0);
+  const errors = t.steps.reduce((a, s) => a + s.calls.filter(c => c.result?.isError).length, 0);
+  const think = t.steps.reduce((a, s) => a + s.think.length, 0);
+  const names = {};
+  t.steps.forEach(s => s.calls.forEach(c => names[c.name] = (names[c.name] || 0) + 1));
+  const first = t.steps[0], last = t.steps[t.steps.length - 1];
+  const t0 = new Date(first.m?.timestamp || first.calls[0]?.result?.timestamp);
+  const lastCall = last.calls[last.calls.length - 1];
+  const t1 = new Date(lastCall?.result?.timestamp || last.m?.timestamp);
+  const hits = FLOW.q ? t.steps.filter(s => s.blob.includes(FLOW.q)).length : 0;
+  return {calls, errors, think, names: Object.entries(names).sort((a, b) => b[1] - a[1]), span: t1 - t0, hits};
+}
+
+function renderMessages(msgs, turns) {
+  const {items, traces} = buildFlow(msgs);
+  Object.assign(FLOW, {items, traces, q: "", turnKinds: Object.fromEntries((turns || []).map(t => [t.turn_index, t.kind]))});
+  applyFlowMode(FLOW.mode, false);
+  const count = type => items.filter(i => i.type === type).length;
+  const steps = Object.values(traces).reduce((a, t) => a + t.steps.length, 0);
+  return `<div class="panel flow" id="flowPanel">
+    <div class="flow-h">
+      <div><h3>对话</h3><div class="hint">${count("user")} 次提问，${fmt(steps)} 个助手步骤，${count("reply")} 条回复</div></div>
+      <span class="grow"></span>
+      <input type="search" id="flowQ" placeholder="搜索思考、命令与输出" oninput="flowSearch(this.value)">
+      <div class="seg-ctl" id="flowMode">${[["talk", "对话", "只看提问与回复，执行过程折叠"], ["steps", "步骤", "展开执行过程，每步一行"], ["full", "完整", "展开每一步的思考与工具输出"]]
+        .map(([v, t, tip]) => `<button data-v="${v}" title="${tip}" class="${FLOW.mode === v ? "on" : ""}" onclick="applyFlowMode('${v}')">${t}</button>`).join("")}</div>
+    </div>
+    <div class="flow-b" id="flowBody">${renderFlowBody()}</div>
+  </div>`;
+}
+
+function applyFlowMode(mode, rerender = true) {
+  FLOW.mode = mode;
+  const ids = Object.keys(FLOW.traces);
+  FLOW.openTraces = new Set(mode === "talk" ? [] : ids);
+  FLOW.openSteps = new Set(mode === "full" ? ids.flatMap(id => FLOW.traces[id].steps.map(s => s.id)) : []);
+  if (!rerender) return;
+  $$("#flowMode button").forEach(b => b.classList.toggle("on", b.dataset.v === mode));
+  $("#flowBody").innerHTML = renderFlowBody();
+}
+
+let FLOW_TIMER = null;
+function flowSearch(v) {
+  clearTimeout(FLOW_TIMER);
+  FLOW_TIMER = setTimeout(() => { FLOW.q = v.trim().toLowerCase(); $("#flowBody").innerHTML = renderFlowBody(); }, 220);
+}
+
+function renderFlowBody() {
+  return FLOW.items.map(it => {
+    const m = it.m;
+    if (it.type === "system") {
+      return `<details class="sys"><summary>系统提示词 <span class="faint">${chars((m.content || "").length)}</span></summary>
+        <div class="sys-body">${hl(m.content || "")}</div></details>`;
+    }
+    if (it.type === "user") {
+      const ti = m.turn_index, kind = FLOW.turnKinds[ti], text = m.content || "", long = text.length > 700;
+      return `<div class="bubble user" ${ti != null ? `id="turn-${ti}"` : ""}>
+        <div class="who"><span class="role">用户</span>${ti != null ? `<span class="chip">回合 #${ti}</span>` : ""}${kind ? `<span>${esc(TURN_KIND_ZH[kind] || kind)}</span>` : ""}
+          <span class="grow"></span><time>${hhmm(m.timestamp)}</time></div>
+        <div class="txt ${long ? "clamp" : ""}">${hl(text)}</div>
+        ${long ? `<button class="ghost more" onclick="this.previousElementSibling.classList.toggle('clamp');this.textContent=this.textContent==='展开全文'?'收起':'展开全文'">展开全文</button>` : ""}
+      </div>`;
+    }
+    if (it.type === "reply") {
+      const long = it.text.length > 900 && !(FLOW.q && it.text.toLowerCase().includes(FLOW.q));
+      return `<div class="bubble reply">
+        <div class="who"><span class="role">助手回复</span>${m.model ? `<span class="mono">${esc(m.model)}</span>` : ""}<span class="grow"></span><time>${hhmm(m.timestamp)}</time></div>
+        <div class="md ${long ? "clamp" : ""}">${md(it.text)}</div>
+        ${long ? `<button class="ghost more" onclick="this.previousElementSibling.classList.toggle('clamp');this.textContent=this.textContent==='展开全文'?'收起':'展开全文'">展开全文</button>` : ""}
+      </div>`;
+    }
+    return renderTrace(it);
+  }).join("") || `<div class="empty">这个会话没有消息</div>`;
+}
+
+function renderTrace(t) {
+  const s = traceStats(t);
+  const q = FLOW.q;
+  const open = FLOW.openTraces.has(t.id) || (q && s.hits > 0);
+  const maxThink = Math.max(1, ...t.steps.map(x => x.think.length));
+  const visible = q ? t.steps.filter(x => x.blob.includes(q)) : t.steps;
+  const ticks = t.steps.map(st => {
+    const h = 5 + Math.round(17 * Math.sqrt(st.think.length / maxThink));
+    const tip = `#${st.no} ${firstLine(st.think) || oneLine(callGist(st.calls[0] || {}))}`.slice(0, 140);
+    const cls = [st.err && "e", st.flagged && "f", q && (st.blob.includes(q) ? "hit" : "dim")].filter(Boolean).join(" ");
+    return `<i class="tk ${cls}" style="height:${h}px" title="${esc(tip)}" onclick="jumpStep('${t.id}','${st.id}')"></i>`;
+  }).join("");
+  return `<div class="trace ${open ? "open" : ""}" id="${t.id}">
+    <div class="trace-head">
+    <button class="trace-bar" aria-expanded="${!!open}" onclick="toggleTrace('${t.id}')">
+      <span class="caret"></span>
+      <span class="tt">执行过程 <b class="num">${t.steps.length}</b> 步</span>
+      <span class="tm">
+        ${t.turn != null ? `<span>回合 #${t.turn}</span>` : ""}
+        <span>工具调用 <b class="num">${s.calls}</b> 次</span>
+        ${s.errors ? `<span class="e">报错 <b class="num">${s.errors}</b> 次</span>` : ""}
+        <span>思考 ${chars(s.think)}</span>
+        ${dur(s.span) ? `<span>用时 ${dur(s.span)}</span>` : ""}
+        ${s.names.slice(0, 3).map(([n, c]) => `<span class="mono">${esc(n)} ${c}</span>`).join("")}
+      </span>
+      ${q ? `<span class="hits ${s.hits ? "" : "none"}">${s.hits ? `命中 ${s.hits} 步` : "无命中"}</span>` : ""}
+    </button>
+    <div class="ticks" aria-hidden="true">${ticks}</div>
+    </div>
+    ${open ? `<div class="steps-list">${visible.map(renderStep).join("")}</div>` : ""}
+  </div>`;
+}
+
+function renderStep(st) {
+  const open = FLOW.openSteps.has(st.id);
+  const gist = firstLine(st.think) || firstLine(st.m?.text);
+  const calls = st.calls.slice(0, 2).map(c =>
+    `<span class="call ${c.result?.isError ? "e" : ""}"><b>${esc(c.name)}</b>${hl(short(oneLine(callGist(c)), 90))}</span>`).join("");
+  return `<div class="step ${open ? "open" : ""} ${st.err ? "err" : ""} ${st.flagged ? "flagged" : ""}" id="${st.id}">
+    <button class="step-row" aria-expanded="${open}" onclick="toggleStep('${st.id}')">
+      <span class="no num">${st.no}</span>
+      <span class="gist">${gist ? hl(short(gist, 180)) : `<span class="faint">没有思考内容</span>`}</span>
+      <span class="calls">${calls || `<span class="faint">无工具调用</span>`}${st.calls.length > 2 ? `<span class="more-calls">+${st.calls.length - 2}</span>` : ""}</span>
+    </button>
+    ${open ? renderStepDetail(st) : ""}
+  </div>`;
+}
+
+function renderStepDetail(st) {
+  const m = st.m || {};
+  const flags = (m.flags || []).map(f => `<span class="lb ${f.includes("fold") ? "fold" : f.includes("prune") ? "prune" : "backfill"}">${esc(f)}</span>`).join("");
+  const meta = [
+    m.model && `<span class="mono">${esc(m.model)}</span>`,
+    m.quality && `<span>质量 <span class="num">${fmt(m.quality.score)}</span>${m.quality.is_clean ? "，干净" : ""}</span>`,
+    flags,
+    m.pruned_detour && `<span class="lb prune">pruned:${esc(m.pruned_detour.slice(0, 8))}</span>`,
+    m.folded_from && `<span class="lb fold">folded:${esc(m.folded_from.slice(0, 8))}</span>`,
+    `<span class="grow"></span>`,
+    m.timestamp && `<time>${hhmm(m.timestamp)}</time>`,
+    m.id && `<span class="mono">${esc(String(m.id).slice(0, 14))}</span>`,
+  ].filter(Boolean).join("");
+  const calls = st.calls.map(c => {
+    const r = c.result, err = r?.isError, out = r?.content || "", len = r?.raw_len ?? out.length;
+    const a = c.arguments;
+    const args = a == null ? "" : (typeof a === "object" && typeof a.command === "string" && Object.keys(a).length <= 2)
+      ? `<pre class="cmd">${hl(a.command)}</pre>`
+      : `<pre class="cmd">${hl(typeof a === "string" ? a : JSON.stringify(a, null, 2))}</pre>`;
+    const openOut = err || out.length < 600 || (FLOW.q && out.toLowerCase().includes(FLOW.q));
+    return `<div class="call-d ${err ? "e" : ""}">
+      <div class="call-h"><b>${esc(c.name || "")}</b>${err ? `<span class="lb err">报错</span>` : ""}<span class="grow"></span><span class="mono faint">${esc(String(c.id || "").slice(0, 18))}</span></div>
+      ${args}
+      ${r ? `<details ${openOut ? "open" : ""}><summary>输出 ${fmt(len)} 字符</summary><pre>${hl(out)}</pre></details>` : `<div class="no-out">没有输出记录</div>`}
+    </div>`;
+  }).join("");
+  return `<div class="step-d">
+    <div class="step-meta">${meta}</div>
+    ${st.think ? `<div class="think-full">${hl(st.think)}</div>` : ""}
+    ${m.text ? `<div class="said md">${md(m.text)}</div>` : ""}
+    ${calls}
+  </div>`;
+}
+
+function rerenderTrace(id) {
+  const el = document.getElementById(id);
+  if (el) el.outerHTML = renderTrace(FLOW.traces[id]);
+  return document.getElementById(id);
+}
+function toggleTrace(id) {
+  FLOW.openTraces.has(id) ? FLOW.openTraces.delete(id) : FLOW.openTraces.add(id);
+  const el = rerenderTrace(id);
+  if (el && el.getBoundingClientRect().top < $("#drawerBody").getBoundingClientRect().top) { el.scrollIntoView({block: "start"}); $("#drawerBody").scrollTop -= 12; }
+}
+function toggleStep(id) {
+  FLOW.openSteps.has(id) ? FLOW.openSteps.delete(id) : FLOW.openSteps.add(id);
+  const t = FLOW.traces[id.split("-")[0]];
+  const st = t.steps.find(s => s.id === id);
+  const el = document.getElementById(id);
+  if (el && st) el.outerHTML = renderStep(st);
+}
+function jumpStep(tid, sid) {
+  FLOW.openTraces.add(tid); FLOW.openSteps.add(sid);
+  const st = FLOW.traces[tid].steps.find(s => s.id === sid);
+  if (FLOW.q && !st.blob.includes(FLOW.q)) { FLOW.q = ""; const i = $("#flowQ"); if (i) i.value = ""; $("#flowBody").innerHTML = renderFlowBody(); }
+  else rerenderTrace(tid);
+  const el = document.getElementById(sid);
+  if (!el) return;
+  el.scrollIntoView({block: "start"});
+  el.classList.add("flash");
+  setTimeout(() => el.classList.remove("flash"), 1400);
+}
+function jumpTurn(ti) {
+  const el = document.getElementById("turn-" + ti);
+  if (el) el.scrollIntoView({block: "start", behavior: "smooth"});
+  else toast(`回合 #${ti} 在消息流中没有独立的提问，已被折叠进相邻回合或剥离`);
+}
+
+/* ------------------------------ 训练数据 ------------------------------ */
+async function loadTrain() {
+  const d = await api("/api/train/datasets");
+  const files = d.datasets.map(x=>x.name);
+  if (!files.includes(STATE.train.name) && files.length) STATE.train.name = files[0];
+  if (!files.length) {
+    $("#view-train").innerHTML = `<div class="panel"><div class="empty">还没有训练数据，先运行 stage3</div></div>`;
+    return;
+  }
+  const rows = await api(`/api/train/dataset/${STATE.train.name}?offset=${STATE.train.offset}&limit=50&q=${encodeURIComponent(STATE.train.q||"")}`);
+  STATE.datasetInfo = d.dataset_info;
+  const end = Math.min(rows.offset + rows.rows.length, rows.total);
+  $("#view-train").innerHTML = `
+    <div class="panel">
+      <div class="toolbar">
+        <select id="dsSelect">${d.datasets.map(x=>`<option value="${esc(x.name)}" ${x.name===STATE.train.name?"selected":""}>${esc(x.name)}（${fmt(x.name===STATE.train.name && !STATE.train.q ? rows.total : x.rows)}）</option>`).join("")}</select>
+        <input type="text" id="dsSearch" placeholder="搜索样本内容，回车确认" value="${esc(STATE.train.q||"")}">
+        <span class="grow"></span>
+        <button id="dsInfo" class="ghost">dataset_info.json</button>
+        <button id="dsReload" class="ghost">刷新</button>
+      </div>
+      <div class="scroll"><table><thead><tr><th class="n">#</th><th>样本 ID</th><th>项目</th><th>阶段</th><th class="n">权重</th><th class="n">轮数</th><th>用户输入与目标输出</th></tr></thead><tbody>
+      ${rows.rows.map(r=>`<tr class="clickable" data-idx="${r.index}" tabindex="0">
+        <td class="n faint">${r.index}</td>
+        <td class="mono muted" style="font-size:11px;white-space:nowrap" title="${esc(r.sample_id)}">${esc(short(r.sample_id, 26))}</td>
+        <td class="sid muted">${esc(r.metadata?.project_group||"")}</td>
+        <td>${(() => { const p = PHASE.find(x => x[0] === r.metadata?.stage); return p ? `<span class="tag" style="--c:${p[2]}">${p[1]}</span>` : esc(r.metadata?.stage||"–"); })()}</td>
+        <td class="n">${fmt(r.metadata?.sample_weight)}</td>
+        <td class="n">${fmt(r.preview?.turns)}</td>
+        <td style="max-width:560px"><div class="clip" style="-webkit-line-clamp:1">${esc(short(r.preview?.user, 140))}</div>
+          <div class="clip faint" style="-webkit-line-clamp:1;font-size:12.5px">${esc(short(r.preview?.target, 140))}</div></td>
+      </tr>`).join("") || emptyRow(7, STATE.train.q ? "没有匹配的样本" : "这个数据集是空的")}
+      </tbody></table></div>
+      <div class="toolbar bottom">
+        <span class="count"><b>${rows.total ? fmt(rows.offset + 1) : 0}–${fmt(end)}</b>，共 ${fmt(rows.total)} 条</span>
+        <span class="grow"></span>
+        <button id="dsPrev" ${rows.offset <= 0 ? "disabled" : ""}>上一页</button>
+        <button id="dsNext" ${end >= rows.total ? "disabled" : ""}>下一页</button>
+      </div>
+    </div>`;
+  $("#dsSelect").onchange = e => { STATE.train.name = e.target.value; STATE.train.offset = 0; STATE.train.q=""; loadTrain(); };
+  $("#dsSearch").onkeydown = e => { if (e.key==="Enter"){ STATE.train.q=e.target.value; STATE.train.offset=0; loadTrain(); } };
+  $("#dsReload").onclick = loadTrain;
+  $("#dsInfo").onclick = () => showJson(STATE.datasetInfo);
+  $("#dsPrev").onclick = () => { STATE.train.offset = Math.max(0, STATE.train.offset-50); loadTrain(); };
+  $("#dsNext").onclick = () => { STATE.train.offset += 50; loadTrain(); };
+  bindRows("#view-train", async tr => {
+    openDrawer(`样本 #${tr.dataset.idx}`, STATE.train.name);
+    $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
+    const row = await api(`/api/train/dataset/${STATE.train.name}/${tr.dataset.idx}`);
+    STATE.drawerData = row;
+    $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-h"><h3>元数据</h3></div><div class="panel-b"><pre class="json">${esc(JSON.stringify(row.metadata||{},null,2))}</pre></div></div>
+      <div class="panel"><div class="panel-h"><h3>对话</h3></div><div class="panel-b"><div class="msgs">${renderConversation(row)}</div></div></div>`;
+    $("#drawerFoot").innerHTML = `<button onclick="showJson(STATE.drawerData)">查看原始 JSON</button>`;
+  });
+}
+
+function renderConversation(row) {
+  const msgs = row.conversations || row.messages || [];
+  return msgs.map(m => {
+    const role = m.from || m.role;
+    const val = m.value ?? (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+    const cls = (role==="human"||role==="user") ? "role-user" : role==="system" ? "role-system" : role==="observation"||role==="tool" ? "role-tool" : "role-assistant";
+    return `<div class="msg ${cls}"><div class="hd"><span class="role">${esc(ROLE_ZH[role] || role)}</span>${m.tool_calls?`<span class="lb">${esc((m.tool_calls||[]).map(t=>t.function?.name).join(", "))}</span>`:""}</div>
+      <div class="bd">${esc(val)}</div></div>`;
+  }).join("");
+}
+
+/* ------------------------------ 配置 ------------------------------ */
+async function loadConfig() {
+  if ($("#cfgEditor")) return;
+  const d = await api("/api/config");
+  $("#view-config").innerHTML = `
+    <div class="panel">
+      <div class="toolbar">
+        <span class="mono muted">${esc(d.path)}</span><span class="grow"></span>
+        <button id="cfgValidate">校验 YAML</button>
+        <button id="cfgTest">测试模型连接</button>
+        <button id="cfgSave" class="primary">保存配置</button>
+      </div>
+      <textarea id="cfgEditor" class="editor" spellcheck="false">${esc(d.yaml)}</textarea>
+      <div class="note">模型相关配置在 <span class="mono">llm</span> 与 <span class="mono">review</span> 段；准入与标签规则在 <span class="mono">admission</span>、<span class="mono">labeling</span>、<span class="mono">turns</span> 段。<span class="kbd">Ctrl</span><span class="kbd">S</span> 保存。</div>
+    </div>`;
+  const save = async () => {
+    try {
+      const r = await api("/api/config", {method:"PUT", body: JSON.stringify({yaml: $("#cfgEditor").value})});
+      toast("配置已保存，版本 " + r.config_hash, "ok"); refreshMeta().catch(() => {});
+    } catch (e) { toast(e.message, "err"); }
+  };
+  $("#cfgSave").onclick = save;
+  $("#cfgEditor").onkeydown = e => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+    if (e.key === "Tab") { e.preventDefault(); const t = e.target, s = t.selectionStart; t.setRangeText("  ", s, t.selectionEnd, "end"); }
+  };
+  $("#cfgValidate").onclick = async () => {
+    const r = await api("/api/config/validate", {method:"POST", body: JSON.stringify({yaml: $("#cfgEditor").value})});
+    r.ok ? toast("YAML 合法，顶层键：" + r.keys.join("、"), "ok") : toast("YAML 有误：" + r.error, "err");
+  };
+  $("#cfgTest").onclick = async () => {
+    toast("正在测试模型连接…");
+    const r = await api("/api/llm/test", {method:"POST", body: JSON.stringify({})});
+    r.ok ? toast(`模型可用：${r.model}（${r.provider}），回复「${r.reply||"仅推理内容"}」`, "ok") : toast("连接失败：" + r.error, "err");
+  };
+}
+
+/* ------------------------------ 运行 ------------------------------ */
+async function loadRuns() {
+  const hist = await api("/api/runs");
+  const ov = STATE.overview || await refreshMeta();
+  const steps = [
+    ["stage1", "原始提取", "扫描 pi 会话，按正例、反例分目录存放，并标注回合。", COLORS.ore],
+    ["stage2", "黄金提纯", "折叠状态、剪掉弯路、给思维链去噪。", COLORS.gold],
+    ["stage3", "训练合成", "生成单步窗口、完整轨迹与 DPO 偏好对，并切分训练集。", COLORS.mint],
+  ];
+  const card = ([s, n, desc, c], i) => `<div class="pipe-step ${i<0?"solo":""}" style="--c:${c}">
+      <div class="no">${i<0 ? `<i class="r"></i>` : `<i>${i+1}</i>`}<span class="mono">${s}</span></div>
+      <h4>${n}</h4>
+      <div class="d">${desc}</div>
+      <div class="when">上次运行：${ago(ov.stages?.[s]?.last_run)}</div>
+      <div class="acts"><button onclick="runStage('${s}',false)">增量运行</button>
+        <button class="ghost" onclick="runStage('${s}',true)">全量重建</button></div>
+    </div>`;
+  $("#view-runs").innerHTML = `
+    <div class="pipeline">
+      ${steps.map((s, i) => card(s, i)).join("")}
+      <div class="spacer"></div>
+      ${card(["review", "模型评审", "改写过长的思维链，并裁决会话是否保留为黄金数据。", COLORS.pend], -1)}
+    </div>
+    <div class="run-all">
+      <button class="primary" onclick="runStage('all',false)">运行全流程（增量）</button>
+      <button class="danger" onclick="runStage('all',true)">强制重建全流程</button>
+    </div>
+    <div class="console-wrap">
+      <div class="console-h"><h3>实时日志</h3><span class="grow"></span><span id="jobStatus" class="faint" style="font-size:12px">没有进行中的任务</span></div>
+      <div class="console" id="jobConsole"></div>
+    </div>
+    <div class="panel"><div class="panel-h"><h3>历史运行</h3><span class="hint">最近 ${(hist.runs||[]).length} 次</span></div>
+      <div class="scroll" style="max-height:420px"><table><thead><tr><th>阶段</th><th>状态</th><th>开始</th><th>耗时</th><th>结果</th></tr></thead><tbody>
+      ${(hist.runs||[]).map(r=>{
+        const dur = r.created_at && r.finished_at ? Math.max(0, (new Date(r.finished_at) - new Date(r.created_at)) / 1000) : null;
+        return `<tr><td class="sid">${esc(r.stage)}${r.force?` <span class="chip" style="margin-left:4px">全量</span>`:""}</td>
+        <td>${runTag(r.status)}</td>
+        <td class="muted" title="${esc(stamp(r.created_at))}">${ago(r.created_at)}</td>
+        <td class="num muted">${dur === null ? "–" : dur < 60 ? dur.toFixed(0) + " 秒" : (dur/60).toFixed(1) + " 分"}</td>
+        <td class="mono faint" style="font-size:11px"><div class="clip" style="max-width:620px">${esc(short(JSON.stringify(r.result||r.error||""),220))}</div></td></tr>`;}).join("") || emptyRow(5, "还没有运行记录")}
+      </tbody></table></div></div>`;
+  paintJob();
+}
+
+async function runStage(stage, force) {
+  try {
+    const {job_id} = await api("/api/run", {method:"POST", body: JSON.stringify({stage, force})});
+    toast(`已启动 ${stage}${force ? "（全量重建）" : ""}`, "ok"); setTab("runs"); watchJob(job_id);
+  } catch (e) { toast(e.message, "err"); }
+}
+
+let JOB_TIMER = null, JOB_ID = null, JOB_LINES = [], JOB_META = null;
+function paintJob() {
+  const el = $("#jobConsole"); if (!el) return;
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+  el.innerHTML = JOB_LINES.length ? "" : `<span class="faint">启动任意阶段后，日志会实时出现在这里。</span>`;
+  for (const line of JOB_LINES) {
+    const d = document.createElement("div");
+    d.textContent = line;
+    if (/失败|error|Traceback/i.test(line)) d.className = "err";
+    else if (/完成/.test(line)) d.className = "ok";
+    el.appendChild(d);
+  }
+  if (atBottom) el.scrollTop = el.scrollHeight;
+  const st = JOB_META;
+  const stEl = $("#jobStatus");
+  if (stEl && st) stEl.innerHTML = `${runTag(st.status)} <span class="mono faint" style="margin-left:8px">${esc(st.stage)}${st.force?"，全量":""}，作业 ${esc(st.id)}</span>`;
+}
+function watchJob(jobId) {
+  if (JOB_TIMER) clearInterval(JOB_TIMER);
+  JOB_ID = jobId; JOB_LINES = []; JOB_META = null;
+  let offset = 0;
+  const tick = async () => {
+    try {
+      const j = await api(`/api/jobs/${jobId}?offset=${offset}`);
+      if (offset === 0) JOB_LINES = [];
+      JOB_LINES.push(...(j.logs||[]));
+      offset += (j.logs||[]).length;
+      JOB_META = j;
+      paintJob();
+      if (j.status !== "running") {
+        clearInterval(JOB_TIMER); JOB_TIMER = null;
+        if (j.status === "done") { toast(`${j.stage} 已完成`, "ok"); STATE.poured = true; refreshMeta().catch(() => {}); }
+        else toast(`${j.stage} 失败：${j.error||""}`, "err");
+      }
+    } catch (e) { /* job may not be registered yet */ }
+  };
+  tick(); JOB_TIMER = setInterval(tick, 900);
+}
+
+/* ------------------------------ 抽屉 / 通用 ------------------------------ */
+function openDrawer(title, sub="") {
+  $("#drawerTitle").textContent = title; $("#drawerSub").textContent = sub || "";
+  $("#drawerFoot").innerHTML = "";
+  $("#drawerBody").scrollTop = 0;
+  $("#drawer").classList.add("open");
+  $("#scrim").classList.add("open");
+}
+function closeDrawer() { $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); STATE.drawerData = null; }
+function showJson(data) {
+  const obj = typeof data === "string" ? (()=>{try{return JSON.parse(data)}catch{return data}})() : data;
+  openDrawer("JSON", "");
+  $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-b"><pre class="json">${esc(typeof obj === "string" ? obj : JSON.stringify(obj, null, 2))}</pre></div></div>`;
+}
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (e.target.id === "flowQ" && e.target.value) { e.target.value = ""; flowSearch(""); return; }
+  closeDrawer();
+});
+window.addEventListener("hashchange", () => {
+  const tab = location.hash.slice(1);
+  if (tab && tab !== STATE.tab) setTab(tab);
+});
+
+$("#btnRunAll").onclick = () => runStage("all", false);
+setTab(location.hash.slice(1) || "overview");
+if (STATE.tab !== "overview") refreshMeta().catch(() => {});
+</script>
+</body>
+</html>
