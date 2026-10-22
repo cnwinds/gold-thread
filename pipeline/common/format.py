@@ -24,8 +24,9 @@ def to_openai(
         thinking = "" if strip_thinking else (
             override_thinking if override_thinking is not None else m.get("thinking", "")
         )
-        text = m.get("text", "")
-        content = f"<think\n{thinking}\n</think>\n\n{text}".strip() if thinking else text
+        thinking = (thinking or "").strip()
+        text = (m.get("text") or "").strip()
+        content = f"<think>\n{thinking}\n</think>\n\n{text}".strip() if thinking else text
         out: Dict[str, Any] = {"role": "assistant", "content": content}
         if thinking:
             out["reasoning_content"] = thinking
@@ -63,8 +64,9 @@ def to_sharegpt(
     thinking = "" if strip_thinking else (
         override_thinking if override_thinking is not None else m.get("thinking", "")
     )
-    text = m.get("text", "")
-    prefix = f"<think\n{thinking}\n</think>\n\n" if thinking else ""
+    thinking = (thinking or "").strip()
+    text = (m.get("text") or "").strip()
+    prefix = f"<think>\n{thinking}\n</think>\n\n" if thinking else ""
     if m.get("tool_calls"):
         blocks = [
             "<tool_call>\n"
@@ -72,7 +74,8 @@ def to_sharegpt(
             + "\n</tool_call>"
             for tc in m["tool_calls"]
         ]
-        return [{"from": "gpt", "value": f"{prefix}{text}\n" + "\n".join(blocks).strip()}]
+        body = f"{text}\n" if text else ""
+        return [{"from": "gpt", "value": f"{prefix}{body}" + "\n".join(blocks).strip()}]
     return [{"from": "gpt", "value": f"{prefix}{text}".strip()}]
 
 
@@ -85,18 +88,20 @@ def conversation(
     override = override or {}
     out: List[Dict[str, Any]] = []
     for m in messages:
+        mid = m.get("id")
+        ov = override.get(mid) if mid else None
         if fmt == "sharegpt":
             out.extend(
                 to_sharegpt(
                     m,
-                    override_thinking=override.get(m.get("id")),
+                    override_thinking=ov,
                     strip_thinking=strip_thinking,
                 )
             )
         else:
             msg = to_openai(
                 m,
-                override_thinking=override.get(m.get("id")),
+                override_thinking=ov,
                 strip_thinking=strip_thinking,
             )
             out.append(msg)

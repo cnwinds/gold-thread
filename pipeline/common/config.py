@@ -50,6 +50,11 @@ DEFAULTS: Dict[str, Any] = {
         "model_max_turn_chars": 800,
         "root_task_patterns": [r"\.xapk", r"\.apk", "破解"],
         "fallback_first_turn_as_root": True,
+        "normalize_root_prompt": True,
+        "root_normalizations": {
+            "jigsawcard": "帮我破解 E:\\Download\\com.oakever.jigsawcard@arm64-v8a.xapk 游戏，获取 资源，配置，代码 所有解密文件保存在本文件夹",
+            "meowdoku": "帮我破解 E:\\Download\\com.oakever.meowdoku@arm64-v8a.xapk 游戏，获取 资源，配置，代码 所有文件保存在本文件夹",
+        },
         "irrelevant_patterns": [],
         "irrelevant_whitelist_patterns": [],
         "continuation_patterns": [r"^继续$", r"^可以$"],
@@ -78,13 +83,16 @@ DEFAULTS: Dict[str, Any] = {
         "judge_gold": True,
         "judge_min_score": 60,
         "judge_confidence_min": 0.7,
+        "hold_needs_review": True,
     },
     "synth": {
         "window_turns": 8,
         "max_tool_output_chars": 12000,
         "weights": {"opening": 3, "key_decision": 2, "closing": 3, "routine": 1},
         "sft_labels": ["positive"],
-        "sft_allow_subsegments": [],
+        "sft_allow_subsegments": [
+            {"session_id": "01a15c80", "start_step": 50, "end_step": 106},
+        ],
         "shuffle": True,
         "seed": 42,
         "eval_projects": [],
@@ -93,6 +101,7 @@ DEFAULTS: Dict[str, Any] = {
         "dpo": {
             "from_pruned_steps": True,
             "from_negative_steps": True,
+            "from_review_rewrites": True,
             "min_thinking_chars": 80,
         },
     },

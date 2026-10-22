@@ -2,7 +2,7 @@
 
 拆成两类调用，避免单次输出过长：
 1) judge  ：整条会话给一个存废结论 + 病态步 id（小输出）
-2) rewrite：分批重写超长 thinking（每批 N 步）
+2) rewrite：分批重写超长 thinking（每批 N 步，直接基于未经截断的 raw_thinking 重写）
 """
 from __future__ import annotations
 
@@ -54,11 +54,17 @@ REFINE_JUDGE_SCHEMA = """输出 JSON：
  "reasons": ["简短中文理由"], "bad_step_ids": ["消息 id"], "reply": "对人工意见的简短回应"}"""
 
 
+def _orig_thinking(m: Dict[str, Any]) -> str:
+    return (m.get("raw_thinking") or m.get("thinking") or "").strip()
+
+
 def _step(m: Dict[str, Any], max_think: int, max_result: int = 800) -> Dict[str, Any]:
+    orig = _orig_thinking(m)
+    raw_q = m.get("raw_quality") or m.get("quality") or {}
     return {
         "msg_id": m.get("id"),
-        "thinking": (m.get("thinking") or "")[:max_think],
-        "thinking_len": len(m.get("thinking") or ""),
+        "thinking": orig[:max_think],
+        "thinking_len": len(orig),
         "text": (m.get("text") or "")[:400],
         "tools": [
             {"name": tc.get("name"), "args": json.dumps(tc.get("arguments", {}), ensure_ascii=False)[:400]}
@@ -68,7 +74,7 @@ def _step(m: Dict[str, Any], max_think: int, max_result: int = 800) -> Dict[str,
             {"name": tr.get("name"), "isError": tr.get("isError"), "out": (tr.get("content") or "")[:max_result]}
             for tr in m.get("tool_results", [])
         ],
-        "pathologies": (m.get("quality") or {}).get("pathologies", []),
+        "pathologies": raw_q.get("pathologies", []),
     }
 
 
@@ -87,7 +93,6 @@ def review_session(
     asst = [m for m in msgs if m["role"] == "assistant"]
 
     judge_max = int(rcfg.get("judge_max_think_chars", 3000))
-    # 均匀抽样，覆盖整条轨迹
     sample = _sample_steps(asst, int(rcfg.get("max_steps_per_session", 40)))
 
     payload = {
@@ -115,11 +120,11 @@ def review_session(
     valid_ids = [m["id"] for m in asst]
     bad = [b for b in (verdict.get("bad_step_ids") or []) if b in valid_ids]
 
-    # 分批重写长 CoT
+    # 分批重写长 CoT（基于 raw_thinking，避免脚本预截断造成信息丢失）
     threshold = int(rcfg.get("compress_thinking_over", 1200))
     candidates = [
         m for m in asst
-        if len(m.get("thinking") or "") > threshold
+        if len(_orig_thinking(m)) > threshold
         or "thinking_synthesized" in (m.get("flags") or [])
     ]
     batch_size = int(rcfg.get("rewrite_batch_size", 4))
@@ -130,7 +135,7 @@ def review_session(
         batch = candidates[bi : bi + batch_size]
         body = {
             "root_prompt": rec.get("stats", {}).get("root_prompt", ""),
-            "steps": [{"msg_id": m["id"], "thinking": (m.get("thinking") or "")[:8000]} for m in batch],
+            "steps": [{"msg_id": m["id"], "thinking": _orig_thinking(m)[:8000]} for m in batch],
         }
         try:
             out = chat_json(
@@ -208,7 +213,7 @@ def refine_session(
         raise RuntimeError("没有可供模型修订的意见：请先批注步骤、拒绝改写或填写整体意见")
 
     prev_rw = {rw["msg_id"]: rw["rewritten"] for rw in (prev.get("thinking_rewrites") or [])}
-    rw_targets = [mid for mid in targets if (by_id[mid].get("thinking") or "").strip()]
+    rw_targets = [mid for mid in targets if _orig_thinking(by_id[mid])]
     log(f"[refine] {entry.get('session_id')} 第 {prev.get('round')} 轮 -> 修订 {len(rw_targets)} 步，整体意见 {'有' if note else '无'}")
 
     new_rw: Dict[str, str] = {}
@@ -221,7 +226,7 @@ def refine_session(
             "steps": [
                 {
                     "msg_id": mid,
-                    "original_thinking": (by_id[mid].get("thinking") or "")[:8000],
+                    "original_thinking": _orig_thinking(by_id[mid])[:8000],
                     "previous_rewrite": (
                         (targets[mid].get("edited_text") or "").strip()
                         if targets[mid].get("rewrite") == "edited"
@@ -273,7 +278,7 @@ def refine_session(
                     "comment": (it.get("comment") or "").strip(),
                     "rewrite_rejected": it.get("rewrite") == "rejected",
                     "step_decision": it.get("step"),
-                    "thinking_head": (by_id[mid].get("thinking") or "")[:600],
+                    "thinking_head": _orig_thinking(by_id[mid])[:600],
                 }
                 for mid, it in targets.items()
             ],
@@ -368,7 +373,6 @@ def run_refine(session_id: str, log=print, cfg: Optional[Dict[str, Any]] = None)
         raise RuntimeError(f"会话不存在: {session_id}")
     ann_path = Path(entry["annotation_file"])
     rnd = refine_session(entry, read_json(ann_path, default={}) or {}, cfg=cfg, log=log)
-    # 模型调用期间人工可能还在编辑，落盘前重读
     ann = read_json(ann_path, default={}) or {}
     curation.ensure_rounds(ann)
     curation.append_round(ann, rnd, reset_ids=list(rnd["feedback"]["items"]))
@@ -377,4 +381,4 @@ def run_refine(session_id: str, log=print, cfg: Optional[Dict[str, Any]] = None)
         f"[refine] {session_id[:8]} -> 第 {ann['review_rounds'][-1]['round']} 轮 {rnd['verdict']} "
         f"(conf {rnd['confidence']:.2f}，重写 {len(rnd['changed_msg_ids'])} 步)"
     )
-    return {"round": ann["review_rounds"][-1]["round"], "verdict": rnd["verdict"], "changed": rnd["changed_msg_ids"]}
+    return {"round": ann["review_rounds"][-1]['round'], "verdict": rnd["verdict"], "changed": rnd["changed_msg_ids"]}
