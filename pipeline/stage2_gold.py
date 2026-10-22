@@ -1,4 +1,10 @@
-"""Stage 2：原始日志 -> 黄金会话（状态折叠 / 弯路剪枝 / CoT 去噪 / 静默执行）+ 天然 DPO 对。"""
+"""Stage 2：原始日志 -> 黄金会话（状态折叠 / 弯路剪枝 / CoT 去噪 / 静默执行）+ 天然 DPO 对。
+
+核心特性：
+1. 完整保留提纯前后血缘快照（`raw_thinking`, `raw_text`, `fold_details`, `pruned_details`），支持前端三态 Diff 审计；
+2. 双态质量评估：同时记录原始质量（`raw_quality`，用于诊断库）与提纯后质量（`quality`）；
+3. 增量指纹同时校验 `raw_file` 与 `meta_file`，保证 Stage 1 回合调整后 Stage 2 自动感知。
+"""
 from __future__ import annotations
 
 import copy
@@ -9,13 +15,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .common import pilog
-from .common.config import config_hash, load_config, section_hash, stage_dirs
+from .common.config import load_config, section_hash, stage_dirs
 from .common.format import to_sharegpt
 from .common.quality import (
     LOW_LEVEL_MISTAKE_OUTPUT_REGEX,
     NEXT_STEP_OOPS_REGEX,
     analyze_step_quality,
     compact_thinking,
+    evaluate_effective_step,
 )
 from .common.store import (
     dump_index,
@@ -26,6 +33,7 @@ from .common.store import (
     read_json,
     read_jsonl,
     safe_name,
+    sha256_text,
     write_json_atomic,
     write_jsonl_atomic,
 )
@@ -69,13 +77,17 @@ def purify(
     gcfg: Dict[str, Any],
     session_cwd: str = "",
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
-    """返回 (gold_messages, pruned_records, stats)。pruned_records 用于 DPO。"""
+    """返回 (gold_messages, pruned_records, stats)。pruned_records 用于审计与 DPO。"""
     units = _units(flow)
     pruned: List[Dict[str, Any]] = []
     kept: List[Dict[str, Any]] = []
     folded = 0
     dropped = 0
     think_compressed = 0
+    think_backfilled = 0
+    think_synthesized = 0
+    silent_cleared = 0
+    polling_normalized = 0
 
     i = 0
     while i < len(units):
@@ -86,12 +98,16 @@ def purify(
             continue
 
         msg = cur["msg"]
+        msg.setdefault("raw_thinking", msg.get("thinking") or "")
+        msg.setdefault("raw_text", msg.get("text") or "")
         tcs = msg.get("tool_calls", [])
         trs = cur["tools"]
 
         if i + 1 < len(units) and units[i + 1]["type"] == "assistant_turn":
             nxt = units[i + 1]
             nxt_msg = nxt["msg"]
+            nxt_msg.setdefault("raw_thinking", nxt_msg.get("thinking") or "")
+            nxt_msg.setdefault("raw_text", nxt_msg.get("text") or "")
             nxt_tcs = nxt_msg.get("tool_calls", [])
 
             # A. 状态折叠：write(path) + edit(path) 精确合并
@@ -103,7 +119,8 @@ def purify(
                 and nxt_tcs[0]["name"] == "edit"
                 and tcs[0].get("arguments", {}).get("path") == nxt_tcs[0].get("arguments", {}).get("path")
             ):
-                content = tcs[0]["arguments"].get("content", "")
+                orig_content = tcs[0]["arguments"].get("content", "")
+                content = orig_content
                 edits = nxt_tcs[0]["arguments"].get("edits", [])
                 if not edits and "oldText" in nxt_tcs[0]["arguments"]:
                     edits = [nxt_tcs[0]["arguments"]]
@@ -121,14 +138,26 @@ def purify(
                     original = copy.deepcopy(msg)
                     tcs[0]["arguments"]["content"] = content
                     msg["folded_from"] = nxt_msg["id"]
+                    msg["fold_details"] = {
+                        "path": tcs[0]["arguments"].get("path", ""),
+                        "folded_msg_id": nxt_msg["id"],
+                        "edits_count": len(edits),
+                        "before_content": orig_content[:4000],
+                        "after_content": content[:4000],
+                        "edit_thinking": (nxt_msg.get("thinking") or "")[:800],
+                    }
                     msg["flags"] = sorted(set(msg.get("flags", []) + ["state_folded"]))
                     pruned.append(
                         {
                             "reason": "state_folding_bug_fix",
+                            "has_dpo": True,
                             "context_units": copy.deepcopy(kept),
                             "chosen_msg": copy.deepcopy(msg),
                             "rejected_msg": original,
                             "dropped_msg_id": nxt_msg["id"],
+                            "file_path": tcs[0]["arguments"].get("path", ""),
+                            "before_snippet": orig_content[:2000],
+                            "after_snippet": content[:2000],
                         }
                     )
                     kept.append(cur)
@@ -136,7 +165,7 @@ def purify(
                     i += 2
                     continue
 
-            # B. 弯路剪枝：最低级命令错误 / 下一步自认手滑
+            # B. 弯路剪枝：低级命令错误 / 下一步自认手滑
             if gcfg.get("detour_pruning", True):
                 out_text = "\n".join(t.get("content", "") for t in trs)
                 has_error = any(t.get("isError") for t in trs) or bool(
@@ -145,27 +174,41 @@ def purify(
                 next_admits = bool(NEXT_STEP_OOPS_REGEX.search((nxt_msg.get("thinking") or "").strip()))
                 if (has_error or next_admits) and nxt_tcs:
                     cleaned = copy.deepcopy(nxt)
+                    raw_nxt_think = (cleaned["msg"].get("thinking") or "").strip()
                     cleaned_think = re.sub(
                         r"^(Oops[^.!?\n]*[.!?\n]+|It didn't recognize because[^.!?\n]*[.!?\n]+|"
                         r"`zip` not available[.!?\n]*)",
                         "",
-                        (cleaned["msg"].get("thinking") or "").strip(),
+                        raw_nxt_think,
                         flags=re.IGNORECASE,
                     ).strip()
                     if not cleaned_think and msg.get("thinking"):
                         cleaned_think = compact_thinking(msg["thinking"], 1200)
+                    cleaned["msg"]["raw_thinking"] = cleaned["msg"].get("raw_thinking") or raw_nxt_think or (msg.get("thinking") or "")
                     cleaned["msg"]["thinking"] = cleaned_think
                     cleaned["msg"]["pruned_detour"] = msg["id"]
+                    cleaned["msg"]["pruned_details"] = {
+                        "dropped_msg_id": msg["id"],
+                        "trigger": "next_step_oops" if next_admits and not has_error else "tool_error",
+                        "rejected_thinking": (msg.get("thinking") or "")[:1200],
+                        "rejected_tools": [
+                            {"name": tc.get("name"), "args": json.dumps(tc.get("arguments", {}), ensure_ascii=False)[:300]}
+                            for tc in tcs
+                        ],
+                        "error_output": out_text[:800],
+                    }
                     cleaned["msg"]["flags"] = sorted(
                         set(cleaned["msg"].get("flags", []) + ["detour_pruned"])
                     )
                     pruned.append(
                         {
                             "reason": "detour_pruned_error_or_oops",
+                            "has_dpo": True,
                             "context_units": copy.deepcopy(kept),
                             "chosen_msg": copy.deepcopy(cleaned["msg"]),
                             "rejected_msg": copy.deepcopy(msg),
                             "dropped_msg_id": msg["id"],
+                            "error_output": out_text[:1000],
                         }
                     )
                     units[i + 1] = cleaned
@@ -173,9 +216,21 @@ def purify(
                     i += 1
                     continue
 
-        # C. 空 thinking：报错剪除；成功则用对外播报文本内化为 thinking
+        # C. 空 thinking：报错剪除并记录审计；成功则用对外播报文本内化为 thinking 或合成意图
         if not msg.get("thinking") and tcs:
             if any(t.get("isError") for t in trs):
+                out_text = "\n".join(t.get("content", "") for t in trs)
+                pruned.append(
+                    {
+                        "reason": "empty_thinking_error_dropped",
+                        "has_dpo": False,
+                        "context_units": [],
+                        "chosen_msg": None,
+                        "rejected_msg": copy.deepcopy(msg),
+                        "dropped_msg_id": msg["id"],
+                        "error_output": out_text[:1000],
+                    }
+                )
                 dropped += 1
                 i += 1
                 continue
@@ -183,8 +238,8 @@ def purify(
                 msg["thinking"] = msg["text"].strip()
                 msg["text"] = ""
                 msg["flags"] = sorted(set(msg.get("flags", []) + ["thinking_backfilled"]))
+                think_backfilled += 1
             elif gcfg.get("fix_missing_thinking", True):
-                # 用工具参数构造最小可读意图（比空 thinking 更有信息量），并打标
                 parts = []
                 for tc in tcs:
                     args = tc.get("arguments", {}) if isinstance(tc.get("arguments"), dict) else {}
@@ -199,25 +254,35 @@ def purify(
                         parts.append(f"调用 {name}")
                 msg["thinking"] = "；".join(parts) + "。"
                 msg["flags"] = sorted(set(msg.get("flags", []) + ["thinking_synthesized"]))
+                think_synthesized += 1
 
-        # D. CoT 去噪
+        # D. CoT 去噪（保留 raw_thinking 供模型重写与人工对照）
         max_chars = int(gcfg.get("max_thinking_chars", 2400))
         target = int(gcfg.get("target_thinking_chars", 1600))
         if len(msg.get("thinking", "")) > max_chars:
+            msg["raw_thinking"] = msg.get("raw_thinking") or msg["thinking"]
             msg["thinking"] = compact_thinking(msg["thinking"], target)
+            msg["script_thinking"] = msg["thinking"]
             msg["flags"] = sorted(set(msg.get("flags", []) + ["thinking_compressed"]))
             think_compressed += 1
 
         # E. 静默执行：中间工具步清空对外文本
         if gcfg.get("silent_intermediate_steps", True) and tcs and msg.get("text"):
+            msg["raw_text"] = msg.get("raw_text") or msg["text"]
             msg["text"] = ""
+            msg["flags"] = sorted(set(msg.get("flags", []) + ["silent_executed"]))
+            silent_cleared += 1
 
         # F. 轮询命令规范化
         for tc in tcs:
             if tc.get("name") == "bash" and isinstance(tc.get("arguments"), dict):
                 cmd = tc["arguments"].get("command")
                 if isinstance(cmd, str):
-                    tc["arguments"]["command"] = normalize_polling_command(cmd)
+                    norm_cmd = normalize_polling_command(cmd)
+                    if norm_cmd != cmd:
+                        tc["arguments"]["command"] = norm_cmd
+                        msg["flags"] = sorted(set(msg.get("flags", []) + ["polling_normalized"]))
+                        polling_normalized += 1
 
         kept.append(cur)
         i += 1
@@ -225,7 +290,7 @@ def purify(
     gold_messages: List[Dict[str, Any]] = []
     for u in kept:
         if u["type"] == "assistant_turn":
-            u["msg"]["flag_pruned_tools"] = None
+            u["msg"].pop("flag_pruned_tools", None)
         gold_messages.append(u["msg"])
         gold_messages.extend(u["tools"])
 
@@ -235,6 +300,10 @@ def purify(
         "folded": folded,
         "pruned_detours": dropped,
         "thinking_compressed": think_compressed,
+        "thinking_backfilled": think_backfilled,
+        "thinking_synthesized": think_synthesized,
+        "silent_cleared": silent_cleared,
+        "polling_normalized": polling_normalized,
     }
     return gold_messages, pruned, stats
 
@@ -267,6 +336,8 @@ def _dpo_from_pruned(
         return out
 
     for i, pd in enumerate(pruned):
+        if not pd.get("has_dpo", True) or not pd.get("chosen_msg") or not pd.get("rejected_msg"):
+            continue
         convs = conv(pd["context_units"])
         if not convs:
             continue
@@ -311,7 +382,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         d.mkdir(parents=True, exist_ok=True)
 
     cfgh = section_hash(
-        cfg, ["gold", "review", "synth.window_turns", "synth.max_tool_output_chars", "labeling"]
+        cfg, ["gold", "review", "synth.window_turns", "synth.max_tool_output_chars", "labeling", "turns"]
     )
     state_path = dirs["state"] / "stage2.json"
     state = read_json(state_path, default={}) or {}
@@ -346,6 +417,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             not force
             and prev
             and fingerprint_equal(prev.get("fingerprint"), fp)
+            and fingerprint_equal(prev.get("meta_fingerprint"), meta_fp)
+            and prev.get("flow_version") == pilog.FLOW_VERSION
             and prev_entry
             and prev_entry.get("label") == label
             and all(Path(p).exists() for p in prev.get("outputs", []))
@@ -361,13 +434,14 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             continue
 
         session = pilog.parse_session(raw_file, max_tool_output_chars=max_tool_chars)
-        raw_meta = read_json(Path(entry.get("meta_file", "")), default={}) or {}
-        annotations = raw_meta.get("turn_annotations") or None
-        flow, marks, flow_stats = pilog.build_flow(session, cfg, annotations)
+        raw_meta = read_json(meta_path, default={}) if meta_path and meta_path.exists() else {}
+        annotations = (raw_meta or {}).get("turn_annotations") or None
+        manual_turn_ov = (raw_meta or {}).get("manual_turn_overrides") or None
+        flow, marks, flow_stats = pilog.build_flow(session, cfg, annotations, manual_turn_ov)
         asst_all = [m for m in flow if m["role"] == "assistant"]
-        quality_by_id = {}
+        raw_quality_by_id = {}
         for m in asst_all:
-            quality_by_id[m["id"]] = analyze_step_quality(
+            raw_quality_by_id[m["id"]] = analyze_step_quality(
                 m.get("thinking", ""),
                 m.get("text", ""),
                 m.get("tool_calls", []),
@@ -383,12 +457,13 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         diag_path = rejects_out / f"{sid}.diagnostics.jsonl"
         diag_rows = []
         for m in asst_all:
-            q = quality_by_id[m["id"]]
+            q = raw_quality_by_id[m["id"]]
             if not q["pathologies"]:
                 continue
             diag_rows.append(
                 {
                     "diagnostic_id": f"diag::{sid}::{m['id']}",
+                    "sample_id": f"diag::{sid}::{m['id']}",
                     "session_id": sid,
                     "label": label,
                     "project_group": project,
@@ -399,22 +474,32 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                     "metrics": q["metrics"],
                     "thinking": m.get("thinking", ""),
                     "tool_calls": [tc["name"] for tc in m.get("tool_calls", [])],
+                    "timestamp": m.get("timestamp", ""),
                 }
             )
         write_jsonl_atomic(diag_path, diag_rows)
         all_diag.extend(diag_rows)
-        dominant = max(entry.get("models", {"unknown": 1}).items(), key=lambda kv: kv[1])[0]
+        dominant = max((entry.get("models") or {"unknown": 1}).items(), key=lambda kv: kv[1])[0]
 
-        # 附加质量与血缘字段
+        # 附加双态质量（raw_quality + 提纯后 quality）与血缘字段
+        clean_after_purify = 0
         for m in gold_msgs:
             if m["role"] == "assistant":
-                q = quality_by_id.get(m["id"]) or analyze_step_quality(
-                    m.get("thinking", ""), m.get("text", ""), m.get("tool_calls", []),
-                    m.get("tool_results", []), entry.get("cwd", ""), 4500,
+                raw_q = raw_quality_by_id.get(m["id"]) or analyze_step_quality(
+                    m.get("raw_thinking") or m.get("thinking", ""),
+                    m.get("raw_text") or m.get("text", ""),
+                    m.get("tool_calls", []),
+                    m.get("tool_results", []),
+                    entry.get("cwd", ""),
+                    4500,
                 )
-                m["quality"] = q
+                m["raw_quality"] = raw_q
+                eff_q = evaluate_effective_step(m, entry.get("cwd", ""), max_think_chars=4500)
+                m["quality"] = eff_q
                 m["raw_msg_id"] = m["id"]
-                m["is_clean"] = q["is_clean"]
+                m["is_clean"] = eff_q["is_clean"]
+                if eff_q["is_clean"]:
+                    clean_after_purify += 1
 
         gold_asst = [m for m in gold_msgs if m["role"] == "assistant"]
         sys_msg = next((m for m in flow if m["role"] == "system"), None)
@@ -451,10 +536,15 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 **purify_stats,
                 "raw_steps": len(asst_all),
                 "gold_steps": len(gold_asst),
+                "clean_gold_steps": clean_after_purify,
                 "turns_total": flow_stats["turns_total"],
                 "turns_kept": flow_stats["turns_kept"],
+                "turns_direct": flow_stats.get("turns_direct", flow_stats["turns_kept"]),
+                "turns_folded": flow_stats.get("turns_folded", 0),
+                "turns_dropped": flow_stats.get("turns_dropped", 0),
                 "dropped_turns": flow_stats["dropped"],
                 "root_prompt": flow_stats["root_prompt"],
+                "raw_root_prompt": flow_stats.get("raw_root_prompt", flow_stats["root_prompt"]),
                 "constraints": flow_stats["constraints"],
             },
             "messages": gold_msgs,
@@ -471,11 +561,17 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 {
                     "session_id": sid,
                     "reason": pd["reason"],
+                    "has_dpo": pd.get("has_dpo", True),
                     "dropped_msg_id": pd.get("dropped_msg_id"),
-                    "rejected_msg_id": pd["rejected_msg"]["id"],
-                    "rejected_thinking": pd["rejected_msg"].get("thinking", "")[:2000],
-                    "rejected_tool_calls": [tc["name"] for tc in pd["rejected_msg"].get("tool_calls", [])],
-                    "chosen_msg_id": pd["chosen_msg"]["id"],
+                    "rejected_msg_id": pd["rejected_msg"]["id"] if pd.get("rejected_msg") else None,
+                    "rejected_thinking": (pd["rejected_msg"].get("thinking") or "")[:2000] if pd.get("rejected_msg") else "",
+                    "rejected_tool_calls": [tc["name"] for tc in pd["rejected_msg"].get("tool_calls", [])] if pd.get("rejected_msg") else [],
+                    "chosen_msg_id": pd["chosen_msg"]["id"] if pd.get("chosen_msg") else None,
+                    "chosen_thinking": (pd["chosen_msg"].get("thinking") or "")[:2000] if pd.get("chosen_msg") else "",
+                    "file_path": pd.get("file_path", ""),
+                    "before_snippet": pd.get("before_snippet", ""),
+                    "after_snippet": pd.get("after_snippet", ""),
+                    "error_output": pd.get("error_output", ""),
                 }
                 for pd in pruned
             ],
@@ -484,8 +580,28 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
 
         ann_path = annotations_out / f"{sid}.json"
         prev_ann = read_json(ann_path, default={}) or {}
-        review_key = f"{fp.get('size')}:{fp.get('tail_sha256')}:{pilog.FLOW_VERSION}"
-        keep_review = prev_ann.get("model_review") if prev_ann.get("review_key") == review_key else None
+        flow_signature = sha256_text(
+            json.dumps(
+                {
+                    "root": flow_stats.get("root_prompt"),
+                    "constraints": flow_stats.get("constraints"),
+                    "marks": [
+                        (m.get("turn_index"), m.get("kind"), m.get("action"), m.get("dropped"))
+                        for m in marks
+                    ],
+                    "assistant_ids": [m.get("id") for m in gold_asst],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )[:16]
+        review_key = f"{fp.get('size')}:{fp.get('tail_sha256')}:{flow_signature}:{pilog.FLOW_VERSION}"
+        # 原始会话或人工回合流发生变化时，旧评审必须作废；仅算法版本变化不作废人工结论
+        prev_key_prefix = ":".join(str(prev_ann.get("review_key") or "").split(":")[:3])
+        cur_key_prefix = ":".join(review_key.split(":")[:3])
+        same_raw_content = bool(prev_ann.get("review_key") and prev_key_prefix == cur_key_prefix)
+        keep_review = prev_ann.get("model_review") if same_raw_content else None
+
         annotation = {
             "session_id": sid,
             "label": label,
@@ -498,10 +614,11 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             "review_key": review_key,
             "reviewed_at": prev_ann.get("reviewed_at") if keep_review else None,
         }
-        # 复核历史与人工结论跨数据版本保留；版本变了由 curation.is_stale 标记过期
         for k in ("review_rounds", "human_review"):
             if prev_ann.get(k):
                 annotation[k] = prev_ann[k]
+        if same_raw_content and isinstance(annotation.get("human_review"), dict) and annotation["human_review"].get("decision"):
+            annotation["human_review"]["review_key"] = review_key
         if not keep_review and annotation.get("review_rounds"):
             annotation["review_rounds_stale"] = True
         write_json_atomic(ann_path, annotation)
@@ -536,7 +653,9 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         written += 1
         log(
             f"[stage2] {label:<8} {project:<22} {sid[:8]}  "
-            f"steps {len(asst_all)}->{len(gold_asst)}  折叠 {purify_stats['folded']}  剪枝 {purify_stats['pruned_detours']}  DPO {len(dpo_pairs)}"
+            f"steps {len(asst_all)}->{len(gold_asst)} (干净 {clean_after_purify})  "
+            f"折叠 {purify_stats['folded']}  剪枝 {purify_stats['pruned_detours']}  "
+            f"压缩 {purify_stats['thinking_compressed']}  DPO {len(dpo_pairs)}"
         )
 
     for sid in list((prev_index.get("sessions") or {}).keys()):
@@ -558,7 +677,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     )
     write_json_atomic(
         state_path,
-        {"stage": STAGE, "version": 1, "config_hash": cfgh, "last_run": now_iso(), "files": state_files},
+        {"stage": STAGE, "version": 2, "config_hash": cfgh, "last_run": now_iso(), "files": state_files},
     )
 
     summary = {

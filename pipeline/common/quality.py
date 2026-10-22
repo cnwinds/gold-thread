@@ -1,9 +1,9 @@
-"""单步质量检测：病态行为识别 + 启发式思维链压缩。"""
+"""单步质量检测：病态行为识别、重评估与启发式思维链压缩。"""
 from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 DOUBT_REGEX = re.compile(
     r"\b(Wait|Actually|Hold on|Let me reconsider|Let's reconsider|Let me double check|"
@@ -35,6 +35,22 @@ CROSS_DIR_REGEX = re.compile(
     r"(?:[a-zA-Z]:[/\\]+crack[/\\]+|[/\\]d[/\\]+crack[/\\]+)([a-zA-Z0-9_.\-]+)", re.IGNORECASE
 )
 
+# 仅与思维链内容相关的病态（可通过脚本压缩、模型重写或人工编辑消除）
+THINKING_PATHOLOGIES = {
+    "missing_thinking_block",
+    "over_rumination_length",
+    "over_rumination_doubt_loop",
+    "mental_hex_checkmark",
+}
+
+# 硬性工具执行或行为违规病态（仅改写 thinking 无法消除，除非人工显式标记 keep）
+HARD_EXECUTION_PATHOLOGIES = {
+    "tool_execution_error",
+    "tool_logical_failure",
+    "hallucinated_source_search",
+    "cross_dir_violation",
+}
+
 
 def analyze_step_quality(
     thinking: str,
@@ -46,8 +62,9 @@ def analyze_step_quality(
 ) -> Dict[str, Any]:
     pathologies: List[str] = []
     strengths: List[str] = []
-    think_len = len(thinking or "")
-    doubt_count = len(DOUBT_REGEX.findall(thinking or ""))
+    think_str = (thinking or "").strip()
+    think_len = len(think_str)
+    doubt_count = len(DOUBT_REGEX.findall(think_str))
 
     if think_len == 0 and tool_calls:
         pathologies.append("missing_thinking_block")
@@ -55,18 +72,18 @@ def analyze_step_quality(
         pathologies.append("over_rumination_length")
     if doubt_count >= 8:
         pathologies.append("over_rumination_doubt_loop")
-    if thinking and MENTAL_HEX_CHECK_REGEX.search(thinking):
+    if think_str and MENTAL_HEX_CHECK_REGEX.search(think_str):
         pathologies.append("mental_hex_checkmark")
 
     combined_cmd = " ".join(json.dumps(tc.get("arguments", {}), ensure_ascii=False) for tc in tool_calls)
-    if HALLUCINATED_SEARCH_REGEX.search(thinking or "") or HALLUCINATED_SEARCH_REGEX.search(combined_cmd):
+    if HALLUCINATED_SEARCH_REGEX.search(think_str) or HALLUCINATED_SEARCH_REGEX.search(combined_cmd):
         pathologies.append("hallucinated_source_search")
 
     if session_cwd and "crack" in session_cwd.lower():
         cwd_norm = session_cwd.replace("\\", "/").rstrip("/").lower()
         cwd_name = cwd_norm.split("/")[-1]
         base = cwd_name.split("-")[0]
-        for sib in CROSS_DIR_REGEX.findall(combined_cmd + " " + (thinking or "")):
+        for sib in CROSS_DIR_REGEX.findall(combined_cmd + " " + think_str):
             sib_low = sib.lower().rstrip("/")
             if sib_low != cwd_name and sib_low.startswith(base):
                 pathologies.append(f"cross_dir_violation:{sib}")
@@ -126,6 +143,36 @@ def analyze_step_quality(
             "tool_error_count": error_count,
         },
     }
+
+
+def evaluate_effective_step(
+    msg: Dict[str, Any],
+    session_cwd: str = "",
+    override_thinking: Optional[str] = None,
+    max_think_chars: int = 4500,
+) -> Dict[str, Any]:
+    """评估步骤在应用脚本提纯、模型重写或人工编辑后的有效质量。
+
+    若原本存在 over_rumination_* 或 missing_thinking_block，但在重写/回填后已消除，
+    且不存在硬性工具执行错误或跨目录违规，则重评为 is_clean=True，并标记 rescued=True。
+    """
+    eff_think = override_thinking if override_thinking is not None else msg.get("thinking", "")
+    eff_q = analyze_step_quality(
+        thinking=eff_think,
+        text=msg.get("text", ""),
+        tool_calls=msg.get("tool_calls", []),
+        tool_results=msg.get("tool_results", []),
+        session_cwd=session_cwd,
+        max_think_chars=max_think_chars,
+    )
+    raw_q = msg.get("raw_quality") or msg.get("quality") or eff_q
+    raw_pathos = set(raw_q.get("pathologies", []))
+    eff_pathos = set(eff_q.get("pathologies", []))
+    resolved_pathos = sorted(raw_pathos - eff_pathos)
+    eff_q["raw_pathologies"] = sorted(raw_pathos)
+    eff_q["resolved_pathologies"] = resolved_pathos
+    eff_q["rescued"] = bool(not raw_q.get("is_clean") and eff_q.get("is_clean"))
+    return eff_q
 
 
 def compact_thinking(thinking: str, target_max_chars: int = 1600) -> str:

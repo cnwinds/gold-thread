@@ -391,6 +391,83 @@
   .round-item:last-child{border-bottom:none}
   .banner{padding:10px 12px;border-radius:8px;background:rgba(217,180,103,.08);border:1px solid rgba(217,180,103,.28);color:#e6d7b0;font-size:13px;margin-bottom:12px}
 
+  /* ---------- 全流程工作台 ---------- */
+  .workflow-head{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;margin-bottom:18px;
+    border:1px solid var(--line-soft);border-radius:12px;overflow:hidden;background:var(--line-soft)}
+  .wf-stage{position:relative;background:var(--ink-1);padding:17px 18px 16px;min-height:148px}
+  .wf-stage::after{content:"";position:absolute;right:-7px;top:50%;z-index:2;width:13px;height:13px;background:var(--ink-1);
+    border-top:1px solid var(--line-soft);border-right:1px solid var(--line-soft);transform:translateY(-50%) rotate(45deg)}
+  .wf-stage:last-child::after{display:none}
+  .wf-top{display:flex;align-items:center;gap:9px;color:var(--text-2);font-size:12px}
+  .wf-no{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--c);color:var(--ink-0);
+    font-family:var(--f-num);font-size:12px;font-weight:600}
+  .wf-stage h3{margin:10px 0 2px;font-size:16px}
+  .wf-count{font:32px/1.15 var(--f-num);margin:5px 0;color:var(--text)}
+  .wf-count small{font:12px var(--f-sans);color:var(--text-3);margin-left:6px}
+  .wf-foot{font-size:12px;color:var(--text-3)}
+  .sync-banner{display:flex;gap:10px;align-items:center;padding:10px 14px;margin-bottom:14px;border-radius:9px;
+    background:rgba(227,115,95,.08);border:1px solid rgba(227,115,95,.3);color:#efb2a6}
+  .sync-banner .grow{color:var(--text-2);font-size:12.5px}
+  .audit-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line-soft);
+    border:1px solid var(--line-soft);border-radius:10px;overflow:hidden;margin-bottom:14px}
+  .audit-metric{background:var(--ink-1);padding:11px 14px}
+  .audit-metric span{display:block;color:var(--text-3);font-size:11.5px}
+  .audit-metric b{font:22px var(--f-num);font-weight:400}
+
+  /* Stage 1 回合标注工作区 */
+  .root-edit{display:grid;grid-template-columns:100px 1fr auto;gap:10px;align-items:start}
+  .root-edit textarea{width:100%;min-height:70px;resize:vertical;line-height:1.65}
+  .turn-editor{display:flex;flex-direction:column;gap:7px}
+  .turn-edit{display:grid;grid-template-columns:42px minmax(0,1fr) 130px 76px;gap:10px;align-items:start;
+    border:1px solid var(--line-soft);border-radius:9px;padding:9px 11px;background:var(--ink-0)}
+  .turn-edit.dropped{opacity:.68}
+  .turn-edit.folded{border-color:rgba(95,185,196,.28)}
+  .turn-edit .turn-no{font:12px var(--f-mono);color:var(--text-3);padding-top:5px}
+  .turn-edit .turn-text{font-size:12.5px;line-height:1.55;max-height:58px;overflow:hidden}
+  .turn-edit .turn-meta{font-size:11.5px;color:var(--text-3);margin-top:3px}
+  .turn-edit select{width:100%;padding-top:4px;padding-bottom:4px}
+  .turn-action{font-size:11px;text-align:right;padding-top:5px;color:var(--text-3)}
+  .turn-action.keep{color:var(--pos)} .turn-action.drop{color:var(--neg)} .turn-action.fold{color:var(--mint)}
+
+  /* Stage 2 三态血缘与 Stage 3 入库漏斗 */
+  .lineage{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .lineage-col{min-width:0}
+  .lineage-cap{display:flex;align-items:center;gap:7px;color:var(--text-3);font-size:11.5px;margin-bottom:4px}
+  .lineage-cap i{width:7px;height:7px;border-radius:50%;background:var(--c)}
+  .lineage-body{white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.65;max-height:300px;overflow:auto;
+    padding:9px 10px;background:#12151a;border:1px solid var(--line-soft);border-radius:8px;color:#d3cdbd}
+  .lineage-arrow{color:var(--text-3)}
+  .synth-funnel{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .funnel-node{background:var(--ink-0);border:1px solid var(--line-soft);border-radius:9px;padding:10px 12px;position:relative}
+  .funnel-node:not(:last-child)::after{content:"›";position:absolute;right:-8px;top:50%;z-index:2;color:var(--text-3);
+    transform:translateY(-50%);font-size:18px}
+  .funnel-node span{display:block;font-size:11.5px;color:var(--text-3)}
+  .funnel-node b{font:24px var(--f-num);font-weight:400}
+  .funnel-node.good b{color:var(--mint)} .funnel-node.warn b{color:var(--gold)} .funnel-node.bad b{color:var(--neg)}
+  .step-review{border-top:1px solid var(--line);padding-top:9px}
+  .step-review textarea{width:100%;min-height:90px;resize:vertical;font-size:12px;line-height:1.65;margin-top:7px}
+  .step-audit-list{max-height:360px;overflow:auto;border:1px solid var(--line-soft);border-radius:8px}
+  .step-audit{display:grid;grid-template-columns:34px 82px 1fr auto;gap:9px;align-items:center;padding:6px 10px;
+    border-bottom:1px solid var(--line-soft);font-size:12px}
+  .step-audit:last-child{border-bottom:none}
+  .step-audit .why{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-2)}
+  .step-audit.admitted{box-shadow:inset 2px 0 var(--mint)}
+  .step-audit.dropped{box-shadow:inset 2px 0 var(--neg);opacity:.75}
+
+  /* Stage 3 数据集语义卡片 */
+  .dataset-cards{display:grid;grid-template-columns:repeat(5,minmax(145px,1fr));gap:8px;margin-bottom:14px}
+  .dataset-card{padding:12px 13px;background:var(--ink-1);border:1px solid var(--line-soft);border-radius:9px;cursor:pointer}
+  .dataset-card:hover,.dataset-card.on{border-color:var(--mint);background:rgba(95,185,196,.05)}
+  .dataset-card .ds-kind{font-size:11px;color:var(--text-3)}
+  .dataset-card .ds-name{font-size:12px;margin:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dataset-card b{font:21px var(--f-num);font-weight:400}
+  .preview-pair{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px}
+  .preview-pair>div{padding:5px 7px;border-radius:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .preview-pair .chosen{background:rgba(143,196,127,.09);color:#cbe4c2}
+  .preview-pair .rejected{background:rgba(227,115,95,.09);color:#e9a497}
+  .path-chips{display:flex;gap:4px;flex-wrap:wrap}
+  .path-chips span{font-size:10.5px;padding:1px 6px;border-radius:4px;background:rgba(227,115,95,.12);color:#eba497}
+
   /* ---------- 运行 ---------- */
   .pipeline{display:grid;grid-template-columns:repeat(3,1fr) 22px 1fr;gap:0;align-items:stretch}
   .pipe-step{position:relative;padding:16px 18px;border:1px solid var(--line-soft);background:var(--ink-1);display:flex;flex-direction:column;gap:8px}
@@ -440,6 +517,7 @@
 
   @media (max-width:1100px){
     .grid2,.grid2.even,.diff-grid{grid-template-columns:1fr}
+    .lineage{grid-template-columns:1fr}.dataset-cards{grid-template-columns:repeat(2,1fr)}
     .pipeline{grid-template-columns:1fr}
     .pipeline>.spacer{display:none}
     .pipe-step,.pipe-step:first-child,.pipe-step:nth-child(3){border-radius:12px;border-left:1px solid var(--line-soft)!important;margin-bottom:10px}
@@ -458,6 +536,10 @@
     .page-head{padding:20px 16px 14px}
     main{padding:0 16px 60px}
     .stations,.byproducts{grid-template-columns:1fr}
+    .workflow-head,.audit-strip,.synth-funnel{grid-template-columns:1fr}
+    .wf-stage::after,.funnel-node::after{display:none}
+    .turn-edit{grid-template-columns:34px 1fr}.turn-edit select,.turn-edit .turn-action{grid-column:2}
+    .dataset-cards{grid-template-columns:1fr}
     .station{padding:10px 0 10px 14px}
     .band{display:none}
     .toolbar input[type=text]{min-width:0;flex:1}
@@ -481,7 +563,7 @@
     <nav id="tabs">
       <button data-tab="overview">
         <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
-        概览</button>
+        流程工作台</button>
       <div class="nav-cap">管线阶段</div>
       <div class="steps">
         <button data-tab="raw" class="s-raw"><span class="node"></span>原始数据<em id="navRaw"></em></button>
@@ -548,16 +630,16 @@ const PHASE = [["opening","开局","#8d9ab2"],["key_decision","关键决策","#d
 const DPO_SRC_ZH = {stage2_pruned:"剪掉的弯路", negative_step:"反例中的坏步"};
 const SKIP_ZH = {non_crack_folder:"非目标目录", excluded_folder:"排除目录", empty:"空会话"};
 const PAGES = {
-  overview: ["概览", "原始会话经过提纯与合成后，每一阶段留下了多少，又剪掉了多少。"],
-  raw:      ["原始数据", "从 pi 会话目录准入的不可变副本，附回合标注。点开会话可查看消息流并修改标签。"],
-  gold:     ["黄金数据", "提纯后的会话。模型给出改写和存废建议；标成待复核的，要在这里人工通过后才会进入训练集。"],
-  train:    ["训练数据", "stage3 合成的 SFT 与 DPO 数据集，可逐条查看样本。"],
+  overview: ["数据精炼工作台", "从源会话准入、回合清洗、黄金提纯到 SFT / DPO 生成：看清每一层的输入、损耗、人工门控与最终产出。"],
+  raw:      ["Stage 1 · 采集与清洗", "审计会话准入、标签与逐回合分类；可直接修正根任务、噪音、续接和纠偏判定。"],
+  gold:     ["Stage 2 · 黄金提纯与复核", "对照原始思考、脚本清洗和模型改写；逐步采纳、手改、排除后即时预览训练集去向。"],
+  train:    ["Stage 3 · 训练样本", "按 SFT 窗口、完整轨迹、DPO 与病态诊断分别检视，追踪每条样本的项目、切分和生成原因。"],
   runs:     ["运行", "按阶段增量运行或全量重建。模型调用已缓存，重跑不会重复计费。"],
   config:   ["配置", "直接编辑 pipeline.yaml，保存后重跑管线生效。"],
 };
 
-let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:"", eff:""}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:""}, job: null, drawerData: null, poured: false };
-const REV = {active:false, sid:null, items:{}, note:"", originals:{}, modelRw:{}, bad:new Set(), rewritten:new Set(), pairs:{}, timer:null, dirty:false, hasReview:false, roundsStale:false};
+let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:"", eff:""}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:"", project:"", stage:"", split:""}, job: null, drawerData: null, poured: false };
+const REV = {active:false, sid:null, items:{}, note:"", originals:{}, scripts:{}, modelRw:{}, bad:new Set(), rewritten:new Set(), pairs:{}, timer:null, dirty:false, hasReview:false, roundsStale:false};
 const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模型通过", auto_reject:"模型剔除", held:"待人工复核", stale:"过期待确认", unreviewed:"未评审"};
 const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
 
@@ -680,6 +762,11 @@ async function loadOverview() {
   const byProj = d.train?.by_project || {};
   const dpoSrc = d.train?.dpo_by_source || {};
   const skipped = d.skipped || {};
+  const turns = d.stages?.stage1 || {};
+  const s2 = d.stages?.stage2 || {};
+  const funnels = Object.values(d.train?.session_funnels || {});
+  const admitted = funnels.reduce((a,x)=>a+(x.funnel?.admitted_steps||0),0);
+  const rescued = funnels.reduce((a,x)=>a+(x.funnel?.rescued_steps||0),0);
   const stageRows = [
     ["stage1", "原始提取", d.stages.stage1.last_run, COLORS.ore],
     ["stage2", "黄金提纯", d.stages.stage2.last_run, COLORS.gold],
@@ -688,6 +775,27 @@ async function loadOverview() {
   ];
 
   $("#view-overview").innerHTML = `
+    ${d.sync_dirty ? `<div class="sync-banner"><span class="tag t-failed">存在未同步变更</span><span class="grow">人工标注或上游数据晚于训练集。运行全流程后，Stage 3 才会反映最新结果。</span><button onclick="runStage('all',false)">立即同步</button></div>` : ""}
+    <div class="workflow-head">
+      <div class="wf-stage" style="--c:${COLORS.ore}">
+        <div class="wf-top"><span class="wf-no">1</span><span class="mono">COLLECT & CLEAN</span><span class="grow"></span><span>${ago(d.stages.stage1.last_run)}</span></div>
+        <h3>采集与回合清洗</h3>
+        <div class="wf-count">${fmt(sessions)}<small>准入会话</small></div>
+        <div class="wf-foot">${fmt(turns.turns_total)} 个用户回合 · 保留 ${fmt(turns.turns_kept)} · 折叠 ${fmt(turns.turns_folded)} · 剥离 ${fmt(turns.turns_dropped)}</div>
+      </div>
+      <div class="wf-stage" style="--c:${COLORS.gold}">
+        <div class="wf-top"><span class="wf-no">2</span><span class="mono">DISTILL & REVIEW</span><span class="grow"></span><span>${ago(d.stages.stage2.last_run)}</span></div>
+        <h3>黄金提纯与人机复核</h3>
+        <div class="wf-count">${fmt(gold)}<small>黄金步骤</small></div>
+        <div class="wf-foot">状态折叠 ${fmt(s2.folded)} · 弯路剪枝 ${fmt(s2.pruned)} · CoT 压缩 ${fmt(s2.compressed)} · 待复核 ${fmt((d.stages.review?.states?.held||0)+(d.stages.review?.states?.stale||0))}</div>
+      </div>
+      <div class="wf-stage" style="--c:${COLORS.mint}">
+        <div class="wf-top"><span class="wf-no">3</span><span class="mono">SYNTHESIZE</span><span class="grow"></span><span>${ago(d.stages.stage3.last_run)}</span></div>
+        <h3>训练样本生成</h3>
+        <div class="wf-count">${fmt(win)}<small>SFT 窗口</small></div>
+        <div class="wf-foot">实际准入 ${fmt(admitted)} 步 · 改写挽救 ${fmt(rescued)} 步 · DPO ${fmt(tra["dpo_preference_pairs.jsonl"]||0)} · 诊断 ${fmt(tra["negative_diagnostics.jsonl"]||0)}</div>
+      </div>
+    </div>
     <div class="assay">
       <div class="stations">
         <div class="station" style="--c:${COLORS.ore}">
@@ -786,7 +894,15 @@ async function loadRaw() {
   const d = await api(`/api/raw/sessions?label=${encodeURIComponent(f.label)}&project=${encodeURIComponent(f.project)}&q=${encodeURIComponent(f.q)}`);
   if (!STATE.overview) await refreshMeta().catch(() => {});
   const projects = [...new Set((STATE.overview?.projects||[]).map(p=>p.project))];
+  const aud = d.audit || {}, sk = aud.skipped || {};
   $("#view-raw").innerHTML = `
+    <div class="audit-strip">
+      <div class="audit-metric"><span>磁盘扫描</span><b>${fmt(sum(aud.folder_stats||{}))}</b></div>
+      <div class="audit-metric"><span>领域准入</span><b>${fmt(d.total)}</b></div>
+      <div class="audit-metric"><span>排除 / 非目标</span><b>${fmt((sk.excluded_folder||0)+(sk.non_crack_folder||0))}</b></div>
+      <div class="audit-metric"><span>重复副本</span><b>${fmt(Object.keys(aud.duplicates||{}).length)}</b></div>
+    </div>
+    ${aud.replay_mode ? `<div class="banner">源会话目录当前不可达，正在使用 <span class="mono">01_raw</span> 不可变副本重放。可继续复核和重算，但不会采集新会话。</div>` : ""}
     <div class="panel">
       <div class="toolbar">
         ${labelSeg_ctl("rawLabel", f.label)}
@@ -850,10 +966,30 @@ async function openRaw(sid) {
       <span class="k">根任务</span><span>${esc(st.root_prompt || "未识别")}</span>
       <span class="k">内化约束</span><span>${(st.constraints||[]).map(c=>`<div>${esc(c)}</div>`).join("") || "–"}</span>
     </div></div>
-    <div class="panel"><div class="panel-h"><h3>回合标注</h3><span class="hint">点击保留的回合可跳到对应提问；划线的回合已被剥离或折叠，悬停查看判定理由</span></div><div class="panel-b">
-      <div class="turns">${(d.turns||[]).map(t => t.dropped
-        ? `<span class="tl ${esc(t.kind)}" title="${esc(t.reason||"")}（${t.assistant_steps} 步）">#${t.turn_index} ${esc(TURN_KIND_ZH[t.kind] || t.kind)} ✕</span>`
-        : `<button class="tl ${esc(t.kind)}" title="${esc(t.reason||"")}（${t.assistant_steps} 步）" onclick="jumpTurn(${t.turn_index})">#${t.turn_index} ${esc(TURN_KIND_ZH[t.kind] || t.kind)}</button>`).join("")}</div>
+    <div class="panel"><div class="panel-h"><h3>根任务锚点</h3><span class="hint">所有单步训练窗口都会永久携带这条任务；可直接修正标准化结果</span></div><div class="panel-b">
+      <div class="root-edit"><span class="faint">训练 Prompt</span><textarea id="rootPromptEdit" name="root-prompt">${esc(st.root_prompt || "")}</textarea>
+        <button class="primary" onclick="saveRootPrompt('${sid}')">保存并重算</button></div>
+      ${st.root_normalized ? `<div class="faint" style="margin:6px 0 0 110px">原始指令：${esc(st.raw_root_prompt||"")}</div>` : ""}
+    </div></div>
+    <div class="panel"><div class="panel-h"><h3>逐回合清洗决策</h3><span class="hint">人工分类优先于模型与规则；修改后自动重算 Stage 1 → 3</span>
+      <span class="grow"></span><button class="ghost" onclick="classifyOne('${sid}')">让模型重新分类</button>
+      <button class="ghost" onclick="resetTurns('${sid}')">清除人工覆盖</button></div><div class="panel-b">
+      <div class="turn-editor">${(d.turns||[]).map(t => {
+        const action = t.action || (t.dropped ? "dropped" : t.kind==="continuation"||t.kind==="correction" ? "folded" : "kept");
+        const actionZh = action==="dropped" ? "已剥离" : action==="folded"||action==="internalized" ? "已折叠" : "保留";
+        const cls = action==="dropped" ? "dropped" : action==="folded"||action==="internalized" ? "folded" : "";
+        const ac = action==="dropped" ? "drop" : action==="folded"||action==="internalized" ? "fold" : "keep";
+        return `<div class="turn-edit ${cls}" id="turn-edit-${t.turn_index}">
+          <span class="turn-no">#${t.turn_index}</span>
+          <div><div class="turn-text">${esc(t.text || t.text_preview || "")}</div>
+            <div class="turn-meta">${fmt(t.assistant_steps)} 个助手步骤 · ${esc(t.source==="manual"?"人工":t.source==="model"?"模型":"规则")} · ${esc(t.reason||"")}</div></div>
+          <select name="turn-kind-${t.turn_index}" aria-label="回合 #${t.turn_index} 分类" onchange="saveTurnKind('${sid}',${t.turn_index},this.value)">
+            ${[["root","根任务"],["task","实质任务"],["continuation","续接折叠"],["correction","纠偏内化"],["setup","环境准备"],["noise","噪音"]]
+              .map(([v,n])=>`<option value="${v}" ${t.kind===v?"selected":""}>${n}</option>`).join("")}
+          </select>
+          <span class="turn-action ${ac}">${actionZh}${t.popped_await_msg?" · 去掉等待语":""}</span>
+        </div>`;
+      }).join("") || `<div class="empty">没有可标注回合</div>`}</div>
     </div></div>
     ${renderMessages(d.messages||[], d.turns)}`;
   $("#drawerFoot").innerHTML = `
@@ -862,12 +998,43 @@ async function openRaw(sid) {
     <button onclick="relabel('${sid}','negative')"><span class="tag t-negative">反例</span></button>
     <button onclick="relabel('${sid}','pending')"><span class="tag t-pending">待定</span></button>
     <span class="grow"></span>
-    <span class="faint" style="font-size:12px">修改后需重跑 stage1 生效</span>`;
+    <span class="faint" style="font-size:12px">标签修改即时同步 · 回合分类修改自动重算下游</span>`;
 }
 
 async function relabel(sid, label) {
   try { await api(`/api/raw/session/${sid}/relabel`, {method:"POST", body: JSON.stringify({label})});
-    toast(`已将 ${sid.slice(0,8)} 标为${LABEL_ZH[label]}，重跑 stage1 后生效`, "ok"); } catch (e) { toast(e.message, "err"); }
+    toast(`已将 ${sid.slice(0,8)} 标为${LABEL_ZH[label]}，索引与训练集已同步`, "ok");
+    openRaw(sid); loadRaw().catch(()=>{}); refreshMeta().catch(()=>{});
+  } catch (e) { toast(e.message, "err"); }
+}
+async function saveTurnKind(sid, idx, kind) {
+  try {
+    toast(`正在按「${TURN_KIND_ZH[kind]||kind}」重算回合流…`);
+    await api(`/api/raw/session/${sid}/turns`, {method:"PUT", body:JSON.stringify({turns:{[idx]:{kind}},recompute_downstream:true})});
+    toast(`回合 #${idx} 已改为${TURN_KIND_ZH[kind]||kind}，下游已同步`, "ok");
+    openRaw(sid); refreshMeta().catch(()=>{});
+  } catch(e) { toast(e.message,"err"); }
+}
+async function saveRootPrompt(sid) {
+  const root_prompt = $("#rootPromptEdit")?.value || "";
+  if (!root_prompt.trim()) { toast("根任务不能为空","err"); return; }
+  try {
+    toast("正在重算根任务锚点及下游样本…");
+    await api(`/api/raw/session/${sid}/turns`, {method:"PUT", body:JSON.stringify({root_prompt,recompute_downstream:true})});
+    toast("根任务已保存，Stage 2 / 3 已同步","ok"); openRaw(sid); refreshMeta().catch(()=>{});
+  } catch(e) { toast(e.message,"err"); }
+}
+async function resetTurns(sid) {
+  try {
+    await api(`/api/raw/session/${sid}/turns`, {method:"PUT", body:JSON.stringify({reset:true,recompute_downstream:true})});
+    toast("已清除人工覆盖并重算","ok"); openRaw(sid);
+  } catch(e) { toast(e.message,"err"); }
+}
+async function classifyOne(sid) {
+  try {
+    const {job_id}=await api(`/api/raw/session/${sid}/classify`,{method:"POST"});
+    toast("已提交模型回合分类","ok"); watchJob(job_id,()=>openRaw(sid));
+  } catch(e) { toast(e.message,"err"); }
 }
 
 /* ------------------------------ 黄金数据 / 人工复核 ------------------------------ */
@@ -1014,12 +1181,10 @@ function revLazy(el) {
 function revExpand(open) { $$("#revList details").forEach(d => { d.open = open; if (open) revLazy(d); }); }
 async function revDecide(decision) {
   if (!REV.active || !REV.sid) return;
-  if (!REV.hasReview && !REV.roundsStale) { toast("还没有模型评审"); return; }
-  if (decision === "approved" && REV.roundsStale) { toast("会话内容已变化，请先重新评审", "err"); return; }
   await revFlush();
   try {
     await api(`/api/gold/session/${REV.sid}/review/decision`, {method:"POST", body: JSON.stringify({decision})});
-    toast(decision === "approved" ? "已通过。未处置的改写已采纳，问题步已排除；重跑 stage3 后入库" : decision === "rejected" ? "已驳回，不会进入训练集" : "已撤销结论", "ok");
+    toast(decision === "approved" ? "已通过，Stage 3 训练集已自动同步" : decision === "rejected" ? "已驳回并同步，不会进入训练集" : "已撤销结论", "ok");
     const sid = REV.sid;
     if (STATE.tab === "gold") loadGold().catch(() => {});
     openGold(sid);
@@ -1045,11 +1210,24 @@ async function revRefine() {
     watchJob(job_id, () => openGold(sid));
   } catch (e) { toast(e.message, "err"); }
 }
+async function revBatch(action) {
+  if (!REV.sid) return;
+  await revFlush();
+  try {
+    const r = await api(`/api/gold/session/${REV.sid}/review/batch`, {method:"POST", body:JSON.stringify({action})});
+    REV.items = {};
+    for (const [mid,it] of Object.entries(r.items||{}))
+      REV.items[mid] = {rewrite:it.rewrite||null,edited_text:it.edited_text||"",step:it.step||null,comment:it.comment||""};
+    toast(action==="exclude_all_bad"?"全部问题步已标记排除":"批量处置已保存","ok");
+    openGold(REV.sid);
+  } catch(e) { toast(e.message,"err"); }
+}
 function renderRewriteCard(rw, idx, bad) {
   const mid = rw.msg_id, it = REV.items[mid] || {};
-  const oldS = REV.originals[mid] || "", neu = rw.rewritten || "";
-  const key = "rw:" + mid;
-  REV.pairs[key] = {old: oldS, new: neu};
+  const oldS = REV.originals[mid] || "", scriptS = REV.scripts[mid] || oldS, neu = rw.rewritten || "";
+  const keyScript = "rw-script:" + mid, keyModel = "rw-model:" + mid;
+  REV.pairs[keyScript] = {old: oldS, new: scriptS, caps:["原始会话", "脚本提纯"]};
+  REV.pairs[keyModel] = {old: scriptS, new: neu, caps:["脚本提纯", "模型改写"]};
   const attn = it.rewrite === "rejected" || it.rewrite === "edited" || (it.comment || "").trim() || bad;
   const pill = it.rewrite === "accepted" ? "已采纳" : it.rewrite === "rejected" ? "不采纳" : it.rewrite === "edited" ? "手改" : "未处置";
   const on = name => (it.rewrite === name || it.step === name) ? "rev-on" : "";
@@ -1058,12 +1236,20 @@ function renderRewriteCard(rw, idx, bad) {
       <span class="mono faint">${idx + 1}</span>
       <span class="mono">${esc(String(mid).slice(0, 8))}</span>
       ${bad ? `<span class="lb prune">问题步</span>` : ""}
-      <span class="faint">${chars(oldS.length)} → ${chars(neu.length)}</span>
+      <span class="faint">${chars(oldS.length)} → ${chars(scriptS.length)} → ${chars(neu.length)}</span>
       <span class="gist">${esc(cheapGist(oldS, neu))}</span>
       <span class="chip" data-pill>${pill}</span>
     </summary>
     <div class="body">
-      <div class="diff-slot" data-pair="${esc(key)}"></div>
+      <div class="lineage">
+        <div class="lineage-col"><div class="lineage-cap" style="--c:${COLORS.ore}"><i></i>原始会话 · ${chars(oldS.length)}</div><div class="lineage-body">${esc(oldS)}</div></div>
+        <div class="lineage-col"><div class="lineage-cap" style="--c:${COLORS.gold}"><i></i>脚本提纯 · ${chars(scriptS.length)}</div><div class="lineage-body">${esc(scriptS)}</div></div>
+        <div class="lineage-col"><div class="lineage-cap" style="--c:${COLORS.mint}"><i></i>模型改写 · ${chars(neu.length)}</div><div class="lineage-body">${esc(neu)}</div></div>
+      </div>
+      <details style="margin-top:8px"><summary class="faint" style="cursor:pointer">查看精确差异</summary>
+        <div class="diff-slot" data-pair="${esc(keyScript)}" style="margin-top:7px"></div>
+        <div class="diff-slot" data-pair="${esc(keyModel)}" style="margin-top:7px"></div>
+      </details>
       <div class="rev-acts" onclick="event.stopPropagation()">
         <button data-rev="accepted" data-mid="${esc(mid)}" class="${on("accepted")}" onclick="revAct(this)">采纳</button>
         <button data-rev="rejected" data-mid="${esc(mid)}" class="${on("rejected")}" onclick="revAct(this)">不采纳</button>
@@ -1140,7 +1326,7 @@ async function loadGold() {
         <button id="goldReload" class="ghost">刷新</button>
       </div>
       <div class="scroll"><table><thead><tr>
-        <th>会话</th><th>标签</th><th>项目</th><th>原始 → 黄金</th><th class="n">折叠</th><th class="n">剪枝</th><th class="n">DPO</th><th>复核</th><th>脚本判定</th>
+        <th>会话</th><th>标签</th><th>项目</th><th>原始 → 黄金</th><th class="n">折叠</th><th class="n">剪枝</th><th class="n">DPO</th><th>复核</th><th class="n">入库窗口</th><th>脚本判定</th>
       </tr></thead><tbody>
       ${rows.map(s => {
         const r = s.stats?.raw_steps || 0, g = s.stats?.gold_steps || 0;
@@ -1156,8 +1342,9 @@ async function loadGold() {
         <td class="n">${fmt(s.stats?.pruned_detours)}</td>
         <td class="n">${fmt(s.dpo_count ?? (s.stats?.pruned_detours||0))}</td>
         <td>${effTag(s.effective)}${s.review_round ? ` <span class="faint mono" style="font-size:11px">第${s.review_round}轮</span>` : ""}</td>
+        <td class="n" title="Stage 3 当前实际准入的单步窗口">${s.funnel?.admitted_steps == null ? `<span class="faint">未生成</span>` : `<span style="color:var(--mint)">${fmt(s.funnel.admitted_steps)}</span>${s.funnel.rescued_steps?` <span class="faint">(+${fmt(s.funnel.rescued_steps)})</span>`:""}`}</td>
         <td class="muted" title="${esc(s.script_status||s.status||"")}">${esc(SCRIPT_ZH[s.script_status||s.status] || s.script_status || s.status || "")}</td>
-      </tr>`;}).join("") || emptyRow(9, d.sessions.length ? "这个筛选下没有会话" : "还没有黄金数据，先运行 stage2")}
+      </tr>`;}).join("") || emptyRow(10, d.sessions.length ? "这个筛选下没有会话" : "还没有黄金数据，先运行 stage2")}
       </tbody></table></div>
     </div>`;
   $$("#goldLabel button").forEach(b => b.onclick = () => { STATE.gold.label = b.dataset.v; loadGold(); });
@@ -1185,7 +1372,11 @@ async function openGold(sid) {
   REV.roundsStale = !!ann.review_rounds_stale;
   REV.hasReview = rounds.length > 0 && !REV.roundsStale;
   REV.originals = {};
-  for (const m of rec.messages || []) if (m.role === "assistant") REV.originals[m.id] = m.thinking || "";
+  REV.scripts = {};
+  for (const m of rec.messages || []) if (m.role === "assistant") {
+    REV.originals[m.id] = m.raw_thinking || m.thinking || "";
+    REV.scripts[m.id] = m.thinking || "";
+  }
   REV.modelRw = Object.fromEntries((mr.thinking_rewrites || []).map(rw => [rw.msg_id, rw.rewritten || ""]));
   REV.bad = new Set(mr.bad_step_ids || []);
   REV.rewritten = new Set(Object.keys(REV.modelRw));
@@ -1196,6 +1387,7 @@ async function openGold(sid) {
   const rwIds = new Set((mr.thinking_rewrites || []).map(rw => rw.msg_id));
   const badOnly = (mr.bad_step_ids || []).filter(mid => !rwIds.has(mid));
   const prog = d.progress || {};
+  const sp = d.synthesis_preview || {}, funnel = sp.funnel || {};
   STATE.drawerData = d;
   $("#drawerSub").innerHTML = `${effTag(d.effective)} ${labelBadge(rec.label)} <span class="faint" style="margin-left:6px">${esc(rec.project_group)}</span>`;
   $("#drawerBody").innerHTML = `
@@ -1213,8 +1405,30 @@ async function openGold(sid) {
         <textarea id="revNote" class="rev-note" data-field="note" oninput="revInput(this)" placeholder="例如：轨迹可用，但解密那几步把偏移推导删掉了，请按原文保留关键字节">${esc(REV.note)}</textarea>
       </div>
     </div>
+    <div class="panel"><div class="panel-h"><h3>Stage 3 入库预览</h3>
+      <span class="hint">${sp.full_sft_allowed ? "完整黄金轨迹与单步窗口均可生成" : sp.subsegment_only ? `仅白名单子段 ${JSON.stringify(sp.subsegment_ranges||[])}` : "当前会话被门控，不生成 SFT"}</span>
+      <span class="grow"></span><span class="chip ${sp.full_sft_allowed||sp.subsegment_only?"train":""}">${esc(EFF_ZH[sp.effective_state]||sp.effective_state||"未评审")}</span>
+    </div><div class="panel-b">
+      <div class="synth-funnel">
+        <div class="funnel-node"><span>原始步骤</span><b>${fmt(funnel.raw_steps??st.raw_steps)}</b></div>
+        <div class="funnel-node warn"><span>脚本黄金</span><b>${fmt(funnel.gold_steps??st.gold_steps)}</b></div>
+        <div class="funnel-node good"><span>实际入库窗口</span><b>${fmt(funnel.admitted_steps)}</b></div>
+        <div class="funnel-node ${funnel.pathology_dropped||funnel.excluded_steps?"bad":""}"><span>排除 / 病态 / 门控</span><b>${fmt((funnel.excluded_steps||0)+(funnel.pathology_dropped||0)+(funnel.blocked_or_subsegment_dropped||0))}</b></div>
+      </div>
+      <div class="legend">
+        <span>改写挽救 <b>${fmt(funnel.rescued_steps)}</b></span><span>人工保留 <b>${fmt(funnel.human_kept_steps)}</b></span>
+        <span>合成思考未验证 <b>${fmt(funnel.synthesized_dropped)}</b></span><span>加权步数 <b>${fmt(funnel.weighted_steps)}</b></span>
+      </div>
+      ${(sp.step_audits||[]).length ? `<details style="margin-top:10px"><summary style="cursor:pointer;color:var(--text-2)">查看每一步的最终去向</summary>
+        <div class="step-audit-list" style="margin-top:8px">${sp.step_audits.map(a=>`<div class="step-audit ${a.status}">
+          <span class="num faint">#${a.step_rank}</span><span class="tag t-${a.status==="admitted"?"done":"failed"}">${a.status==="admitted"?"入库":"丢弃"}</span>
+          <span class="why" title="${esc(a.reason)}">${esc(a.reason)} · ${esc(a.gist||"")}</span>
+          <span class="num faint">${fmt(a.think_len_raw)}→${fmt(a.think_len_eff)}</span></div>`).join("")}</div></details>` : ""}
+    </div></div>
     ${(mr.thinking_rewrites || []).length ? `<div class="panel"><div class="panel-h"><h3>改写对照</h3><span class="hint">${mr.thinking_rewrites.length} 处，标红是删掉的，标绿是改写补上的</span>
-      <span class="grow"></span><button class="ghost" onclick="revExpand(true)">展开全部</button><button class="ghost" onclick="revExpand(false)">折叠</button></div>
+      <span class="grow"></span><button class="ghost" onclick="revBatch('accept_all_rewrites')">采纳未处置</button>
+      ${badOnly.length||REV.bad.size ? `<button class="ghost" onclick="revBatch('exclude_all_bad')">排除全部问题步</button>`:""}
+      <button class="ghost" onclick="revExpand(true)">展开全部</button><button class="ghost" onclick="revExpand(false)">折叠</button></div>
       <div class="panel-b" id="revList">${mr.thinking_rewrites.map((rw, i) => renderRewriteCard(rw, i, REV.bad.has(rw.msg_id))).join("")}</div></div>` : ""}
     ${badOnly.length ? `<div class="panel"><div class="panel-h"><h3>问题步</h3><span class="hint">模型标出、但没有改写的步骤。排除后不进单步训练集</span></div>
       <div class="panel-b" id="revBad">${badOnly.map(renderBadRow).join("")}</div></div>` : ""}
@@ -1240,12 +1454,14 @@ async function openGold(sid) {
       <button onclick="revRefine()">按意见重审</button>` : ""}
     ${REV.roundsStale ? `<button class="primary" onclick="reviewOne('${sid}')">重新评审</button>
       <button class="danger" onclick="revDecide('rejected')">驳回<span class="kbd">R</span></button>` : ""}
-    ${!rounds.length ? `<button class="primary" onclick="reviewOne('${sid}')">让模型评审此会话</button>` : ""}
+    ${!rounds.length ? `<button onclick="reviewOne('${sid}')">让模型先评审</button>
+      <button class="primary" onclick="revDecide('approved')">人工直接通过<span class="kbd">A</span></button>
+      <button class="danger" onclick="revDecide('rejected')">人工直接驳回<span class="kbd">R</span></button>` : ""}
     ${(ann.human_review || {}).decision ? `<button class="ghost" onclick="revDecide(null)">撤销结论</button>` : ""}
     <button class="ghost" onclick="showJson(STATE.drawerData.annotation)">标注 JSON</button>
     <span class="grow"></span>
     <span id="revSave" class="faint" style="font-size:12px"></span>
-    <span class="faint" style="font-size:12px">J / K 切换${reviewed ? " · 通过后重跑 stage3 入库" : ""}</span>`;
+    <span class="faint" style="font-size:12px">J / K 切换 · 所有结论即时同步 Stage 3</span>`;
 }
 
 async function reviewOne(sid) {
@@ -1532,12 +1748,26 @@ function renderStepDetail(st) {
       ${r ? `<details ${openOut ? "open" : ""}><summary>输出 ${fmt(len)} 字符</summary><pre>${hl(out)}</pre></details>` : `<div class="no-out">没有输出记录</div>`}
     </div>`;
   }).join("");
+  const it = (REV.active && m.id) ? (REV.items[m.id] || {}) : {};
+  const reviewBox = REV.active && m.id ? `<div class="step-review" data-revcard="${esc(m.id)}">
+    <div class="row"><span class="faint">训练去向</span>
+      <button data-rev="exclude" data-mid="${esc(m.id)}" class="${it.step==="exclude"?"rev-on":""}" onclick="revAct(this)">排除此步</button>
+      <button data-rev="keep" data-mid="${esc(m.id)}" class="${it.step==="keep"?"rev-on":""}" onclick="revAct(this)">强制保留</button>
+      <button data-rev="edited" data-mid="${esc(m.id)}" class="${it.rewrite==="edited"?"rev-on":""}" onclick="revAct(this)">人工改写 thinking</button>
+      <span class="grow"></span><span class="chip" data-pill>${it.step==="exclude"?"将排除":it.step==="keep"?"强制保留":it.rewrite==="edited"?"人工改写":"按质量门控"}</span>
+    </div>
+    <textarea class="rev-editbox ${it.rewrite==="edited"?"":"hidden"}" data-field="edit" data-mid="${esc(m.id)}" oninput="revInput(this)"
+      placeholder="直接写最终进入训练集的 thinking">${esc(it.edited_text || REV.modelRw[m.id] || m.thinking || "")}</textarea>
+    <textarea class="rev-comment" data-field="comment" data-mid="${esc(m.id)}" oninput="revInput(this)"
+      placeholder="给这一步加批注（可用于按意见重审）">${esc(it.comment||"")}</textarea>
+  </div>` : "";
   return `<div class="step-d">
     <div class="step-meta">${meta}</div>
     ${REV.active && m.id && REV.rewritten.has(m.id) ? `<div><button class="ghost" onclick="document.getElementById('revc-${m.id}')?.scrollIntoView({block:'start'})">查看此步的改写对照</button></div>` : ""}
     ${st.think ? `<div class="think-full">${hl(st.think)}</div>` : ""}
     ${m.text ? `<div class="said md">${md(m.text)}</div>` : ""}
     ${calls}
+    ${reviewBox}
   </div>`;
 }
 
@@ -1583,6 +1813,10 @@ function jumpTurn(ti) {
 }
 
 /* ------------------------------ 训练数据 ------------------------------ */
+function datasetKind(name) {
+  return name.includes("dpo_") ? "dpo" : name.includes("diagnostic") ? "diagnostic" : name.includes("trajectories") ? "trajectory" : "sft";
+}
+const DS_KIND_ZH = {sft:"SFT 单步",trajectory:"完整轨迹",dpo:"DPO 偏好",diagnostic:"病态诊断"};
 async function loadTrain() {
   const d = await api("/api/train/datasets");
   const files = d.datasets.map(x=>x.name);
@@ -1591,29 +1825,38 @@ async function loadTrain() {
     $("#view-train").innerHTML = `<div class="panel"><div class="empty">还没有训练数据，先运行 stage3</div></div>`;
     return;
   }
-  const rows = await api(`/api/train/dataset/${STATE.train.name}?offset=${STATE.train.offset}&limit=50&q=${encodeURIComponent(STATE.train.q||"")}`);
+  const tf = STATE.train;
+  const query = new URLSearchParams({offset:tf.offset,limit:50,q:tf.q||"",project:tf.project||"",stage:tf.stage||"",split:tf.split||""});
+  const rows = await api(`/api/train/dataset/${STATE.train.name}?${query}`);
   STATE.datasetInfo = d.dataset_info;
   const end = Math.min(rows.offset + rows.rows.length, rows.total);
+  const kind = datasetKind(STATE.train.name);
+  const projects = Object.keys(d.stats?.split||{});
+  const phaseOpts = kind==="dpo" ? [["stage2_pruned","剪枝弯路"],["negative_step","反例坏步"],["review_rewrite","复核改写"]]
+    : kind==="sft" ? PHASE.map(([v,t])=>[v,t]) : [];
   $("#view-train").innerHTML = `
+    <div class="dataset-cards">${d.datasets.map(x => {
+      const k=datasetKind(x.name);
+      return `<div class="dataset-card ${x.name===STATE.train.name?"on":""}" data-name="${esc(x.name)}">
+        <div class="ds-kind">${esc(DS_KIND_ZH[k])}</div><div class="ds-name" title="${esc(x.name)}">${esc(x.name)}</div><b>${fmt(x.rows)}</b></div>`;
+    }).join("")}</div>
     <div class="panel">
       <div class="toolbar">
-        <select id="dsSelect">${d.datasets.map(x=>`<option value="${esc(x.name)}" ${x.name===STATE.train.name?"selected":""}>${esc(x.name)}（${fmt(x.name===STATE.train.name && !STATE.train.q ? rows.total : x.rows)}）</option>`).join("")}</select>
-        <input type="text" id="dsSearch" placeholder="搜索样本内容，回车确认" value="${esc(STATE.train.q||"")}">
+        <span class="chip ${kind==="sft"||kind==="trajectory"?"train":""}">${esc(DS_KIND_ZH[kind])}</span>
+        <select id="dsProject"><option value="">全部项目</option>${projects.map(p=>`<option value="${esc(p)}" ${tf.project===p?"selected":""}>${esc(p)}</option>`).join("")}</select>
+        <select id="dsSplit"><option value="">全部切分</option><option value="train" ${tf.split==="train"?"selected":""}>train</option><option value="eval" ${tf.split==="eval"?"selected":""}>eval</option></select>
+        ${phaseOpts.length ? `<select id="dsStage"><option value="">全部${kind==="dpo"?"来源":"阶段"}</option>${phaseOpts.map(([v,t])=>`<option value="${v}" ${tf.stage===v?"selected":""}>${t}</option>`).join("")}</select>`:""}
+        <input type="text" id="dsSearch" placeholder="搜索样本 ID、思考、工具或病态标签" value="${esc(tf.q||"")}">
         <span class="grow"></span>
         <button id="dsInfo" class="ghost">dataset_info.json</button>
         <button id="dsReload" class="ghost">刷新</button>
       </div>
-      <div class="scroll"><table><thead><tr><th class="n">#</th><th>样本 ID</th><th>项目</th><th>阶段</th><th class="n">权重</th><th class="n">轮数</th><th>用户输入与目标输出</th></tr></thead><tbody>
-      ${rows.rows.map(r=>`<tr class="clickable" data-idx="${r.index}" tabindex="0">
-        <td class="n faint">${r.index}</td>
-        <td class="mono muted" style="font-size:11px;white-space:nowrap" title="${esc(r.sample_id)}">${esc(short(r.sample_id, 26))}</td>
-        <td class="sid muted">${esc(r.metadata?.project_group||"")}</td>
-        <td>${(() => { const p = PHASE.find(x => x[0] === r.metadata?.stage); return p ? `<span class="tag" style="--c:${p[2]}">${p[1]}</span>` : esc(r.metadata?.stage||"–"); })()}</td>
-        <td class="n">${fmt(r.metadata?.sample_weight)}</td>
-        <td class="n">${fmt(r.preview?.turns)}</td>
-        <td style="max-width:560px"><div class="clip" style="-webkit-line-clamp:1">${esc(short(r.preview?.user, 140))}</div>
-          <div class="clip faint" style="-webkit-line-clamp:1;font-size:12.5px">${esc(short(r.preview?.target, 140))}</div></td>
-      </tr>`).join("") || emptyRow(7, STATE.train.q ? "没有匹配的样本" : "这个数据集是空的")}
+      <div class="scroll"><table><thead><tr>${kind==="dpo"
+        ? `<th class="n">#</th><th>样本 / 项目</th><th>来源与理由</th><th>Chosen</th><th>Rejected</th><th>切分</th>`
+        : kind==="diagnostic"
+        ? `<th class="n">#</th><th>会话 / 项目</th><th>模型 / 质量</th><th>病态标签</th><th>思考与工具</th><th>切分</th>`
+        : `<th class="n">#</th><th>样本 / 项目</th><th>阶段</th><th class="n">权重</th><th>根任务</th><th>目标思考 / 工具动作</th><th>切分</th>`}</tr></thead><tbody>
+      ${rows.rows.map(r=>trainRow(r,kind)).join("") || emptyRow(kind==="sft"||kind==="trajectory"?7:6, tf.q||tf.project||tf.stage||tf.split ? "没有匹配的样本" : "这个数据集是空的")}
       </tbody></table></div>
       <div class="toolbar bottom">
         <span class="count"><b>${rows.total ? fmt(rows.offset + 1) : 0}–${fmt(end)}</b>，共 ${fmt(rows.total)} 条</span>
@@ -1622,7 +1865,10 @@ async function loadTrain() {
         <button id="dsNext" ${end >= rows.total ? "disabled" : ""}>下一页</button>
       </div>
     </div>`;
-  $("#dsSelect").onchange = e => { STATE.train.name = e.target.value; STATE.train.offset = 0; STATE.train.q=""; loadTrain(); };
+  $$(".dataset-card").forEach(c=>c.onclick=()=>{ STATE.train.name=c.dataset.name; STATE.train.offset=0; STATE.train.q=""; STATE.train.stage=""; loadTrain(); });
+  $("#dsProject").onchange=e=>{tf.project=e.target.value;tf.offset=0;loadTrain();};
+  $("#dsSplit").onchange=e=>{tf.split=e.target.value;tf.offset=0;loadTrain();};
+  if ($("#dsStage")) $("#dsStage").onchange=e=>{tf.stage=e.target.value;tf.offset=0;loadTrain();};
   $("#dsSearch").onkeydown = e => { if (e.key==="Enter"){ STATE.train.q=e.target.value; STATE.train.offset=0; loadTrain(); } };
   $("#dsReload").onclick = loadTrain;
   $("#dsInfo").onclick = () => showJson(STATE.datasetInfo);
@@ -1633,20 +1879,69 @@ async function loadTrain() {
     $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
     const row = await api(`/api/train/dataset/${STATE.train.name}/${tr.dataset.idx}`);
     STATE.drawerData = row;
-    $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-h"><h3>元数据</h3></div><div class="panel-b"><pre class="json">${esc(JSON.stringify(row.metadata||{},null,2))}</pre></div></div>
-      <div class="panel"><div class="panel-h"><h3>对话</h3></div><div class="panel-b"><div class="msgs">${renderConversation(row)}</div></div></div>`;
+    $("#drawerBody").innerHTML = renderTrainDetail(row, datasetKind(STATE.train.name));
     $("#drawerFoot").innerHTML = `<button onclick="showJson(STATE.drawerData)">查看原始 JSON</button>`;
   });
+}
+
+function trainRow(r,kind) {
+  const m=r.metadata||{}, p=r.preview||{}, base=`<td class="n faint">${r.index}</td>
+    <td><div class="mono muted" style="font-size:11px" title="${esc(r.sample_id)}">${esc(short(r.sample_id,28))}</div><div class="sid faint">${esc(m.project_group||"")}</div></td>`;
+  if(kind==="dpo") return `<tr class="clickable" data-idx="${r.index}" tabindex="0">${base}
+    <td><span class="chip">${esc(DPO_SRC_ZH[m.source]||m.source||"–")}</span><div class="faint" style="margin-top:3px">${esc(m.reason||"")}</div></td>
+    <td><div class="clip" style="-webkit-line-clamp:2;color:#cbe4c2">${esc(p.chosen_think||"")}</div><span class="faint num">${fmt(p.chosen_len)} 字</span></td>
+    <td><div class="clip" style="-webkit-line-clamp:2;color:#e9a497">${esc(p.rejected_think||"")}</div><span class="faint num">${fmt(p.rejected_len)} 字</span></td>
+    <td><span class="chip ${m.split||""}">${esc(m.split||"–")}</span></td></tr>`;
+  if(kind==="diagnostic") return `<tr class="clickable" data-idx="${r.index}" tabindex="0">${base}
+    <td><div>${esc(m.model||"unknown")}</div><span class="num faint">${fmt(m.quality_score)}</span></td>
+    <td><div class="path-chips">${(m.pathologies||p.pathologies||[]).map(x=>`<span>${esc(PATHO_ZH[String(x).split(":")[0]]||x)}</span>`).join("")}</div></td>
+    <td><div class="clip" style="-webkit-line-clamp:2">${esc(p.target||"")}</div><div class="faint mono">${esc((p.tools||[]).join(", "))}</div></td>
+    <td><span class="chip ${m.split||""}">${esc(m.split||"–")}</span></td></tr>`;
+  const ph=PHASE.find(x=>x[0]===m.stage);
+  return `<tr class="clickable" data-idx="${r.index}" tabindex="0">${base}
+    <td>${ph?`<span class="tag" style="--c:${ph[2]}">${ph[1]}</span>`:esc(m.stage || (kind==="trajectory" ? "完整轨迹" : "–"))}</td>
+    <td class="n">${fmt(m.sample_weight)}</td><td><div class="clip" style="-webkit-line-clamp:2">${esc(p.user||"")}</div></td>
+    <td><div class="clip" style="-webkit-line-clamp:2;color:#d3cdbd">${esc(p.think||p.target||"")}</div><div class="faint mono">${esc((p.tools||[]).join(" · "))}</div></td>
+    <td><span class="chip ${m.split||""}">${esc(m.split||"–")}</span></td></tr>`;
+}
+function renderTrainDetail(row,kind) {
+  const meta=row.metadata||row;
+  const metaPanel=`<div class="panel"><div class="panel-h"><h3>样本血缘</h3></div><div class="panel-b kv">
+    ${Object.entries(meta).map(([k,v])=>`<span class="k">${esc(k)}</span><span>${esc(typeof v==="object"?JSON.stringify(v):v)}</span>`).join("")}</div></div>`;
+  if(kind==="dpo"){
+    const chosen=row.chosen?.value||"", rejected=row.rejected?.value||"";
+    return `${metaPanel}<div class="panel"><div class="panel-h"><h3>偏好对照</h3><span class="hint">相同上下文下，模型应偏好左侧 chosen</span></div>
+      <div class="panel-b">${buildDiff(rejected,chosen,["Rejected · 不应学习","Chosen · 目标行为"]).html}</div></div>
+      <div class="panel"><div class="panel-h"><h3>上下文</h3></div><div class="panel-b"><div class="msgs">${renderConversation({conversations:row.conversations||[]})}</div></div></div>`;
+  }
+  if(kind==="diagnostic") return `${metaPanel}<div class="panel"><div class="panel-h"><h3>病态思考原文</h3></div>
+    <div class="panel-b"><div class="path-chips" style="margin-bottom:10px">${(row.pathologies||[]).map(x=>`<span>${esc(PATHO_ZH[String(x).split(":")[0]]||x)}</span>`).join("")}</div>
+    <div class="think-full">${esc(row.thinking||row.thinking_preview||"")}</div></div></div>
+    <div class="panel"><div class="panel-h"><h3>工具动作</h3></div><div class="panel-b mono">${esc((row.tool_calls||[]).join("\n")||"无")}</div></div>`;
+  return `${metaPanel}<div class="panel"><div class="panel-h"><h3>训练上下文与目标</h3><span class="hint">历史 thinking 已剥离，仅最后一步计算 loss</span></div>
+    <div class="panel-b"><div class="msgs">${renderConversation(row)}</div></div></div>`;
 }
 
 function renderConversation(row) {
   const msgs = row.conversations || row.messages || [];
   return msgs.map(m => {
     const role = m.from || m.role;
-    const val = m.value ?? (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+    let val = m.value ?? (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
     const cls = (role==="human"||role==="user") ? "role-user" : role==="system" ? "role-system" : role==="observation"||role==="tool" ? "role-tool" : "role-assistant";
-    return `<div class="msg ${cls}"><div class="hd"><span class="role">${esc(ROLE_ZH[role] || role)}</span>${m.tool_calls?`<span class="lb">${esc((m.tool_calls||[]).map(t=>t.function?.name).join(", "))}</span>`:""}</div>
-      <div class="bd">${esc(val)}</div></div>`;
+    if (cls !== "role-assistant") return `<div class="msg ${cls}"><div class="hd"><span class="role">${esc(ROLE_ZH[role] || role)}</span></div><div class="bd">${esc(val)}</div></div>`;
+    let think = m.reasoning_content || "", tools = [];
+    const tm = String(val).match(/^<think>?\s*\n?([\s\S]*?)\n?<\/think>\s*/i);
+    if (tm) { if (!think) think=tm[1].trim(); val=String(val).slice(tm[0].length).trim(); }
+    val=String(val).replace(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi,(_,raw)=>{
+      try { const o=JSON.parse(raw); tools.push({name:o.name,args:o.arguments}); } catch { tools.push({name:"tool",args:raw}); } return "";
+    }).trim();
+    for(const tc of (m.tool_calls||[])){ const f=tc.function||tc; tools.push({name:f.name,args:f.arguments}); }
+    return `<div class="msg ${cls}"><div class="hd"><span class="role">${esc(ROLE_ZH[role] || role)}</span>
+      ${tools.length?`<span class="lb">${esc(tools.map(t=>t.name).join(", "))}</span>`:""}</div><div class="bd">
+      ${think?`<details open><summary>目标 thinking · ${chars(think.length)}</summary><pre class="think">${esc(think)}</pre></details>`:""}
+      ${val?`<div class="md">${md(val)}</div>`:""}
+      ${tools.map(t=>`<pre><b style="color:var(--mint)">${esc(t.name)}</b>\n${esc(typeof t.args==="string"?t.args:JSON.stringify(t.args,null,2))}</pre>`).join("")}
+    </div></div>`;
   }).join("");
 }
 

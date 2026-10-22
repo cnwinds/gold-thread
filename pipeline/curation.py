@@ -65,11 +65,18 @@ def human(ann: Dict[str, Any]) -> Dict[str, Any]:
 
 def is_stale(ann: Dict[str, Any]) -> bool:
     hr = ann.get("human_review") or {}
-    return bool(hr.get("decision")) and hr.get("review_key") != ann.get("review_key")
+    if not hr.get("decision"):
+        return False
+    saved_key = hr.get("review_key")
+    cur_key = ann.get("review_key")
+    if not saved_key or not cur_key:
+        return False
+    # 比较源文件指纹 + 回合流签名，算法版本升级本身不误废除人工结论
+    return ":".join(str(saved_key).split(":")[:3]) != ":".join(str(cur_key).split(":")[:3])
 
 
 def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """给出会话的有效结论、生效的 thinking 改写与排除的步骤。"""
+    """给出会话的有效结论、生效的 thinking 改写、排除的步骤与人工强制保留的步骤。"""
     rcfg = cfg.get("review", {})
     hold = bool(rcfg.get("hold_needs_review", True))
     conf_min = float(rcfg.get("judge_confidence_min", 0.7))
@@ -99,28 +106,45 @@ def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
         ex |= {mid for mid in bad if (items.get(mid) or {}).get("step") != "keep"}
         return sorted(ex)
 
+    def _kept() -> List[str]:
+        kp = {
+            mid
+            for mid, it in items.items()
+            if it.get("step") == "keep" or (it.get("rewrite") == "edited" and (it.get("edited_text") or "").strip())
+        }
+        return sorted(kp)
+
     decision = hr.get("decision")
     fresh = bool(decision) and not is_stale(ann)
     if ann.get("review_rounds_stale") and not fresh:
-        # 会话内容已变，旧评审不能当通过；人工刚做的结论（review_key 对得上）仍然有效
-        return {"state": "stale", "rewrites": {}, "excluded": []}
+        return {"state": "stale", "rewrites": {}, "excluded": [], "kept": []}
     if fresh:
         state = "approved" if decision == "approved" else "rejected"
-        if ann.get("review_rounds_stale"):
-            return {"state": state, "rewrites": {}, "excluded": []}
-        return {"state": state, "rewrites": _rewrites(True) if state == "approved" else {}, "excluded": _excluded()}
+        if state == "rejected":
+            return {"state": "rejected", "rewrites": {}, "excluded": _excluded(), "kept": []}
+        if ann.get("review_rounds_stale") or hr.get("ignore_model_review"):
+            # 人工在新版本上直接通过：仅应用人工手改与人工排除项，不套用旧模型建议
+            manual_only_rw = {
+                mid: it["edited_text"].strip()
+                for mid, it in items.items()
+                if it.get("rewrite") == "edited" and (it.get("edited_text") or "").strip()
+            }
+            manual_ex = sorted(mid for mid, it in items.items() if it.get("step") == "exclude")
+            return {"state": state, "rewrites": manual_only_rw, "excluded": manual_ex, "kept": _kept()}
+        return {"state": state, "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
     if decision:
-        return {"state": "stale", "rewrites": {}, "excluded": []}
+        return {"state": "stale", "rewrites": {}, "excluded": [], "kept": []}
     if not rnd:
-        return {"state": "unreviewed", "rewrites": {}, "excluded": []}
+        # 即使尚未进行模型评审，人工手改或排除的单步也立即生效
+        return {"state": "unreviewed", "rewrites": _rewrites(False), "excluded": _excluded(), "kept": _kept()}
     verdict = rnd.get("verdict")
     if verdict == "reject":
-        return {"state": "auto_reject", "rewrites": {}, "excluded": []}
+        return {"state": "auto_reject", "rewrites": {}, "excluded": _excluded(), "kept": []}
     if verdict == "gold" and float(rnd.get("confidence") or 0) >= conf_min:
-        return {"state": "auto_gold", "rewrites": _rewrites(True), "excluded": _excluded()}
+        return {"state": "auto_gold", "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
     if hold:
-        return {"state": "held", "rewrites": {}, "excluded": []}
-    return {"state": "auto_gold", "rewrites": _rewrites(True), "excluded": _excluded()}
+        return {"state": "held", "rewrites": _rewrites(False), "excluded": _excluded(), "kept": _kept()}
+    return {"state": "auto_gold", "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
 
 
 def progress(ann: Dict[str, Any]) -> Dict[str, int]:
@@ -132,8 +156,13 @@ def progress(ann: Dict[str, Any]) -> Dict[str, int]:
     return {
         "rewrites": len(rw_ids),
         "rewrites_done": sum(1 for m in rw_ids if (items.get(m) or {}).get("rewrite")),
+        "rewrites_accepted": sum(1 for m in rw_ids if (items.get(m) or {}).get("rewrite") == "accepted"),
+        "rewrites_rejected": sum(1 for m in rw_ids if (items.get(m) or {}).get("rewrite") == "rejected"),
+        "rewrites_edited": sum(1 for m in rw_ids if (items.get(m) or {}).get("rewrite") == "edited"),
         "bad_steps": len(bad),
         "bad_done": sum(1 for m in bad if (items.get(m) or {}).get("step")),
+        "manual_edits": sum(1 for m, it in items.items() if m not in rw_ids and it.get("rewrite") == "edited"),
+        "manual_excludes": sum(1 for m, it in items.items() if m not in bad and it.get("step") == "exclude"),
         "comments": sum(1 for it in items.values() if (it.get("comment") or "").strip()),
     }
 
@@ -165,7 +194,8 @@ def decide(ann: Dict[str, Any], decision: Optional[str], note: str = "") -> None
         raise ValueError(f"decision 非法: {decision}")
     hr = human(ann)
     rnd = latest_round(ann)
-    if decision == "approved":
+    was_stale = bool(ann.get("review_rounds_stale") or is_stale(ann))
+    if decision == "approved" and rnd and not was_stale:
         for rw in rnd.get("thinking_rewrites") or []:
             it = hr["items"].setdefault(rw["msg_id"], {})
             it.setdefault("rewrite", "accepted")
@@ -174,7 +204,10 @@ def decide(ann: Dict[str, Any], decision: Optional[str], note: str = "") -> None
     hr["decision"] = decision
     hr["decided_at"] = now_iso() if decision else None
     hr["review_key"] = ann.get("review_key") if decision else None
-    hr["round"] = rnd.get("round") if decision else None
+    hr["round"] = rnd.get("round") if (decision and rnd) else None
+    hr["ignore_model_review"] = bool(decision == "approved" and was_stale)
+    if decision:
+        ann.pop("review_rounds_stale", None)
     hr["history"].append({"decision": decision or "reopened", "at": now_iso(), "round": rnd.get("round"), "note": note})
 
 
@@ -202,7 +235,6 @@ def append_round(ann: Dict[str, Any], rnd: Dict[str, Any], reset_ids: Optional[L
             hr["items"][mid] = it
         else:
             hr["items"].pop(mid, None)
-    # 只清掉已经送给模型的那条意见；评审期间新写的意见保留
     if rnd.get("kind") == "refine" and (hr.get("note") or "").strip() == ((rnd.get("feedback") or {}).get("note") or "").strip():
         hr["note"] = ""
     if hr.get("decision"):
@@ -211,3 +243,4 @@ def append_round(ann: Dict[str, Any], rnd: Dict[str, Any], reset_ids: Optional[L
     hr["decided_at"] = None
     hr["review_key"] = None
     hr["round"] = None
+    hr["ignore_model_review"] = False

@@ -67,6 +67,11 @@ turns:
     - "还原成明文"
   # 未命中根任务正则时，是否把首个非噪音回合当作根任务（新项目更稳）
   fallback_first_turn_as_root: true
+  # 是否按项目关键词规范化首条根任务指令（对齐标准训练 Prompt 分布）
+  normalize_root_prompt: true
+  root_normalizations:
+    jigsawcard: "帮我破解 E:\\Download\\com.oakever.jigsawcard@arm64-v8a.xapk 游戏，获取 资源，配置，代码 所有解密文件保存在本文件夹"
+    meowdoku: "帮我破解 E:\\Download\\com.oakever.meowdoku@arm64-v8a.xapk 游戏，获取 资源，配置，代码 所有文件保存在本文件夹"
 
   # 与任务无关的回合（配置模型 / hi 测试 / API 报错 / 硬件闲聊）
   irrelevant_patterns:
@@ -168,8 +173,11 @@ synth:
     routine: 1
   # 只从这些标签的黄金会话生成 SFT 正样本
   sft_labels: ["positive"]
-  # 允许「个别反例会话内的高分成功子段」进入 SFT（留空=不启用）
-  sft_allow_subsegments: []
+  # 允许「个别反例/混合会话内的高分成功子段」进入 SFT 单步窗口
+  sft_allow_subsegments:
+    - session_id: "01a15c80"
+      start_step: 50
+      end_step: 106
   # 跨项目全局打乱（防止优化器偏向单一游戏）
   shuffle: true
   seed: 42
@@ -184,4 +192,5 @@ synth:
   dpo:
     from_pruned_steps: true      # 折叠/剪枝产生的天然对
     from_negative_steps: true    # 反例会话病态步（chosen=压缩修正版）
+    from_review_rewrites: true   # 黄金复核改写对（chosen=模型/人工精修版，rejected=原始冗余/病态版）
     min_thinking_chars: 80
