@@ -15,7 +15,7 @@ from .common.config import load_config, stage_dirs
 from .common.llm import chat_json
 from .common.store import load_index, read_json, read_jsonl, write_json_atomic
 
-PROMPT_VERSION = "review.v2"
+PROMPT_VERSION = "review.v3"
 
 JUDGE_SYSTEM = """你是工程分析 Agent 训练数据的审核专家。
 给你一条已被脚本提纯的黄金轨迹（含工具调用摘要），判断它是否值得作为 SFT 正样本。
@@ -29,6 +29,8 @@ JUDGE_SCHEMA = """输出 JSON：
 REWRITE_SYSTEM = """你是 Agent 思维链提纯器。把冗长、反复自我推翻的分析 thinking 重写为紧凑版本：
 - 保留：观测到的事实/字节/工具输出 -> 结构假设 -> 下一步验证动作；
 - 删除：自我否定循环（Wait/Actually/Let me reconsider）、默写的大段代码、重复复述任务；
+- 语言不变：输出语言必须与原文一致（英文原文就输出英文，中文原文就输出中文），严禁翻译；
+- 保留段落结构：沿用原文的空行分段与列表格式（如 "- " 短横线项），一个主题一段；禁止把多个主题压成单一密块；
 - 目标 300~1200 字，保持第一人称推理语气，不要输出任何解释或标题。
 严格只输出 JSON。"""
 

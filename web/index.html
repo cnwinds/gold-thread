@@ -220,26 +220,6 @@
   .tl.continuation{color:var(--mint);border-color:rgba(95,185,196,.35)}
   .tl.correction{color:var(--pend);border-color:rgba(169,178,220,.35)}
 
-  /* 消息流 */
-  .msgs{display:flex;flex-direction:column;gap:10px}
-  .msg{border-radius:9px;background:var(--ink-1);border:1px solid var(--line-soft);position:relative;overflow:hidden}
-  .msg::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c,var(--line))}
-  .msg .hd{display:flex;gap:8px;align-items:center;padding:7px 12px 7px 15px;font-size:12px;color:var(--text-3);flex-wrap:wrap}
-  .msg .bd{padding:0 14px 11px 15px;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.65}
-  .msg.role-system{--c:var(--text-3)}
-  .msg.role-user{--c:var(--pend);background:#1d2130}
-  .msg.role-assistant{--c:var(--gold)}
-  .msg.role-tool{--c:#4a5262;background:transparent}
-  .msg.role-tool.err{--c:var(--neg);background:rgba(227,115,95,.06)}
-  .msg details{margin:2px 0 6px}
-  .msg details summary{cursor:pointer;color:var(--text-3);font-size:12px;user-select:none;list-style:none;display:inline-flex;gap:6px;align-items:center}
-  .msg details summary::-webkit-details-marker{display:none}
-  .msg details summary::before{content:"";width:0;height:0;border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
-  .msg details[open]>summary::before{transform:rotate(90deg)}
-  .msg details summary:hover{color:var(--text-2)}
-  .msg pre{margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font-family:var(--f-mono);font-size:12px;line-height:1.55;
-    background:var(--ink-0);border:1px solid var(--line-soft);border-radius:7px;padding:10px 12px;color:var(--text-2)}
-  .msg pre.think{font-family:var(--f-sans);font-size:12.5px;line-height:1.7;color:#c4bfb1;border-color:rgba(217,180,103,.14)}
   .role{font-size:11.5px;font-weight:600;color:var(--c,var(--text-2))}
   .lb{display:inline-block;font-size:11px;padding:0 7px;border-radius:5px;background:var(--ink-3);color:var(--text-2)}
   .lb.fold{background:rgba(169,178,220,.13);color:var(--pend)}
@@ -1101,6 +1081,23 @@ function buildDiff(oldS, newS, caps) {
   }
   return {html: box(L.join("\n"), R.join("\n")), changes: rows.filter(r => !r.eq).length};
 }
+/* 左右栏滚动联动：按比例同步，事件捕获委托，自动覆盖所有 .diff-grid（DPO 对照 / 复核改写卡） */
+let DIFF_SYNC_LOCK = 0;
+document.addEventListener("scroll", e => {
+  const el = e.target;
+  if (!(el instanceof Element) || !el.classList.contains("diff")) return;
+  const grid = el.closest(".diff-grid");
+  if (!grid || Date.now() < DIFF_SYNC_LOCK) return;
+  const boxes = grid.querySelectorAll(":scope > div > .diff");
+  if (boxes.length !== 2) return;
+  const other = boxes[0] === el ? boxes[1] : boxes[0];
+  const maxA = el.scrollHeight - el.clientHeight, maxB = other.scrollHeight - other.clientHeight;
+  if (maxA > 2 && maxB > 2) {
+    other.scrollTop = Math.round((el.scrollTop / maxA) * maxB);
+    DIFF_SYNC_LOCK = Date.now() + 60;
+  }
+}, true);
+
 function cheapGist(a, b) {
   const A = String(a ?? "").split("\n"), B = String(b ?? "").split("\n");
   for (let i = 0; i < Math.max(A.length, B.length); i++) if ((A[i] || "") !== (B[i] || "")) return short(oneLine(B[i] || A[i] || "有改动"), 72);
@@ -1473,7 +1470,6 @@ async function reviewOne(sid) {
 }
 
 /* ------------------------------ 消息渲染 ------------------------------ */
-const ROLE_ZH = {system:"系统", user:"用户", assistant:"助手", tool:"工具", human:"用户", gpt:"助手", observation:"工具结果", function_call:"工具调用"};
 /* 会话按「提问 → 执行过程 → 回复」重组：执行过程默认折叠，逐层展开到单步的完整思考与工具输出。 */
 const TURN_KIND_ZH = {root:"根任务", task:"新任务", continuation:"续接", correction:"纠偏", setup:"准备", noise:"噪音"};
 const FLOW = {items: [], traces: {}, mode: "talk", q: "", openTraces: new Set(), openSteps: new Set(), turnKinds: {}};
@@ -1904,6 +1900,48 @@ function trainRow(r,kind) {
     <td><div class="clip" style="-webkit-line-clamp:2;color:#d3cdbd">${esc(p.think||p.target||"")}</div><div class="faint mono">${esc((p.tools||[]).join(" · "))}</div></td>
     <td><span class="chip ${m.split||""}">${esc(m.split||"–")}</span></td></tr>`;
 }
+/* ShareGPT/OpenAI 训练样本 -> 黄金数据内部消息结构，复用 renderMessages 流式对话视图 */
+function convToMsgs(list) {
+  const msgs = [];
+  let pending = [];
+  let seq = 0;
+  const nid = p => `${p}_${++seq}`;
+  for (const raw of (list || [])) {
+    const from = raw.from || raw.role || "";
+    const val = raw.value ?? (typeof raw.content === "string" ? raw.content : JSON.stringify(raw.content ?? ""));
+    if (from === "system") { msgs.push({role: "system", content: val, timestamp: ""}); continue; }
+    if (from === "human" || from === "user") { msgs.push({role: "user", content: val, timestamp: ""}); continue; }
+    if (from === "observation" || from === "tool") {
+      const call = pending.shift();
+      const rec = {role: "tool", tool_call_id: call?.id || raw.tool_call_id || nid("tr"), name: call?.name || raw.name || "tool",
+        isError: !!(raw.isError), content: val, timestamp: ""};
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "assistant") (last.tool_results ||= []).push(rec);
+      msgs.push(rec);
+      continue;
+    }
+    let think = raw.reasoning_content || "";
+    let text = String(val ?? "");
+    const tm = text.match(/^<think>?\s*\n?([\s\S]*?)\n?<\/think>\s*/i);
+    if (tm) { if (!think) think = tm[1].trim(); text = text.slice(tm[0].length).trim(); }
+    const calls = [];
+    text = text.replace(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi, (_, body) => {
+      try { const o = JSON.parse(body); calls.push({id: nid("call"), name: o.name || "tool", arguments: o.arguments ?? {}}); }
+      catch { calls.push({id: nid("call"), name: "tool", arguments: {raw: body}}); }
+      return "";
+    }).trim();
+    for (const tc of (raw.tool_calls || [])) {
+      const f = tc.function || tc;
+      let args = f.arguments;
+      if (typeof args === "string") { try { args = JSON.parse(args); } catch {} }
+      calls.push({id: tc.id || nid("call"), name: f.name || "tool", arguments: args ?? {}});
+    }
+    pending = calls.map(c => ({id: c.id, name: c.name}));
+    msgs.push({role: "assistant", thinking: think, text, tool_calls: calls, tool_results: [], model: raw.model || "", timestamp: ""});
+  }
+  return msgs;
+}
+
 function renderTrainDetail(row,kind) {
   const meta=row.metadata||row;
   const metaPanel=`<div class="panel"><div class="panel-h"><h3>样本血缘</h3></div><div class="panel-b kv">
@@ -1912,38 +1950,18 @@ function renderTrainDetail(row,kind) {
     const chosen=row.chosen?.value||"", rejected=row.rejected?.value||"";
     return `${metaPanel}<div class="panel"><div class="panel-h"><h3>偏好对照</h3><span class="hint">相同上下文下，模型应偏好左侧 chosen</span></div>
       <div class="panel-b">${buildDiff(rejected,chosen,["Rejected · 不应学习","Chosen · 目标行为"]).html}</div></div>
-      <div class="panel"><div class="panel-h"><h3>上下文</h3></div><div class="panel-b"><div class="msgs">${renderConversation({conversations:row.conversations||[]})}</div></div></div>`;
+      <div class="note" style="margin:10px 0">与黄金数据相同的对话视图 · 这是偏好对触发时所见的上下文，chosen / rejected 目标回复不在其中</div>
+      ${renderMessages(convToMsgs(row.conversations || row.messages))}`;
   }
   if(kind==="diagnostic") return `${metaPanel}<div class="panel"><div class="panel-h"><h3>病态思考原文</h3></div>
     <div class="panel-b"><div class="path-chips" style="margin-bottom:10px">${(row.pathologies||[]).map(x=>`<span>${esc(PATHO_ZH[String(x).split(":")[0]]||x)}</span>`).join("")}</div>
     <div class="think-full">${esc(row.thinking||row.thinking_preview||"")}</div></div></div>
     <div class="panel"><div class="panel-h"><h3>工具动作</h3></div><div class="panel-b mono">${esc((row.tool_calls||[]).join("\n")||"无")}</div></div>`;
-  return `${metaPanel}<div class="panel"><div class="panel-h"><h3>训练上下文与目标</h3><span class="hint">历史 thinking 已剥离，仅最后一步计算 loss</span></div>
-    <div class="panel-b"><div class="msgs">${renderConversation(row)}</div></div></div>`;
+  return `${metaPanel}<div class="note" style="margin-bottom:10px">与黄金数据相同的对话视图 · 历史 thinking 已剥离，窗口内最后一条助手步为训练目标（计算 loss）</div>
+    ${renderMessages(convToMsgs(row.conversations || row.messages))}`;
 }
 
-function renderConversation(row) {
-  const msgs = row.conversations || row.messages || [];
-  return msgs.map(m => {
-    const role = m.from || m.role;
-    let val = m.value ?? (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
-    const cls = (role==="human"||role==="user") ? "role-user" : role==="system" ? "role-system" : role==="observation"||role==="tool" ? "role-tool" : "role-assistant";
-    if (cls !== "role-assistant") return `<div class="msg ${cls}"><div class="hd"><span class="role">${esc(ROLE_ZH[role] || role)}</span></div><div class="bd">${esc(val)}</div></div>`;
-    let think = m.reasoning_content || "", tools = [];
-    const tm = String(val).match(/^<think>?\s*\n?([\s\S]*?)\n?<\/think>\s*/i);
-    if (tm) { if (!think) think=tm[1].trim(); val=String(val).slice(tm[0].length).trim(); }
-    val=String(val).replace(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi,(_,raw)=>{
-      try { const o=JSON.parse(raw); tools.push({name:o.name,args:o.arguments}); } catch { tools.push({name:"tool",args:raw}); } return "";
-    }).trim();
-    for(const tc of (m.tool_calls||[])){ const f=tc.function||tc; tools.push({name:f.name,args:f.arguments}); }
-    return `<div class="msg ${cls}"><div class="hd"><span class="role">${esc(ROLE_ZH[role] || role)}</span>
-      ${tools.length?`<span class="lb">${esc(tools.map(t=>t.name).join(", "))}</span>`:""}</div><div class="bd">
-      ${think?`<details open><summary>目标 thinking · ${chars(think.length)}</summary><pre class="think">${esc(think)}</pre></details>`:""}
-      ${val?`<div class="md">${md(val)}</div>`:""}
-      ${tools.map(t=>`<pre><b style="color:var(--mint)">${esc(t.name)}</b>\n${esc(typeof t.args==="string"?t.args:JSON.stringify(t.args,null,2))}</pre>`).join("")}
-    </div></div>`;
-  }).join("");
-}
+
 
 /* ------------------------------ 配置 ------------------------------ */
 async function loadConfig() {
