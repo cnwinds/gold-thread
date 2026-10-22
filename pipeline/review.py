@@ -38,6 +38,7 @@ REWRITE_SCHEMA = """输出 JSON：
 REFINE_REWRITE_SYSTEM = REWRITE_SYSTEM.replace("严格只输出 JSON。", "") + """这是复核后的修订轮：人工审阅了你上一版改写（previous_rewrite），并给出意见。
 - 以 original_thinking 为唯一事实来源，不得引入原文没有的偏移、数值、路径、结论；
 - 必须落实 reviewer_comment 与 reviewer_note；被拒绝（reviewer_rejected_previous=true）说明上一版有实质问题，不要小修小补；
+- reviewer_edited_previous=true 时 previous_rewrite 是人工改过的版本，在它的基础上吸收意见，不要退回更早的表述；
 - 若意见与原文事实冲突，以原文为准，并在 reply 里说明。
 严格只输出 JSON。"""
 
@@ -221,8 +222,13 @@ def refine_session(
                 {
                     "msg_id": mid,
                     "original_thinking": (by_id[mid].get("thinking") or "")[:8000],
-                    "previous_rewrite": prev_rw.get(mid),
+                    "previous_rewrite": (
+                        (targets[mid].get("edited_text") or "").strip()
+                        if targets[mid].get("rewrite") == "edited"
+                        else prev_rw.get(mid)
+                    ),
                     "reviewer_rejected_previous": targets[mid].get("rewrite") == "rejected",
+                    "reviewer_edited_previous": targets[mid].get("rewrite") == "edited",
                     "reviewer_comment": (targets[mid].get("comment") or "").strip(),
                 }
                 for mid in rw_targets[bi : bi + batch_size]

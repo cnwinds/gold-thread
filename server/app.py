@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import threading
@@ -19,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from pipeline import curation
 from pipeline.common import pilog
 from pipeline.common.config import (
     CONFIG_PATH,
@@ -114,6 +116,9 @@ def _run_job(job: Job) -> None:
             job.result = run_review(
                 session_ids=job.extra.get("sessions"), force=job.force, log=job.log, cfg=cfg
             )
+        elif job.stage == "refine":
+            from pipeline.review import run_refine
+            job.result = run_refine((job.extra.get("sessions") or [None])[0], log=job.log, cfg=cfg)
         elif job.stage == "classify":
             from pipeline.turnclassify import classify_session
             sid = (job.extra.get("sessions") or [None])[0]
@@ -234,8 +239,8 @@ class RunBody(BaseModel):
 
 @app.post("/api/run")
 def run_stage(body: RunBody) -> Dict[str, Any]:
-    if body.stage not in ("stage1", "stage2", "stage3", "all", "review", "classify"):
-        raise HTTPException(400, "stage 必须是 stage1|stage2|stage3|all|review")
+    if body.stage not in ("stage1", "stage2", "stage3", "all", "review", "refine", "classify"):
+        raise HTTPException(400, "stage 必须是 stage1|stage2|stage3|all|review|refine")
     job = _start(body.stage, body.force, {"sessions": body.sessions})
     return {"job_id": job.id}
 
@@ -274,10 +279,12 @@ def overview() -> Dict[str, Any]:
     runs = read_json(dirs["state"] / "runs.json", default=[]) or []
     last_review = next((r for r in runs if r.get("stage") == "review"), None)
     reviewed = 0
+    review_states: Counter = Counter()
     for v in gold_index["sessions"].values():
         ann = read_json(Path(v.get("annotation_file", "")), default={}) or {}
         if ann.get("model_review"):
             reviewed += 1
+        review_states[curation.resolve(ann, cfg)["state"]] += 1
     state = {
         s: read_json(dirs["state"] / f"{s}.json", default={}) or {}
         for s in ("stage1", "stage2")
@@ -327,6 +334,7 @@ def overview() -> Dict[str, Any]:
             "review": {
                 "last_run": (last_review or {}).get("finished_at"),
                 "reviewed": reviewed,
+                "states": dict(review_states),
             },
         },
         "labels": dict(labels),
@@ -449,6 +457,7 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
         if q and q.lower() not in json.dumps(e, ensure_ascii=False).lower():
             continue
         ann = read_json(Path(e.get("annotation_file", "")), default={}) or {}
+        eff = curation.resolve(ann, cfg)
         rows.append(
             {
                 **{k: v for k, v in e.items() if k != "annotation_file"},
@@ -456,6 +465,9 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
                 "script_status": ann.get("status"),
                 "review_confidence": (ann.get("model_review") or {}).get("confidence"),
                 "rewrites": len((ann.get("model_review") or {}).get("thinking_rewrites") or []),
+                "effective": eff["state"],
+                "review_round": curation.latest_round(ann).get("round"),
+                "review_progress": curation.progress(ann),
             }
         )
     rows.sort(key=lambda r: (r.get("label", ""), r.get("project_group", ""), r["session_id"]))
@@ -472,9 +484,13 @@ def gold_session(sid: str) -> Dict[str, Any]:
     rows = read_jsonl(Path(e["gold_file"]))
     if not rows:
         raise HTTPException(404, "黄金文件为空")
+    ann = copy.deepcopy(read_json(Path(e["annotation_file"]), default={}) or {})
+    curation.ensure_rounds(ann)
     return {
         "record": rows[0],
-        "annotation": read_json(Path(e["annotation_file"]), default={}) or {},
+        "annotation": ann,
+        "effective": curation.resolve(ann, cfg)["state"],
+        "progress": curation.progress(ann),
         "pruned": read_jsonl(Path(e["reject_file"])) if e.get("reject_file") else [],
         "dpo": read_jsonl(Path(e["dpo_file"])) if e.get("dpo_file") else [],
     }
@@ -483,6 +499,71 @@ def gold_session(sid: str) -> Dict[str, Any]:
 @app.post("/api/gold/session/{sid}/review")
 def review_one(sid: str) -> Dict[str, Any]:
     job = _start("review", False, {"sessions": [sid]})
+    return {"job_id": job.id}
+
+
+class ReviewItemsBody(BaseModel):
+    items: Dict[str, Dict[str, Any]] = {}
+    note: Optional[str] = None
+
+
+class ReviewDecisionBody(BaseModel):
+    decision: Optional[str] = None
+    note: str = ""
+
+
+def _gold_entry(sid: str) -> Dict[str, Any]:
+    cfg = load_config()
+    e = load_index(stage_dirs(cfg)["gold"] / "index.json")["sessions"].get(sid)
+    if not e:
+        raise HTTPException(404, "黄金数据不存在")
+    return e
+
+
+def _load_ann(sid: str) -> tuple:
+    e = _gold_entry(sid)
+    path = Path(e["annotation_file"])
+    return path, read_json(path, default={}) or {}
+
+
+@app.put("/api/gold/session/{sid}/review/items")
+def save_review_items(sid: str, body: ReviewItemsBody) -> Dict[str, Any]:
+    path, ann = _load_ann(sid)
+    try:
+        curation.update_items(ann, body.items, body.note)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    write_json_atomic(path, ann)
+    return {"ok": True, "progress": curation.progress(ann)}
+
+
+@app.post("/api/gold/session/{sid}/review/decision")
+def review_decision(sid: str, body: ReviewDecisionBody) -> Dict[str, Any]:
+    path, ann = _load_ann(sid)
+    if not curation.latest_round(ann):
+        raise HTTPException(409, "该会话还没有模型评审")
+    if body.decision == "approved" and (ann.get("review_rounds_stale") or curation.is_stale(ann)):
+        raise HTTPException(409, "会话内容已变化，请先让模型重新评审")
+    try:
+        curation.decide(ann, body.decision, body.note)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    write_json_atomic(path, ann)
+    eff = curation.resolve(ann, load_config())
+    return {"ok": True, "effective": eff["state"], "note": "重新运行 stage3 后生效"}
+
+
+@app.post("/api/gold/session/{sid}/review/refine")
+def review_refine(sid: str, body: ReviewItemsBody) -> Dict[str, Any]:
+    path, ann = _load_ann(sid)
+    try:
+        curation.update_items(ann, body.items, body.note)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not curation.feedback_targets(ann) and not (ann.get("human_review") or {}).get("note", "").strip():
+        raise HTTPException(400, "没有可供模型修订的意见：请先批注步骤、拒绝改写或填写整体意见")
+    write_json_atomic(path, ann)
+    job = _start("refine", False, {"sessions": [sid]})
     return {"job_id": job.id}
 
 

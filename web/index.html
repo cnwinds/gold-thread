@@ -134,7 +134,7 @@
   .tag::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c,var(--text-3))}
   .t-positive{--c:var(--pos)} .t-negative{--c:var(--neg)} .t-pending{--c:var(--pend)}
   .t-done{--c:var(--pos)} .t-failed{--c:var(--neg)} .t-running{--c:var(--gold)}
-  .t-gold{--c:var(--gold)} .t-reject{--c:var(--neg)}
+  .t-gold{--c:var(--gold)} .t-reject{--c:var(--neg)} .t-stale{--c:var(--ore)}
   .t-running::before{animation:pulse 1.2s ease-in-out infinite}
   @keyframes pulse{50%{opacity:.25}}
   .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 9px;border-radius:999px;
@@ -340,6 +340,8 @@
   .call.e b{color:var(--neg)}
   .more-calls{flex:none;font-size:11.5px;color:var(--text-3)}
   .step.flash>.step-row{animation:flash 1.4s ease-out}
+  .step.rev-bad>.step-row{box-shadow:inset 2px 0 0 var(--neg)}
+  .step.rev-rw>.step-row{box-shadow:inset 2px 0 0 var(--gold)}
   @keyframes flash{from{background:rgba(217,180,103,.28)}}
   .step-d{display:flex;flex-direction:column;gap:10px;padding:6px 16px 16px 56px;background:var(--ink-2)}
   .step-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11.5px;color:var(--text-3)}
@@ -362,6 +364,32 @@
 
   .pruned-item{padding:10px 0;border-bottom:1px dashed var(--line-soft)}
   .pruned-item:last-child{border-bottom:none}
+
+  /* 人工复核 */
+  .rev-card{border:1px solid var(--line-soft);border-radius:10px;background:var(--ink-0);margin-bottom:10px}
+  .rev-card>summary{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px;cursor:pointer;list-style:none}
+  .rev-card>summary::-webkit-details-marker{display:none}
+  .rev-card>summary::before{content:"";flex:none;width:0;height:0;border-left:5px solid var(--text-3);border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+  .rev-card[open]>summary::before{transform:rotate(90deg)}
+  .rev-card .body{padding:0 12px 12px}
+  .rev-card .gist{color:var(--text-2);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+  .rev-acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+  .rev-acts button{padding:3px 9px;font-size:12px}
+  button.rev-on[data-rev="accepted"],button.rev-on[data-rev="keep"]{background:rgba(143,196,127,.16);border-color:rgba(143,196,127,.45);color:#d5ebcc}
+  button.rev-on[data-rev="rejected"],button.rev-on[data-rev="exclude"]{background:rgba(227,115,95,.14);border-color:rgba(227,115,95,.5);color:#f0a091}
+  button.rev-on[data-rev="edited"]{background:rgba(217,180,103,.14);border-color:rgba(217,180,103,.5);color:var(--gold)}
+  .diff-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .diff-cap{font-size:12px;color:var(--text-3);margin-bottom:4px}
+  .diff{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.7;max-height:320px;overflow:auto;padding:10px 12px;background:#12151a;border:1px solid var(--line-soft);border-radius:8px;color:#d3cdbd}
+  .diff del{background:rgba(227,115,95,.28);text-decoration:none;border-radius:2px}
+  .diff ins{background:rgba(143,196,127,.26);text-decoration:none;border-radius:2px}
+  textarea.rev-editbox,textarea.rev-comment,textarea.rev-note{display:block;width:100%;resize:vertical;line-height:1.7}
+  textarea.rev-editbox{min-height:140px;margin-top:8px;font-size:12.5px}
+  textarea.rev-comment{min-height:52px;margin-top:6px;font-size:12.5px}
+  textarea.rev-note{min-height:68px}
+  .round-item{padding:8px 0;border-bottom:1px dashed var(--line-soft)}
+  .round-item:last-child{border-bottom:none}
+  .banner{padding:10px 12px;border-radius:8px;background:rgba(217,180,103,.08);border:1px solid rgba(217,180,103,.28);color:#e6d7b0;font-size:13px;margin-bottom:12px}
 
   /* ---------- 运行 ---------- */
   .pipeline{display:grid;grid-template-columns:repeat(3,1fr) 22px 1fr;gap:0;align-items:stretch}
@@ -411,7 +439,7 @@
   .error-box b{color:#f0a091}
 
   @media (max-width:1100px){
-    .grid2,.grid2.even{grid-template-columns:1fr}
+    .grid2,.grid2.even,.diff-grid{grid-template-columns:1fr}
     .pipeline{grid-template-columns:1fr}
     .pipeline>.spacer{display:none}
     .pipe-step,.pipe-step:first-child,.pipe-step:nth-child(3){border-radius:12px;border-left:1px solid var(--line-soft)!important;margin-bottom:10px}
@@ -522,13 +550,16 @@ const SKIP_ZH = {non_crack_folder:"非目标目录", excluded_folder:"排除目�
 const PAGES = {
   overview: ["概览", "原始会话经过提纯与合成后，每一阶段留下了多少，又剪掉了多少。"],
   raw:      ["原始数据", "从 pi 会话目录准入的不可变副本，附回合标注。点开会话可查看消息流并修改标签。"],
-  gold:     ["黄金数据", "经过状态折叠、弯路剪枝与思维链去噪后的会话。模型只输出标注，不直接改动数据。"],
+  gold:     ["黄金数据", "提纯后的会话。模型给出改写和存废建议；标成待复核的，要在这里人工通过后才会进入训练集。"],
   train:    ["训练数据", "stage3 合成的 SFT 与 DPO 数据集，可逐条查看样本。"],
   runs:     ["运行", "按阶段增量运行或全量重建。模型调用已缓存，重跑不会重复计费。"],
   config:   ["配置", "直接编辑 pipeline.yaml，保存后重跑管线生效。"],
 };
 
-let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:""}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:""}, job: null, drawerData: null, poured: false };
+let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:"", eff:""}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:""}, job: null, drawerData: null, poured: false };
+const REV = {active:false, sid:null, items:{}, note:"", originals:{}, modelRw:{}, bad:new Set(), rewritten:new Set(), pairs:{}, timer:null, dirty:false, hasReview:false, roundsStale:false};
+const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模型通过", auto_reject:"模型剔除", held:"待人工复核", stale:"过期待确认", unreviewed:"未评审"};
+const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
 
 async function api(path, opts={}) {
   const res = await fetch(path, {headers: {"Content-Type":"application/json"}, ...opts});
@@ -556,6 +587,10 @@ const stamp = iso => iso ? String(iso).replace("T", " ").replace(/[+-]\d\d:\d\d$
 function labelBadge(l) { return `<span class="tag t-${esc(l||"none")}">${esc(LABEL_ZH[l] || l || "未知")}</span>`; }
 function runTag(s) { return `<span class="tag t-${esc(s)}">${esc(RUN_ZH[s] || s)}</span>`; }
 function verdictTag(v) { return `<span class="tag t-${v==="gold"?"gold":v==="reject"?"reject":"pending"}">${esc(VERDICT_ZH[v] || v)}</span>`; }
+function effTag(s) {
+  const cls = s==="approved"||s==="auto_gold" ? "gold" : s==="rejected"||s==="auto_reject" ? "reject" : s==="stale" ? "stale" : "pending";
+  return `<span class="tag t-${cls}">${esc(EFF_ZH[s] || s || "未评审")}</span>`;
+}
 function segbar(parts, cls="") {
   return `<span class="seg ${cls}">${parts.filter(p => p.v > 0).map(p =>
     `<i style="flex:${p.v};background:${p.c}" title="${esc(p.t)}：${p.v}"></i>`).join("")}</span>`;
@@ -664,7 +699,7 @@ async function loadOverview() {
         <div class="station" style="--c:${COLORS.gold}">
           <div class="cap"><i></i>黄金步</div>
           <div class="big">${fmt(gold)}</div>
-          <div class="sub">${raw ? `折叠与剪枝去掉 ${fmt(cut)} 步，保留 ${(gold/raw*100).toFixed(1)}%` : "尚未提纯"}</div>
+          <div class="sub">${raw ? `折叠与剪枝去掉 ${fmt(cut)} 步，保留 ${(gold/raw*100).toFixed(1)}%` : "尚未提纯"}${((d.stages.review?.states?.held||0)+(d.stages.review?.states?.stale||0)) ? ` · 待复核 ${(d.stages.review.states.held||0)+(d.stages.review.states.stale||0)}，未入库` : ""}</div>
         </div>
         <div class="station" style="--c:${COLORS.mint}">
           <div class="cap"><i></i>SFT 单步窗口</div>
@@ -796,6 +831,7 @@ function bindRows(scope, fn) {
 }
 
 async function openRaw(sid) {
+  REV.active = false;
   openDrawer(`原始会话 ${sid.slice(0,8)}`, "stage1 视图，已应用回合过滤");
   $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
   const d = await api(`/api/raw/session/${sid}`);
@@ -834,23 +870,279 @@ async function relabel(sid, label) {
     toast(`已将 ${sid.slice(0,8)} 标为${LABEL_ZH[label]}，重跑 stage1 后生效`, "ok"); } catch (e) { toast(e.message, "err"); }
 }
 
-/* ------------------------------ 黄金数据 ------------------------------ */
+/* ------------------------------ 黄金数据 / 人工复核 ------------------------------ */
+function effCtl(cur, counts) {
+  return `<div class="seg-ctl" id="goldEff">${[["","全部",counts.all],["queue","待复核",counts.queue],["pass","已通过",counts.pass],["block","不入库",counts.block],["unreviewed","未评审",counts.unreviewed]]
+    .map(([v,t,n]) => `<button data-v="${v}" class="${cur===v?"on":""}">${t}${n?` <span class="num">${n}</span>`:""}</button>`).join("")}</div>`;
+}
+function lcsDiff(a, b) {
+  const n = a.length, m = b.length;
+  if (n * m > 250000) return null;
+  const dp = Array.from({length: n + 1}, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { ops.push(["eq", a[i]]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push(["del", a[i++]]); }
+    else ops.push(["ins", b[j++]]);
+  }
+  while (i < n) ops.push(["del", a[i++]]);
+  while (j < m) ops.push(["ins", b[j++]]);
+  return ops;
+}
+function tokenPair(l, r) {
+  const cut = s => s.match(/[A-Za-z0-9_./:+#-]+|\s+|[\u4e00-\u9fff]|./g) || [];
+  const ops = lcsDiff(cut(l), cut(r));
+  if (!ops) return {l:`<del>${esc(l)}</del>`, r:`<ins>${esc(r)}</ins>`};
+  let L = "", R = "";
+  for (const [op, t] of ops) {
+    if (op === "eq") { L += esc(t); R += esc(t); }
+    else if (op === "del") L += `<del>${esc(t)}</del>`;
+    else R += `<ins>${esc(t)}</ins>`;
+  }
+  return {l:L, r:R};
+}
+function buildDiff(oldS, newS, caps) {
+  oldS = String(oldS ?? ""); newS = String(newS ?? "");
+  const capL = (caps && caps[0]) || "原文", capR = (caps && caps[1]) || "模型改写";
+  if (oldS === newS) return {html:`<div class="faint">两边相同</div>`, changes:0};
+  const ops = lcsDiff(oldS.split("\n"), newS.split("\n"));
+  const box = (l, r) => `<div class="diff-grid"><div><div class="diff-cap">${capL}</div><div class="diff">${l}</div></div><div><div class="diff-cap">${capR}</div><div class="diff">${r}</div></div></div>`;
+  if (!ops) return {html: box(esc(oldS), esc(newS)), changes:-1};
+  const rows = [];
+  for (let k = 0; k < ops.length;) {
+    if (ops[k][0] === "eq") { rows.push({l:esc(ops[k][1]), r:esc(ops[k][1]), eq:true}); k++; continue; }
+    const dels = [], ins = [];
+    while (k < ops.length && ops[k][0] !== "eq") { (ops[k][0] === "del" ? dels : ins).push(ops[k][1]); k++; }
+    for (let t = 0; t < Math.max(dels.length, ins.length); t++) {
+      const lt = dels[t], rt = ins[t];
+      if (lt != null && rt != null) { const td = tokenPair(lt, rt); rows.push({l:td.l, r:td.r, eq:false}); }
+      else rows.push({l: lt != null ? `<del>${esc(lt)}</del>` : "", r: rt != null ? `<ins>${esc(rt)}</ins>` : "", eq:false});
+    }
+  }
+  const L = [], R = [];
+  for (let i = 0; i < rows.length;) {
+    if (!rows[i].eq) { L.push(rows[i].l); R.push(rows[i].r); i++; continue; }
+    let j = i; while (j < rows.length && rows[j].eq) j++;
+    if (j - i > 6) {
+      L.push(rows[i].l, `<span class="faint">… ${j - i - 2} 行未改</span>`, rows[j - 1].l);
+      R.push(rows[i].r, `<span class="faint">… ${j - i - 2} 行未改</span>`, rows[j - 1].r);
+    } else for (let t = i; t < j; t++) { L.push(rows[t].l); R.push(rows[t].r); }
+    i = j;
+  }
+  return {html: box(L.join("\n"), R.join("\n")), changes: rows.filter(r => !r.eq).length};
+}
+function cheapGist(a, b) {
+  const A = String(a ?? "").split("\n"), B = String(b ?? "").split("\n");
+  for (let i = 0; i < Math.max(A.length, B.length); i++) if ((A[i] || "") !== (B[i] || "")) return short(oneLine(B[i] || A[i] || "有改动"), 72);
+  return "有改动";
+}
+function revItem(mid) { return REV.items[mid] || (REV.items[mid] = {rewrite:null, edited_text:"", step:null, comment:""}); }
+function revItemsPayload() {
+  const out = {};
+  for (const [mid, it] of Object.entries(REV.items)) out[mid] = {
+    rewrite: it.rewrite || null,
+    edited_text: it.rewrite === "edited" ? (it.edited_text || "") : null,
+    step: it.step || null,
+    comment: it.comment || null,
+  };
+  return out;
+}
+async function revFlush() {
+  clearTimeout(REV.timer);
+  if (!REV.sid || !REV.dirty) return;
+  const sid = REV.sid, items = revItemsPayload(), note = REV.note;
+  REV.dirty = false;
+  const el = $("#revSave"); if (el) el.textContent = "保存中…";
+  try {
+    await api(`/api/gold/session/${sid}/review/items`, {method:"PUT", body: JSON.stringify({items, note})});
+    if ($("#revSave") && REV.sid === sid) $("#revSave").textContent = "已保存";
+  } catch (e) { REV.dirty = true; toast(e.message, "err"); }
+}
+function revTouch() {
+  REV.dirty = true;
+  const el = $("#revSave"); if (el) el.textContent = "未保存";
+  clearTimeout(REV.timer);
+  REV.timer = setTimeout(revFlush, 500);
+}
+function revInput(el) {
+  if (el.dataset.field === "note") REV.note = el.value;
+  else {
+    const it = revItem(el.dataset.mid);
+    if (el.dataset.field === "comment") it.comment = el.value;
+    if (el.dataset.field === "edit") { it.edited_text = el.value; it.rewrite = "edited"; revSync(el.dataset.mid); }
+  }
+  revTouch();
+}
+function revSync(mid) {
+  const it = REV.items[mid] || {};
+  const pill = it.rewrite === "accepted" ? "已采纳" : it.rewrite === "rejected" ? "不采纳" : it.rewrite === "edited" ? "手改" : it.step === "exclude" ? "将排除" : it.step === "keep" ? "保留" : "未处置";
+  $$(`[data-revcard="${CSS.escape(mid)}"]`).forEach(card => {
+    card.querySelectorAll("button[data-rev]").forEach(b => b.classList.toggle("rev-on", b.dataset.rev === it.rewrite || b.dataset.rev === it.step));
+    const ed = card.querySelector(".rev-editbox");
+    if (ed) ed.classList.toggle("hidden", it.rewrite !== "edited");
+    const p = card.querySelector("[data-pill]");
+    if (p) p.textContent = pill;
+  });
+}
+function revAct(btn) {
+  const mid = btn.dataset.mid, kind = btn.dataset.rev, it = revItem(mid);
+  if (kind === "exclude" || kind === "keep") it.step = it.step === kind ? null : kind;
+  else if (it.rewrite === kind) it.rewrite = null;
+  else {
+    it.rewrite = kind;
+    if (kind === "edited" && !it.edited_text) it.edited_text = REV.modelRw[mid] || REV.originals[mid] || "";
+  }
+  revSync(mid);
+  if (it.rewrite === "edited") {
+    const ta = document.querySelector(`[data-revcard="${CSS.escape(mid)}"] textarea.rev-editbox`);
+    if (ta) { if (!ta.value) ta.value = it.edited_text || ""; ta.focus(); }
+  }
+  revTouch();
+}
+function revLazy(el) {
+  if (!el.open) return;
+  $$(".diff-slot", el).forEach(slot => {
+    if (slot.dataset.done) return;
+    const p = REV.pairs[slot.dataset.pair];
+    slot.innerHTML = p ? buildDiff(p.old, p.new, p.caps).html : "";
+    slot.dataset.done = "1";
+  });
+}
+function revExpand(open) { $$("#revList details").forEach(d => { d.open = open; if (open) revLazy(d); }); }
+async function revDecide(decision) {
+  if (!REV.active || !REV.sid) return;
+  if (!REV.hasReview && !REV.roundsStale) { toast("还没有模型评审"); return; }
+  if (decision === "approved" && REV.roundsStale) { toast("会话内容已变化，请先重新评审", "err"); return; }
+  await revFlush();
+  try {
+    await api(`/api/gold/session/${REV.sid}/review/decision`, {method:"POST", body: JSON.stringify({decision})});
+    toast(decision === "approved" ? "已通过。未处置的改写已采纳，问题步已排除；重跑 stage3 后入库" : decision === "rejected" ? "已驳回，不会进入训练集" : "已撤销结论", "ok");
+    const sid = REV.sid;
+    if (STATE.tab === "gold") loadGold().catch(() => {});
+    openGold(sid);
+  } catch (e) { toast(e.message, "err"); }
+}
+function revMove(dir) {
+  const ids = STATE.gold.ids || [], i = ids.indexOf(REV.sid);
+  if (i < 0) { toast("当前列表里没有这条会话"); return; }
+  const n = ids[i + dir];
+  if (!n) { toast(dir > 0 ? "已经是最后一条" : "已经是第一条"); return; }
+  openGold(n);
+}
+async function revRefine() {
+  if (!REV.hasReview) { toast("还没有可修订的评审"); return; }
+  const note = REV.note.trim();
+  const targeted = Object.values(REV.items).some(it => (it.comment || "").trim() || it.rewrite === "rejected");
+  if (!note && !targeted) { toast("先写整体意见，或在某一步拒绝改写 / 写下批注", "err"); return; }
+  await revFlush();
+  try {
+    const sid = REV.sid;
+    const {job_id} = await api(`/api/gold/session/${sid}/review/refine`, {method:"POST", body: JSON.stringify({items: revItemsPayload(), note: REV.note})});
+    toast("已提交。模型只重做你批注或拒绝的步骤", "ok");
+    watchJob(job_id, () => openGold(sid));
+  } catch (e) { toast(e.message, "err"); }
+}
+function renderRewriteCard(rw, idx, bad) {
+  const mid = rw.msg_id, it = REV.items[mid] || {};
+  const oldS = REV.originals[mid] || "", neu = rw.rewritten || "";
+  const key = "rw:" + mid;
+  REV.pairs[key] = {old: oldS, new: neu};
+  const attn = it.rewrite === "rejected" || it.rewrite === "edited" || (it.comment || "").trim() || bad;
+  const pill = it.rewrite === "accepted" ? "已采纳" : it.rewrite === "rejected" ? "不采纳" : it.rewrite === "edited" ? "手改" : "未处置";
+  const on = name => (it.rewrite === name || it.step === name) ? "rev-on" : "";
+  return `<details class="rev-card" id="revc-${esc(mid)}" data-revcard="${esc(mid)}" ${attn || idx === 0 ? "open" : ""} ontoggle="revLazy(this)">
+    <summary>
+      <span class="mono faint">${idx + 1}</span>
+      <span class="mono">${esc(String(mid).slice(0, 8))}</span>
+      ${bad ? `<span class="lb prune">问题步</span>` : ""}
+      <span class="faint">${chars(oldS.length)} → ${chars(neu.length)}</span>
+      <span class="gist">${esc(cheapGist(oldS, neu))}</span>
+      <span class="chip" data-pill>${pill}</span>
+    </summary>
+    <div class="body">
+      <div class="diff-slot" data-pair="${esc(key)}"></div>
+      <div class="rev-acts" onclick="event.stopPropagation()">
+        <button data-rev="accepted" data-mid="${esc(mid)}" class="${on("accepted")}" onclick="revAct(this)">采纳</button>
+        <button data-rev="rejected" data-mid="${esc(mid)}" class="${on("rejected")}" onclick="revAct(this)">不采纳</button>
+        <button data-rev="edited" data-mid="${esc(mid)}" class="${on("edited")}" onclick="revAct(this)">手改</button>
+        ${bad ? `<button data-rev="exclude" data-mid="${esc(mid)}" class="${on("exclude")}" onclick="revAct(this)">排除此步</button>
+          <button data-rev="keep" data-mid="${esc(mid)}" class="${on("keep")}" onclick="revAct(this)">保留此步</button>` : ""}
+        <button class="ghost" onclick="jumpMsg('${mid}')">定位到对话</button>
+      </div>
+      <textarea class="rev-editbox ${it.rewrite === "edited" ? "" : "hidden"}" data-field="edit" data-mid="${esc(mid)}" oninput="revInput(this)" placeholder="你的版本，通过后用这段替换模型改写">${esc(it.edited_text || "")}</textarea>
+      <textarea class="rev-comment" data-field="comment" data-mid="${esc(mid)}" oninput="revInput(this)" placeholder="修改意见。拒绝或写下意见后，可以让模型只重做这一步">${esc(it.comment || "")}</textarea>
+    </div>
+  </details>`;
+}
+function renderBadRow(mid) {
+  const it = REV.items[mid] || {};
+  const on = name => it.step === name ? "rev-on" : "";
+  return `<div class="rev-card" data-revcard="${esc(mid)}" style="padding:10px 12px">
+    <div class="row"><span class="mono">${esc(String(mid).slice(0, 8))}</span><span class="gist">${esc(short(firstLine(REV.originals[mid] || ""), 90) || "没有思考内容")}</span>
+      <span class="chip" data-pill>${it.step === "exclude" ? "将排除" : it.step === "keep" ? "保留" : "未处置"}</span></div>
+    <div class="rev-acts">
+      <button data-rev="exclude" data-mid="${esc(mid)}" class="${on("exclude")}" onclick="revAct(this)">排除此步</button>
+      <button data-rev="keep" data-mid="${esc(mid)}" class="${on("keep")}" onclick="revAct(this)">这是误判，保留</button>
+      <button class="ghost" onclick="jumpMsg('${mid}')">定位到对话</button>
+    </div>
+    <textarea class="rev-comment" data-field="comment" data-mid="${esc(mid)}" oninput="revInput(this)" placeholder="这条为什么有问题，或为什么是误判">${esc(it.comment || "")}</textarea>
+  </div>`;
+}
+function renderRounds(rounds) {
+  if (!rounds.length) return "";
+  return `<div class="panel"><div class="panel-h"><h3>评审轮次</h3><span class="hint">${rounds.length} 轮，只追加不覆盖</span></div><div class="panel-b">
+    ${rounds.map((r, i) => {
+      const prev = i ? Object.fromEntries((rounds[i - 1].thinking_rewrites || []).map(x => [x.msg_id, x.rewritten])) : null;
+      const cur = Object.fromEntries((r.thinking_rewrites || []).map(x => [x.msg_id, x.rewritten]));
+      const diffs = (r.changed_msg_ids || []).map(mid => {
+        const key = `rd:${r.round}:${mid}`;
+        REV.pairs[key] = {old: (prev && prev[mid]) || REV.originals[mid] || "", new: cur[mid] || "", caps:["上一轮", "本轮"]};
+        const reply = (r.replies || {})[mid];
+        return `<div style="margin-top:8px"><div class="row"><span class="mono faint">${esc(String(mid).slice(0, 8))}</span>${reply ? `<span class="muted">${esc(reply)}</span>` : ""}</div><div class="diff-slot" data-pair="${esc(key)}"></div></div>`;
+      }).join("");
+      return `<details class="round-item" ontoggle="revLazy(this)"><summary class="row" style="cursor:pointer">
+        <span>第 ${r.round || i + 1} 轮${r.kind === "refine" ? " · 按意见修订" : " · 初评"}</span>
+        ${verdictTag(r.verdict)}
+        <span class="faint">置信度 <span class="num">${fmt(r.confidence)}</span></span>
+        ${(r.changed_msg_ids || []).length ? `<span class="chip">改了 <b>${r.changed_msg_ids.length}</b> 步</span>` : ""}
+        <span class="grow"></span><span class="faint">${esc(stamp(r.at || ""))}</span>
+      </summary><div style="padding-top:8px">
+        ${(r.reasons || []).map(x => `<div>${esc(x)}</div>`).join("")}
+        ${r.judge_reply ? `<div class="muted" style="margin-top:6px">模型回应：${esc(r.judge_reply)}</div>` : ""}
+        ${r.feedback?.note ? `<div class="muted" style="margin-top:6px">当时的意见：${esc(r.feedback.note)}</div>` : ""}
+        ${diffs}
+      </div></details>`;
+    }).join("")}
+  </div></div>`;
+}
+
 async function loadGold() {
   const f = STATE.gold;
   const d = await api(`/api/gold/sessions?label=${encodeURIComponent(f.label)}&project=${encodeURIComponent(f.project)}&q=${encodeURIComponent(f.q)}`);
+  const counts = {all: d.sessions.length, queue:0, pass:0, block:0, unreviewed:0};
+  for (const s of d.sessions) {
+    s.effective = s.effective || "unreviewed";
+    for (const [k, fn] of Object.entries(EFF_GROUP)) if (fn(s.effective)) counts[k]++;
+  }
+  const rows = d.sessions.filter(s => !f.eff || (EFF_GROUP[f.eff] && EFF_GROUP[f.eff](s.effective)));
+  STATE.gold.ids = rows.map(s => s.session_id);
   $("#view-gold").innerHTML = `
     <div class="panel">
       <div class="toolbar">
         ${labelSeg_ctl("goldLabel", f.label)}
+        ${effCtl(f.eff, counts)}
         <input type="text" id="goldSearch" placeholder="搜索会话 ID 或根任务，回车确认" value="${esc(f.q)}">
         <span class="grow"></span>
-        <span class="count"><b>${d.total}</b> 个会话</span>
+        <span class="count"><b>${rows.length}</b>${rows.length !== d.total ? ` / ${d.total}` : ""} 个会话</span>
         <button id="goldReload" class="ghost">刷新</button>
       </div>
       <div class="scroll"><table><thead><tr>
-        <th>会话</th><th>标签</th><th>项目</th><th>原始 → 黄金</th><th class="n">折叠</th><th class="n">剪枝</th><th class="n">DPO</th><th>模型评审</th><th>脚本判定</th>
+        <th>会话</th><th>标签</th><th>项目</th><th>原始 → 黄金</th><th class="n">折叠</th><th class="n">剪枝</th><th class="n">DPO</th><th>复核</th><th>脚本判定</th>
       </tr></thead><tbody>
-      ${d.sessions.map(s => {
+      ${rows.map(s => {
         const r = s.stats?.raw_steps || 0, g = s.stats?.gold_steps || 0;
         return `<tr class="clickable" data-sid="${esc(s.session_id)}" tabindex="0">
         <td class="sid">${esc(s.session_id.slice(0,8))}</td>
@@ -863,46 +1155,97 @@ async function loadGold() {
         <td class="n">${fmt(s.stats?.folded)}</td>
         <td class="n">${fmt(s.stats?.pruned_detours)}</td>
         <td class="n">${fmt(s.dpo_count ?? (s.stats?.pruned_detours||0))}</td>
-        <td>${s.review_status ? verdictTag(s.review_status) : `<span class="faint">未评审</span>`}</td>
+        <td>${effTag(s.effective)}${s.review_round ? ` <span class="faint mono" style="font-size:11px">第${s.review_round}轮</span>` : ""}</td>
         <td class="muted" title="${esc(s.script_status||s.status||"")}">${esc(SCRIPT_ZH[s.script_status||s.status] || s.script_status || s.status || "")}</td>
-      </tr>`;}).join("") || emptyRow(9, "还没有黄金数据，先运行 stage2")}
+      </tr>`;}).join("") || emptyRow(9, d.sessions.length ? "这个筛选下没有会话" : "还没有黄金数据，先运行 stage2")}
       </tbody></table></div>
     </div>`;
   $$("#goldLabel button").forEach(b => b.onclick = () => { STATE.gold.label = b.dataset.v; loadGold(); });
+  $$("#goldEff button").forEach(b => b.onclick = () => { STATE.gold.eff = b.dataset.v; loadGold(); });
   $("#goldSearch").onkeydown = e => { if (e.key==="Enter"){ STATE.gold.q = e.target.value; loadGold(); } };
   $("#goldReload").onclick = loadGold;
   bindRows("#view-gold", tr => openGold(tr.dataset.sid));
 }
 
 async function openGold(sid) {
-  openDrawer(`黄金会话 ${sid.slice(0,8)}`, "stage2 视图，模型只输出标注，不直接改数据");
+  if (REV.dirty && REV.sid && REV.sid !== sid) await revFlush();
+  REV.active = true;
+  REV.sid = sid;
+  REV.dirty = false;
+  REV.pairs = {};
+  openDrawer(`黄金会话 ${sid.slice(0, 8)}`, "人工复核");
   $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
   const d = await api(`/api/gold/session/${sid}`);
-  const rec = d.record, st = rec.stats || {}, ann = d.annotation || {}, mr = ann.model_review || {};
+  if (REV.sid !== sid) return;
+  const rec = d.record, st = rec.stats || {}, ann = d.annotation || {};
+  let rounds = ann.review_rounds || [];
+  if (!rounds.length && ann.model_review) rounds = [{round:1, kind:"initial", at: ann.reviewed_at, ...ann.model_review}];
+  const latest = rounds[rounds.length - 1] || {};
+  const mr = latest;
+  REV.roundsStale = !!ann.review_rounds_stale;
+  REV.hasReview = rounds.length > 0 && !REV.roundsStale;
+  REV.originals = {};
+  for (const m of rec.messages || []) if (m.role === "assistant") REV.originals[m.id] = m.thinking || "";
+  REV.modelRw = Object.fromEntries((mr.thinking_rewrites || []).map(rw => [rw.msg_id, rw.rewritten || ""]));
+  REV.bad = new Set(mr.bad_step_ids || []);
+  REV.rewritten = new Set(Object.keys(REV.modelRw));
+  REV.items = {};
+  for (const [mid, it] of Object.entries((ann.human_review || {}).items || {}))
+    REV.items[mid] = {rewrite: it.rewrite || null, edited_text: it.edited_text || "", step: it.step || null, comment: it.comment || ""};
+  REV.note = (ann.human_review || {}).note || "";
+  const rwIds = new Set((mr.thinking_rewrites || []).map(rw => rw.msg_id));
+  const badOnly = (mr.bad_step_ids || []).filter(mid => !rwIds.has(mid));
+  const prog = d.progress || {};
   STATE.drawerData = d;
-  $("#drawerSub").innerHTML = `${labelBadge(rec.label)} <span class="faint" style="margin-left:6px">${esc(rec.project_group)}</span>`;
+  $("#drawerSub").innerHTML = `${effTag(d.effective)} ${labelBadge(rec.label)} <span class="faint" style="margin-left:6px">${esc(rec.project_group)}</span>`;
   $("#drawerBody").innerHTML = `
+    ${REV.roundsStale ? `<div class="banner">会话内容已经变了，上一轮评审只供参考，不能直接通过。请重新评审。</div>` : ""}
+    <div class="panel"><div class="panel-h"><h3>复核</h3>
+      <span class="hint">${mr.verdict ? `第 ${latest.round || 1} 轮 · 置信度 ${fmt(mr.confidence)} · 审了 ${fmt(mr.reviewed_steps)}/${fmt(mr.total_steps)} 步` : "还没有模型评审"}</span></div>
+      <div class="panel-b">
+        <div class="row" style="margin-bottom:8px">${mr.verdict ? verdictTag(mr.verdict) : `<span class="faint">未评审</span>`}
+          ${prog.rewrites ? `<span class="chip">改写已处置 <b>${fmt(prog.rewrites_done)}</b> / ${fmt(prog.rewrites)}</span>` : ""}
+          ${prog.bad_steps ? `<span class="chip">问题步已处置 <b>${fmt(prog.bad_done)}</b> / ${fmt(prog.bad_steps)}</span>` : ""}
+        </div>
+        ${(mr.reasons || []).map(r => `<div>${esc(r)}</div>`).join("") || `<div class="faint">模型还没有给出理由</div>`}
+        ${mr.verdict ? `<div class="faint" style="margin-top:8px">通过时，没逐条处置的改写默认采纳，没处置的问题步默认排除。</div>` : ""}
+        <div class="sub-h">给模型的整体意见</div>
+        <textarea id="revNote" class="rev-note" data-field="note" oninput="revInput(this)" placeholder="例如：轨迹可用，但解密那几步把偏移推导删掉了，请按原文保留关键字节">${esc(REV.note)}</textarea>
+      </div>
+    </div>
+    ${(mr.thinking_rewrites || []).length ? `<div class="panel"><div class="panel-h"><h3>改写对照</h3><span class="hint">${mr.thinking_rewrites.length} 处，标红是删掉的，标绿是改写补上的</span>
+      <span class="grow"></span><button class="ghost" onclick="revExpand(true)">展开全部</button><button class="ghost" onclick="revExpand(false)">折叠</button></div>
+      <div class="panel-b" id="revList">${mr.thinking_rewrites.map((rw, i) => renderRewriteCard(rw, i, REV.bad.has(rw.msg_id))).join("")}</div></div>` : ""}
+    ${badOnly.length ? `<div class="panel"><div class="panel-h"><h3>问题步</h3><span class="hint">模型标出、但没有改写的步骤。排除后不进单步训练集</span></div>
+      <div class="panel-b" id="revBad">${badOnly.map(renderBadRow).join("")}</div></div>` : ""}
+    ${renderRounds(rounds)}
     <div class="panel"><div class="panel-h"><h3>提纯结果</h3></div><div class="panel-b kv">
       <span class="k">原始 → 黄金</span><span><span class="num">${fmt(st.raw_steps)}</span> → <b class="num">${fmt(st.gold_steps)}</b> 步
         <span class="row" style="gap:6px;margin-top:6px"><span class="chip">折叠 <b>${fmt(st.folded)}</b></span><span class="chip">剪枝 <b>${fmt(st.pruned_detours)}</b></span><span class="chip">思维链压缩 <b>${fmt(st.thinking_compressed)}</b></span></span></span>
       <span class="k">根任务</span><span>${esc(st.root_prompt || "–")}</span>
-      <span class="k">内化约束</span><span>${(st.constraints||[]).map(c=>`<div>${esc(c)}</div>`).join("") || "–"}</span>
-      <span class="k">脚本判定</span><span>${esc(SCRIPT_ZH[ann.status] || ann.status)} <span class="mono faint" style="font-size:11px">${esc(ann.status)}</span> ${ann.reasons?.length?`<div class="muted">${esc(ann.reasons.join("；"))}</div>`:""}</span>
-      <span class="k">模型评审</span><span>${mr.verdict ? `${verdictTag(mr.verdict)} <span class="muted" style="margin-left:8px">置信度 <span class="num">${fmt(mr.confidence)}</span>，改写 <span class="num">${(mr.thinking_rewrites||[]).length}</span> 处</span>` : `<span class="faint">未评审</span>`}</span>
-      ${mr.reasons?.length ? `<span class="k">评审理由</span><span>${mr.reasons.map(r=>`<div>${esc(r)}</div>`).join("")}</span>`:""}
+      <span class="k">脚本判定</span><span>${esc(SCRIPT_ZH[ann.status] || ann.status || "–")}</span>
     </div></div>
     ${d.pruned?.length ? `<div class="panel"><div class="panel-h"><h3>被剪除或折叠的弯路</h3><span class="hint">${d.pruned.length} 处</span></div>
-      <div class="panel-b scroll" style="max-height:260px;padding-top:4px;padding-bottom:4px">
-      ${d.pruned.map(p=>`<div class="pruned-item"><div class="row" style="gap:8px"><span class="lb prune">${esc(p.reason)}</span>
-        <span class="mono faint" style="font-size:11px">${esc(p.dropped_msg_id||"")}</span></div>
-        <div class="muted" style="white-space:pre-wrap;font-size:12.5px;margin-top:6px">${esc(short(p.rejected_thinking, 300))}</div></div>`).join("")}
+      <div class="panel-b scroll" style="max-height:220px;padding-top:4px;padding-bottom:4px">
+      ${d.pruned.map(p => `<div class="pruned-item"><div class="row" style="gap:8px"><span class="lb prune">${esc(p.reason)}</span>
+        <span class="mono faint" style="font-size:11px">${esc(p.dropped_msg_id || "")}</span></div>
+        <div class="muted" style="white-space:pre-wrap;font-size:12.5px;margin-top:6px">${esc(short(p.rejected_thinking, 240))}</div></div>`).join("")}
     </div></div>` : ""}
-    ${renderMessages(rec.messages||[])}`;
+    ${renderMessages(rec.messages || [])}`;
+  $$("#revList details[open]").forEach(revLazy);
+  const reviewed = rounds.length > 0 && !REV.roundsStale;
   $("#drawerFoot").innerHTML = `
-    <button class="primary" onclick="reviewOne('${sid}')">让模型评审此会话</button>
-    <button onclick="showJson(STATE.drawerData.annotation)">查看标注 JSON</button>
+    ${reviewed ? `<button class="primary" onclick="revDecide('approved')">通过<span class="kbd">A</span></button>
+      <button class="danger" onclick="revDecide('rejected')">驳回<span class="kbd">R</span></button>
+      <button onclick="revRefine()">按意见重审</button>` : ""}
+    ${REV.roundsStale ? `<button class="primary" onclick="reviewOne('${sid}')">重新评审</button>
+      <button class="danger" onclick="revDecide('rejected')">驳回<span class="kbd">R</span></button>` : ""}
+    ${!rounds.length ? `<button class="primary" onclick="reviewOne('${sid}')">让模型评审此会话</button>` : ""}
+    ${(ann.human_review || {}).decision ? `<button class="ghost" onclick="revDecide(null)">撤销结论</button>` : ""}
+    <button class="ghost" onclick="showJson(STATE.drawerData.annotation)">标注 JSON</button>
     <span class="grow"></span>
-    <span class="faint" style="font-size:12px">评审结果需重跑 stage3 才会进入训练集</span>`;
+    <span id="revSave" class="faint" style="font-size:12px"></span>
+    <span class="faint" style="font-size:12px">J / K 切换${reviewed ? " · 通过后重跑 stage3 入库" : ""}</span>`;
 }
 
 async function reviewOne(sid) {
@@ -1144,13 +1487,19 @@ function renderTrace(t) {
 
 function renderStep(st) {
   const open = FLOW.openSteps.has(st.id);
+  const mid = st.m && st.m.id;
+  const marked = REV.active && mid;
   const gist = firstLine(st.think) || firstLine(st.m?.text);
+  const marks = marked ? [
+    REV.bad.has(mid) ? `<span class="lb prune">问题步</span>` : "",
+    REV.rewritten.has(mid) ? `<span class="lb backfill">有改写</span>` : "",
+  ].filter(Boolean).join(" ") : "";
   const calls = st.calls.slice(0, 2).map(c =>
     `<span class="call ${c.result?.isError ? "e" : ""}"><b>${esc(c.name)}</b>${hl(short(oneLine(callGist(c)), 90))}</span>`).join("");
-  return `<div class="step ${open ? "open" : ""} ${st.err ? "err" : ""} ${st.flagged ? "flagged" : ""}" id="${st.id}">
+  return `<div class="step ${open ? "open" : ""} ${st.err ? "err" : ""} ${st.flagged ? "flagged" : ""} ${marked && REV.bad.has(mid) ? "rev-bad" : ""} ${marked && REV.rewritten.has(mid) ? "rev-rw" : ""}" id="${st.id}">
     <button class="step-row" aria-expanded="${open}" onclick="toggleStep('${st.id}')">
       <span class="no num">${st.no}</span>
-      <span class="gist">${gist ? hl(short(gist, 180)) : `<span class="faint">没有思考内容</span>`}</span>
+      <span class="gist">${marks ? marks + " " : ""}${gist ? hl(short(gist, 160)) : `<span class="faint">没有思考内容</span>`}</span>
       <span class="calls">${calls || `<span class="faint">无工具调用</span>`}${st.calls.length > 2 ? `<span class="more-calls">+${st.calls.length - 2}</span>` : ""}</span>
     </button>
     ${open ? renderStepDetail(st) : ""}
@@ -1185,6 +1534,7 @@ function renderStepDetail(st) {
   }).join("");
   return `<div class="step-d">
     <div class="step-meta">${meta}</div>
+    ${REV.active && m.id && REV.rewritten.has(m.id) ? `<div><button class="ghost" onclick="document.getElementById('revc-${m.id}')?.scrollIntoView({block:'start'})">查看此步的改写对照</button></div>` : ""}
     ${st.think ? `<div class="think-full">${hl(st.think)}</div>` : ""}
     ${m.text ? `<div class="said md">${md(m.text)}</div>` : ""}
     ${calls}
@@ -1218,6 +1568,13 @@ function jumpStep(tid, sid) {
   el.scrollIntoView({block: "start"});
   el.classList.add("flash");
   setTimeout(() => el.classList.remove("flash"), 1400);
+}
+function jumpMsg(mid) {
+  for (const t of Object.values(FLOW.traces)) {
+    const st = t.steps.find(s => s.m && s.m.id === mid);
+    if (st) { jumpStep(t.id, st.id); return; }
+  }
+  toast("这一步不在当前对话里");
 }
 function jumpTurn(ti) {
   const el = document.getElementById("turn-" + ti);
@@ -1351,7 +1708,7 @@ async function loadRuns() {
     <div class="pipeline">
       ${steps.map((s, i) => card(s, i)).join("")}
       <div class="spacer"></div>
-      ${card(["review", "模型评审", "改写过长的思维链，并裁决会话是否保留为黄金数据。", COLORS.pend], -1)}
+      ${card(["review", "模型评审", "改写过长的思维链并给出存废建议。待复核的会话要在黄金数据里人工确认后才会入库。", COLORS.pend], -1)}
     </div>
     <div class="run-all">
       <button class="primary" onclick="runStage('all',false)">运行全流程（增量）</button>
@@ -1398,7 +1755,7 @@ function paintJob() {
   const stEl = $("#jobStatus");
   if (stEl && st) stEl.innerHTML = `${runTag(st.status)} <span class="mono faint" style="margin-left:8px">${esc(st.stage)}${st.force?"，全量":""}，作业 ${esc(st.id)}</span>`;
 }
-function watchJob(jobId) {
+function watchJob(jobId, onDone) {
   if (JOB_TIMER) clearInterval(JOB_TIMER);
   JOB_ID = jobId; JOB_LINES = []; JOB_META = null;
   let offset = 0;
@@ -1412,7 +1769,7 @@ function watchJob(jobId) {
       paintJob();
       if (j.status !== "running") {
         clearInterval(JOB_TIMER); JOB_TIMER = null;
-        if (j.status === "done") { toast(`${j.stage} 已完成`, "ok"); STATE.poured = true; refreshMeta().catch(() => {}); }
+        if (j.status === "done") { toast(`${j.stage} 已完成`, "ok"); STATE.poured = true; refreshMeta().catch(() => {}); if (onDone) onDone(j); }
         else toast(`${j.stage} 失败：${j.error||""}`, "err");
       }
     } catch (e) { /* job may not be registered yet */ }
@@ -1428,16 +1785,29 @@ function openDrawer(title, sub="") {
   $("#drawer").classList.add("open");
   $("#scrim").classList.add("open");
 }
-function closeDrawer() { $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); STATE.drawerData = null; }
+function closeDrawer() {
+  if (REV.dirty) revFlush();
+  REV.active = false;
+  $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); STATE.drawerData = null;
+}
 function showJson(data) {
   const obj = typeof data === "string" ? (()=>{try{return JSON.parse(data)}catch{return data}})() : data;
   openDrawer("JSON", "");
   $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-b"><pre class="json">${esc(typeof obj === "string" ? obj : JSON.stringify(obj, null, 2))}</pre></div></div>`;
 }
 document.addEventListener("keydown", e => {
-  if (e.key !== "Escape") return;
-  if (e.target.id === "flowQ" && e.target.value) { e.target.value = ""; flowSearch(""); return; }
-  closeDrawer();
+  const typing = e.target && (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable);
+  if (e.key === "Escape") {
+    if (e.target && e.target.id === "flowQ" && e.target.value) { e.target.value = ""; flowSearch(""); return; }
+    closeDrawer();
+    return;
+  }
+  if (!REV.active || typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "a") { e.preventDefault(); revDecide("approved"); }
+  else if (k === "r") { e.preventDefault(); revDecide("rejected"); }
+  else if (k === "j") { e.preventDefault(); revMove(1); }
+  else if (k === "k") { e.preventDefault(); revMove(-1); }
 });
 window.addEventListener("hashchange", () => {
   const tab = location.hash.slice(1);

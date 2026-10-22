@@ -149,6 +149,8 @@ review:
   judge_min_score: 60
   # 低于该置信度 -> needs_review（不直接淘汰）
   judge_confidence_min: 0.7
+  # 待人工复核、结论过期的会话先扣住，不进 SFT，直到人工通过
+  hold_needs_review: true
 
 # ---------------------------------------------------------------------------
 # 第 5 层：训练数据合成（stage3）

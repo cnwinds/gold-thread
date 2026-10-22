@@ -195,14 +195,31 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             "assistant_steps": len(asst),
             "source_gold": str(gold_file),
         }
-        gold_trajs.append(
-            {
-                "sample_id": f"traj::{sid}",
-                "conversations": conversation(msgs, "sharegpt", strip_thinking=False, override=rewrites),
-                "tools": _tools_json(msgs),
-                "metadata": meta,
-            }
-        )
+        drop_calls = {
+            tc.get("id")
+            for m in msgs
+            if m.get("role") == "assistant" and m.get("id") in excluded
+            for tc in (m.get("tool_calls") or [])
+            if tc.get("id")
+        }
+
+        def _kept(m: Dict[str, Any]) -> bool:
+            if m.get("role") == "assistant" and m.get("id") in excluded:
+                return False
+            if m.get("role") == "tool" and m.get("tool_call_id") in drop_calls:
+                return False
+            return True
+
+        kept_msgs = [m for m in msgs if _kept(m)]
+        if any(m.get("role") == "assistant" for m in kept_msgs):
+            gold_trajs.append(
+                {
+                    "sample_id": f"traj::{sid}",
+                    "conversations": conversation(kept_msgs, "sharegpt", strip_thinking=False, override=rewrites),
+                    "tools": _tools_json(msgs),
+                    "metadata": meta,
+                }
+            )
 
         # 3) 单步决策窗口
         asst_idx = [i for i, m in enumerate(msgs) if m["role"] == "assistant"]
@@ -219,7 +236,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             if "thinking_synthesized" in (m.get("flags") or []) and m["id"] not in rewrites:
                 continue
 
-            history = msgs[max(0, idx - window_turns) : idx]
+            history = [h for h in msgs[max(0, idx - window_turns) : idx] if _kept(h)]
             while history and history[0]["role"] == "tool":
                 history = history[1:]
 

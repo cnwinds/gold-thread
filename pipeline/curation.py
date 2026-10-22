@@ -100,11 +100,17 @@ def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
         return sorted(ex)
 
     decision = hr.get("decision")
-    if decision and not is_stale(ann):
+    fresh = bool(decision) and not is_stale(ann)
+    if ann.get("review_rounds_stale") and not fresh:
+        # 会话内容已变，旧评审不能当通过；人工刚做的结论（review_key 对得上）仍然有效
+        return {"state": "stale", "rewrites": {}, "excluded": []}
+    if fresh:
         state = "approved" if decision == "approved" else "rejected"
+        if ann.get("review_rounds_stale"):
+            return {"state": state, "rewrites": {}, "excluded": []}
         return {"state": state, "rewrites": _rewrites(True) if state == "approved" else {}, "excluded": _excluded()}
     if decision:
-        return {"state": "stale" if hold else "unreviewed", "rewrites": {}, "excluded": []}
+        return {"state": "stale", "rewrites": {}, "excluded": []}
     if not rnd:
         return {"state": "unreviewed", "rewrites": {}, "excluded": []}
     verdict = rnd.get("verdict")
@@ -196,7 +202,8 @@ def append_round(ann: Dict[str, Any], rnd: Dict[str, Any], reset_ids: Optional[L
             hr["items"][mid] = it
         else:
             hr["items"].pop(mid, None)
-    if rnd.get("kind") == "refine":
+    # 只清掉已经送给模型的那条意见；评审期间新写的意见保留
+    if rnd.get("kind") == "refine" and (hr.get("note") or "").strip() == ((rnd.get("feedback") or {}).get("note") or "").strip():
         hr["note"] = ""
     if hr.get("decision"):
         hr["history"].append({"decision": "reopened", "at": rnd["at"], "round": rnd["round"], "note": "模型新一轮评审，原结论作废"})
