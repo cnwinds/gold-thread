@@ -29,8 +29,9 @@ EFFECTIVE_ZH = {
     "held": "待人工复核",
     "stale": "结论过期待确认",
     "unreviewed": "未评审",
+    "finalized": "定稿",
 }
-IN_SFT = {"approved", "auto_gold", "unreviewed"}
+IN_SFT = {"approved", "auto_gold", "unreviewed", "finalized"}
 
 
 def ensure_rounds(ann: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -59,6 +60,7 @@ def human(ann: Dict[str, Any]) -> Dict[str, Any]:
     hr.setdefault("items", {})
     hr.setdefault("note", "")
     hr.setdefault("decision", None)
+    hr.setdefault("finalized", False)
     hr.setdefault("history", [])
     return hr
 
@@ -116,6 +118,8 @@ def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     decision = hr.get("decision")
     fresh = bool(decision) and not is_stale(ann)
+    if fresh and decision == "approved" and hr.get("finalized"):
+        return {"state": "finalized", "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
     if ann.get("review_rounds_stale") and not fresh:
         return {"state": "stale", "rewrites": {}, "excluded": [], "kept": []}
     if fresh:
@@ -211,6 +215,24 @@ def decide(ann: Dict[str, Any], decision: Optional[str], note: str = "") -> None
     hr["history"].append({"decision": decision or "reopened", "at": now_iso(), "round": rnd.get("round"), "note": note})
 
 
+def finalize(ann: Dict[str, Any], note: str = "") -> None:
+    """定稿 = 通过 + 未处置改写全部默认采纳 + 锁定状态。"""
+    decide(ann, "approved", note)
+    hr = human(ann)
+    hr["finalized"] = True
+    hr["finalized_at"] = now_iso()
+    hr["history"].append({"decision": "finalized", "at": now_iso(),
+                          "round": (latest_round(ann) or {}).get("round"), "note": note})
+
+
+def unfinalize(ann: Dict[str, Any], note: str = "") -> None:
+    hr = human(ann)
+    hr["finalized"] = False
+    hr["finalized_at"] = None
+    hr["history"].append({"decision": "unfinalized", "at": now_iso(),
+                          "round": (latest_round(ann) or {}).get("round"), "note": note})
+
+
 def feedback_targets(ann: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """带意见重审时需要模型重新处理的条目：有批注，或改写被拒。"""
     items = (ann.get("human_review") or {}).get("items") or {}
@@ -237,6 +259,10 @@ def append_round(ann: Dict[str, Any], rnd: Dict[str, Any], reset_ids: Optional[L
             hr["items"].pop(mid, None)
     if rnd.get("kind") == "refine" and (hr.get("note") or "").strip() == ((rnd.get("feedback") or {}).get("note") or "").strip():
         hr["note"] = ""
+    if hr.get("finalized"):
+        hr["finalized"] = False
+        hr["finalized_at"] = None
+        hr["history"].append({"decision": "unfinalized", "at": rnd["at"], "round": rnd["round"], "note": "模型新一轮结果，定稿自动解除"})
     if hr.get("decision"):
         hr["history"].append({"decision": "reopened", "at": rnd["at"], "round": rnd["round"], "note": "模型新一轮评审，原结论作废"})
     hr["decision"] = None

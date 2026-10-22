@@ -115,6 +115,14 @@ def _run_job(job: Job) -> None:
             except Exception:  # noqa: BLE001
                 pass
             job.result = res
+        elif job.stage == "optimize":
+            from pipeline.review import run_optimize
+            res = run_optimize((job.extra.get("sessions") or [None])[0], log=job.log, cfg=cfg)
+            try:
+                stage3_synth.run(force=False, log=job.log, cfg=cfg)
+            except Exception:  # noqa: BLE001
+                pass
+            job.result = res
         elif job.stage == "refine":
             from pipeline.review import run_refine
             res = run_refine((job.extra.get("sessions") or [None])[0], log=job.log, cfg=cfg)
@@ -817,6 +825,45 @@ def review_refine(sid: str, body: ReviewItemsBody) -> Dict[str, Any]:
     write_json_atomic(path, ann)
     job = _start("refine", False, {"sessions": [sid]})
     return {"job_id": job.id}
+
+
+@app.post("/api/gold/session/{sid}/optimize")
+def gold_optimize(sid: str) -> Dict[str, Any]:
+    _gold_entry(sid)
+    job = _start("optimize", True, {"sessions": [sid]})
+    return {"job_id": job.id}
+
+
+class FinalizeBody(BaseModel):
+    finalized: bool
+    note: str = ""
+
+
+@app.post("/api/gold/session/{sid}/finalize")
+def gold_finalize(sid: str, body: FinalizeBody) -> Dict[str, Any]:
+    cfg = load_config()
+    path, ann = _load_ann(sid)
+    try:
+        if body.finalized:
+            curation.finalize(ann, body.note)
+        else:
+            curation.unfinalize(ann, body.note)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    write_json_atomic(path, ann)
+    eff = curation.resolve(ann, cfg)
+    synced = False
+    try:
+        stage3_synth.run(force=False, log=lambda *_: None, cfg=cfg)
+        synced = True
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "ok": True,
+        "effective": eff["state"],
+        "finalized": bool((ann.get("human_review") or {}).get("finalized")),
+        "stage3_synced": synced,
+    }
 
 
 # ---------------------------------------------------------------------------

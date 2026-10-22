@@ -224,6 +224,17 @@
   .lb{display:inline-block;font-size:11px;padding:0 7px;border-radius:5px;background:var(--ink-3);color:var(--text-2)}
   .lb.fold{background:rgba(169,178,220,.13);color:var(--pend)}
   .lb.prune{background:rgba(227,115,95,.13);color:#f0a091}
+  .marks{display:inline-flex;gap:4px;vertical-align:baseline;margin-right:2px}
+  .lb.ok{background:rgba(143,196,127,.16);color:#9fd18f}
+  .lb.no{background:rgba(227,115,95,.18);color:#f0a091}
+  .lb.gold{background:rgba(217,180,103,.18);color:#e6cf95}
+  .lb.keep{background:rgba(169,178,220,.16);color:var(--pend)}
+  .step.rev-done .gist{opacity:.68}
+  .step-d details.think-orig{margin-top:6px}
+  .step-d details.think-orig summary{cursor:pointer;color:var(--text-3);font-size:12px;list-style:none;display:inline-flex;gap:6px;align-items:center;user-select:none}
+  .step-d details.think-orig summary::before{content:"";width:0;height:0;border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+  .step-d details.think-orig[open]>summary::before{transform:rotate(90deg)}
+  .step-d details.think-orig pre{white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6;color:var(--text-3);background:var(--ink-1);border:1px dashed var(--line-soft);border-radius:7px;padding:8px 10px;margin-top:6px}
   .lb.backfill{background:rgba(95,185,196,.13);color:var(--mint)}
   .lb.err{background:rgba(227,115,95,.16);color:#f0a091}
   button.tl{background:transparent;padding:2px 8px;font-size:11.5px;border-radius:5px;line-height:1.6}
@@ -426,6 +437,16 @@
   .funnel-node.good b{color:var(--mint)} .funnel-node.warn b{color:var(--gold)} .funnel-node.bad b{color:var(--neg)}
   .step-review{border-top:1px solid var(--line);padding-top:9px}
   .step-review textarea{width:100%;min-height:90px;resize:vertical;font-size:12px;line-height:1.65;margin-top:7px}
+  .step-review details.rw-diff{margin-top:7px}
+  .step-review details.rw-diff summary{cursor:pointer;list-style:none;display:inline-flex;gap:6px;align-items:center;user-select:none;color:var(--text-3);font-size:12px}
+  .step-review details.rw-diff summary::before{content:"";width:0;height:0;border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+  .step-review details.rw-diff[open]>summary::before{transform:rotate(90deg)}
+  .step-review .diff-slot .diff{max-height:260px}
+  .panel.rev-bar{margin-bottom:10px}
+  .panel.rev-bar .panel-b{padding:8px 12px}
+  .panel.rev-bar .row{gap:8px;flex-wrap:wrap;align-items:center}
+  @keyframes pillpulse{0%{background:rgba(143,196,127,.5);box-shadow:0 0 0 4px rgba(143,196,127,.18)}100%{background:var(--ink-3);box-shadow:none}}
+  .chip.pill-pulse{animation:pillpulse .9s ease-out}
   .step-audit-list{max-height:360px;overflow:auto;border:1px solid var(--line-soft);border-radius:8px}
   .step-audit{display:grid;grid-template-columns:34px 82px 1fr auto;gap:9px;align-items:center;padding:6px 10px;
     border-bottom:1px solid var(--line-soft);font-size:12px}
@@ -619,8 +640,8 @@ const PAGES = {
 };
 
 let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:"", eff:""}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:"", project:"", stage:"", split:""}, job: null, drawerData: null, poured: false };
-const REV = {active:false, sid:null, items:{}, note:"", originals:{}, scripts:{}, modelRw:{}, bad:new Set(), rewritten:new Set(), pairs:{}, timer:null, dirty:false, hasReview:false, roundsStale:false};
-const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模型通过", auto_reject:"模型剔除", held:"待人工复核", stale:"过期待确认", unreviewed:"未评审"};
+const REV = {active:false, sid:null, items:{}, note:"", originals:{}, scripts:{}, modelRw:{}, bad:new Set(), rewritten:new Set(), pairs:{}, timer:null, dirty:false, hasReview:false, roundsStale:false, finalized:false};
+const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模型通过", auto_reject:"模型剔除", held:"待人工复核", stale:"过期待确认", unreviewed:"未评审", finalized:"定稿"};
 const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
 
 async function api(path, opts={}) {
@@ -1126,6 +1147,7 @@ async function revFlush() {
   } catch (e) { REV.dirty = true; toast(e.message, "err"); }
 }
 function revTouch() {
+  if (REV.finalized) { toast("已定稿：请先撤销定稿再修改", "err"); REV.dirty = false; return; }
   REV.dirty = true;
   const el = $("#revSave"); if (el) el.textContent = "未保存";
   clearTimeout(REV.timer);
@@ -1142,14 +1164,65 @@ function revInput(el) {
 }
 function revSync(mid) {
   const it = REV.items[mid] || {};
-  const pill = it.rewrite === "accepted" ? "已采纳" : it.rewrite === "rejected" ? "不采纳" : it.rewrite === "edited" ? "手改" : it.step === "exclude" ? "将排除" : it.step === "keep" ? "保留" : "未处置";
   $$(`[data-revcard="${CSS.escape(mid)}"]`).forEach(card => {
     card.querySelectorAll("button[data-rev]").forEach(b => b.classList.toggle("rev-on", b.dataset.rev === it.rewrite || b.dataset.rev === it.step));
     const ed = card.querySelector(".rev-editbox");
     if (ed) ed.classList.toggle("hidden", it.rewrite !== "edited");
     const p = card.querySelector("[data-pill]");
-    if (p) p.textContent = pill;
+    if (p) p.textContent = it.rewrite === "accepted" ? "已采纳改写" : it.rewrite === "rejected" ? "不采纳改写" : it.rewrite === "edited" ? "手改" : it.step === "exclude" ? "将排除" : it.step === "keep" ? "强制保留" : (p.dataset.default || "未处置");
   });
+  revSyncProg();
+  for (const t of Object.values(FLOW.traces)) {
+    const st = t.steps.find(s => s.m && s.m.id === mid);
+    if (!st) continue;
+    const el = document.getElementById(st.id);
+    if (!el) continue;
+    const mk = el.querySelector(".marks");
+    if (mk) mk.innerHTML = stepMarksHtml(mid);
+    el.classList.toggle("rev-done", revDone(mid));
+    const eff = effectiveThinking(mid, st.m);
+    const changed = eff !== (st.m.thinking || "");
+    const tk = el.querySelector("[data-thinkfull]");
+    if (tk) tk.innerHTML = hl(eff);
+    const note = el.querySelector("[data-thinknote]");
+    if (note) note.classList.toggle("hidden", !changed);
+    const og = el.querySelector("[data-thinkorig]");
+    if (og) og.classList.toggle("hidden", !changed);
+    const gt = el.querySelector("[data-gisttxt]");
+    if (gt) { const g = firstLine(eff) || firstLine(st.m?.text); gt.innerHTML = g ? hl(short(g, 160)) : `<span class="faint">没有思考内容</span>`; }
+  }
+}
+
+/* ---- 逐条评审队列：按对话顺序收集全部改写/问题步 ---- */
+function reviewQueue() {
+  const mids = [];
+  for (const t of Object.values(FLOW.traces)) for (const st of t.steps) {
+    const mid = st.m && st.m.id;
+    if (mid && (REV.rewritten.has(mid) || REV.bad.has(mid))) mids.push(mid);
+  }
+  return mids;
+}
+function revDone(mid) {
+  const it = REV.items[mid];
+  return !!(it && (it.rewrite || it.step || (it.comment || "").trim()));
+}
+function revProgress() {
+  const mids = reviewQueue();
+  return { total: mids.length, done: mids.filter(mid => revDone(mid)).length };
+}
+function revSyncProg() {
+  const p = revProgress();
+  $$("[data-revprog]").forEach(el => { el.textContent = `${p.done} / ${p.total}`; });
+}
+function revNext(mid) {
+  const mids = reviewQueue();
+  if (!mids.length) { toast("没有待评审的改写或问题步"); return; }
+  const start = Math.max(0, mids.indexOf(mid));
+  for (let k = 1; k <= mids.length; k++) {
+    const cand = mids[(start + k) % mids.length];
+    if (!revDone(cand)) { jumpMsg(cand); return; }
+  }
+  toast("全部改写与问题步都已处置 ✓", "ok");
 }
 function revAct(btn) {
   const mid = btn.dataset.mid, kind = btn.dataset.rev, it = revItem(mid);
@@ -1160,8 +1233,12 @@ function revAct(btn) {
     if (kind === "edited" && !it.edited_text) it.edited_text = REV.modelRw[mid] || REV.originals[mid] || "";
   }
   revSync(mid);
+  const card = btn.closest("[data-revcard]");
+  const p = card && card.querySelector("[data-pill]");
+  if (p) { p.classList.remove("pill-pulse"); void p.offsetWidth; p.classList.add("pill-pulse"); }
   if (it.rewrite === "edited") {
-    const ta = document.querySelector(`[data-revcard="${CSS.escape(mid)}"] textarea.rev-editbox`);
+    const tas = [...document.querySelectorAll(`[data-revcard="${CSS.escape(mid)}"] textarea.rev-editbox`)];
+    const ta = tas.find(t => !t.classList.contains("hidden")) || tas[0];
     if (ta) { if (!ta.value) ta.value = it.edited_text || ""; ta.focus(); }
   }
   revTouch();
@@ -1175,7 +1252,25 @@ function revLazy(el) {
     slot.dataset.done = "1";
   });
 }
-function revExpand(open) { $$("#revList details").forEach(d => { d.open = open; if (open) revLazy(d); }); }
+async function revOptimize(sid) {
+  try {
+    const {job_id} = await api(`/api/gold/session/${sid}/optimize`, {method:"POST"});
+    toast("全面优化已启动：优化器全量改写，独立模型循环审核", "ok");
+    watchJob(job_id, () => openGold(sid));
+  } catch (e) { toast(e.message, "err"); }
+}
+async function revFinalize(fin) {
+  if (!REV.active || !REV.sid) return;
+  if (fin && !REV.finalized) {
+    const unhandled = reviewQueue().filter(mid => !revDone(mid)).length;
+    if (unhandled > 0 && !confirm(`还有 ${unhandled} 处改写/问题步未逐条浏览，未浏览的将按模型结果默认生效。确认定稿？`)) return;
+  }
+  try {
+    const r = await api(`/api/gold/session/${REV.sid}/finalize`, {method:"POST", body: JSON.stringify({finalized: fin})});
+    toast(fin ? "已定稿：全部修改生效并锁定，训练集已同步" : "已撤销定稿，可继续修改", "ok");
+    openGold(REV.sid); refreshMeta().catch(() => {});
+  } catch (e) { toast(e.message, "err"); }
+}
 async function revDecide(decision) {
   if (!REV.active || !REV.sid) return;
   await revFlush();
@@ -1218,61 +1313,6 @@ async function revBatch(action) {
     toast(action==="exclude_all_bad"?"全部问题步已标记排除":"批量处置已保存","ok");
     openGold(REV.sid);
   } catch(e) { toast(e.message,"err"); }
-}
-function renderRewriteCard(rw, idx, bad) {
-  const mid = rw.msg_id, it = REV.items[mid] || {};
-  const oldS = REV.originals[mid] || "", scriptS = REV.scripts[mid] || oldS, neu = rw.rewritten || "";
-  const keyScript = "rw-script:" + mid, keyModel = "rw-model:" + mid;
-  REV.pairs[keyScript] = {old: oldS, new: scriptS, caps:["原始会话", "脚本提纯"]};
-  REV.pairs[keyModel] = {old: scriptS, new: neu, caps:["脚本提纯", "模型改写"]};
-  const attn = it.rewrite === "rejected" || it.rewrite === "edited" || (it.comment || "").trim() || bad;
-  const pill = it.rewrite === "accepted" ? "已采纳" : it.rewrite === "rejected" ? "不采纳" : it.rewrite === "edited" ? "手改" : "未处置";
-  const on = name => (it.rewrite === name || it.step === name) ? "rev-on" : "";
-  return `<details class="rev-card" id="revc-${esc(mid)}" data-revcard="${esc(mid)}" ${attn || idx === 0 ? "open" : ""} ontoggle="revLazy(this)">
-    <summary>
-      <span class="mono faint">${idx + 1}</span>
-      <span class="mono">${esc(String(mid).slice(0, 8))}</span>
-      ${bad ? `<span class="lb prune">问题步</span>` : ""}
-      <span class="faint">${chars(oldS.length)} → ${chars(scriptS.length)} → ${chars(neu.length)}</span>
-      <span class="gist">${esc(cheapGist(oldS, neu))}</span>
-      <span class="chip" data-pill>${pill}</span>
-    </summary>
-    <div class="body">
-      <div class="lineage">
-        <div class="lineage-col"><div class="lineage-cap" style="--c:${COLORS.ore}"><i></i>原始会话 · ${chars(oldS.length)}</div><div class="lineage-body">${esc(oldS)}</div></div>
-        <div class="lineage-col"><div class="lineage-cap" style="--c:${COLORS.gold}"><i></i>脚本提纯 · ${chars(scriptS.length)}</div><div class="lineage-body">${esc(scriptS)}</div></div>
-        <div class="lineage-col"><div class="lineage-cap" style="--c:${COLORS.mint}"><i></i>模型改写 · ${chars(neu.length)}</div><div class="lineage-body">${esc(neu)}</div></div>
-      </div>
-      <details style="margin-top:8px"><summary class="faint" style="cursor:pointer">查看精确差异</summary>
-        <div class="diff-slot" data-pair="${esc(keyScript)}" style="margin-top:7px"></div>
-        <div class="diff-slot" data-pair="${esc(keyModel)}" style="margin-top:7px"></div>
-      </details>
-      <div class="rev-acts" onclick="event.stopPropagation()">
-        <button data-rev="accepted" data-mid="${esc(mid)}" class="${on("accepted")}" onclick="revAct(this)">采纳</button>
-        <button data-rev="rejected" data-mid="${esc(mid)}" class="${on("rejected")}" onclick="revAct(this)">不采纳</button>
-        <button data-rev="edited" data-mid="${esc(mid)}" class="${on("edited")}" onclick="revAct(this)">手改</button>
-        ${bad ? `<button data-rev="exclude" data-mid="${esc(mid)}" class="${on("exclude")}" onclick="revAct(this)">排除此步</button>
-          <button data-rev="keep" data-mid="${esc(mid)}" class="${on("keep")}" onclick="revAct(this)">保留此步</button>` : ""}
-        <button class="ghost" onclick="jumpMsg('${mid}')">定位到对话</button>
-      </div>
-      <textarea class="rev-editbox ${it.rewrite === "edited" ? "" : "hidden"}" data-field="edit" data-mid="${esc(mid)}" oninput="revInput(this)" placeholder="你的版本，通过后用这段替换模型改写">${esc(it.edited_text || "")}</textarea>
-      <textarea class="rev-comment" data-field="comment" data-mid="${esc(mid)}" oninput="revInput(this)" placeholder="修改意见。拒绝或写下意见后，可以让模型只重做这一步">${esc(it.comment || "")}</textarea>
-    </div>
-  </details>`;
-}
-function renderBadRow(mid) {
-  const it = REV.items[mid] || {};
-  const on = name => it.step === name ? "rev-on" : "";
-  return `<div class="rev-card" data-revcard="${esc(mid)}" style="padding:10px 12px">
-    <div class="row"><span class="mono">${esc(String(mid).slice(0, 8))}</span><span class="gist">${esc(short(firstLine(REV.originals[mid] || ""), 90) || "没有思考内容")}</span>
-      <span class="chip" data-pill>${it.step === "exclude" ? "将排除" : it.step === "keep" ? "保留" : "未处置"}</span></div>
-    <div class="rev-acts">
-      <button data-rev="exclude" data-mid="${esc(mid)}" class="${on("exclude")}" onclick="revAct(this)">排除此步</button>
-      <button data-rev="keep" data-mid="${esc(mid)}" class="${on("keep")}" onclick="revAct(this)">这是误判，保留</button>
-      <button class="ghost" onclick="jumpMsg('${mid}')">定位到对话</button>
-    </div>
-    <textarea class="rev-comment" data-field="comment" data-mid="${esc(mid)}" oninput="revInput(this)" placeholder="这条为什么有问题，或为什么是误判">${esc(it.comment || "")}</textarea>
-  </div>`;
 }
 function renderRounds(rounds) {
   if (!rounds.length) return "";
@@ -1381,8 +1421,7 @@ async function openGold(sid) {
   for (const [mid, it] of Object.entries((ann.human_review || {}).items || {}))
     REV.items[mid] = {rewrite: it.rewrite || null, edited_text: it.edited_text || "", step: it.step || null, comment: it.comment || ""};
   REV.note = (ann.human_review || {}).note || "";
-  const rwIds = new Set((mr.thinking_rewrites || []).map(rw => rw.msg_id));
-  const badOnly = (mr.bad_step_ids || []).filter(mid => !rwIds.has(mid));
+  REV.finalized = !!(ann.human_review || {}).finalized;
   const prog = d.progress || {};
   const sp = d.synthesis_preview || {}, funnel = sp.funnel || {};
   STATE.drawerData = d;
@@ -1395,6 +1434,9 @@ async function openGold(sid) {
         <div class="row" style="margin-bottom:8px">${mr.verdict ? verdictTag(mr.verdict) : `<span class="faint">未评审</span>`}
           ${prog.rewrites ? `<span class="chip">改写已处置 <b>${fmt(prog.rewrites_done)}</b> / ${fmt(prog.rewrites)}</span>` : ""}
           ${prog.bad_steps ? `<span class="chip">问题步已处置 <b>${fmt(prog.bad_done)}</b> / ${fmt(prog.bad_steps)}</span>` : ""}
+          ${mr.kind === "optimize" ? `<span class="chip">全面优化</span><span class="chip">优化器 ${esc(mr.optimizer_model || mr.model || "")}</span><span class="chip">独立审核 ${esc(mr.reviewer_model || "")}</span>
+          <span class="chip">审核循环 ${(mr.loops || []).filter(l => l.phase === "audit").length} 轮</span><span class="chip">改动 ${fmt((mr.thinking_rewrites || []).length)} 步</span>` : ""}
+          ${REV.finalized ? `<span class="chip train">已定稿</span>` : ""}
         </div>
         ${(mr.reasons || []).map(r => `<div>${esc(r)}</div>`).join("") || `<div class="faint">模型还没有给出理由</div>`}
         ${mr.verdict ? `<div class="faint" style="margin-top:8px">通过时，没逐条处置的改写默认采纳，没处置的问题步默认排除。</div>` : ""}
@@ -1422,13 +1464,15 @@ async function openGold(sid) {
           <span class="why" title="${esc(a.reason)}">${esc(a.reason)} · ${esc(a.gist||"")}</span>
           <span class="num faint">${fmt(a.think_len_raw)}→${fmt(a.think_len_eff)}</span></div>`).join("")}</div></details>` : ""}
     </div></div>
-    ${(mr.thinking_rewrites || []).length ? `<div class="panel"><div class="panel-h"><h3>改写对照</h3><span class="hint">${mr.thinking_rewrites.length} 处，标红是删掉的，标绿是改写补上的</span>
-      <span class="grow"></span><button class="ghost" onclick="revBatch('accept_all_rewrites')">采纳未处置</button>
-      ${badOnly.length||REV.bad.size ? `<button class="ghost" onclick="revBatch('exclude_all_bad')">排除全部问题步</button>`:""}
-      <button class="ghost" onclick="revExpand(true)">展开全部</button><button class="ghost" onclick="revExpand(false)">折叠</button></div>
-      <div class="panel-b" id="revList">${mr.thinking_rewrites.map((rw, i) => renderRewriteCard(rw, i, REV.bad.has(rw.msg_id))).join("")}</div></div>` : ""}
-    ${badOnly.length ? `<div class="panel"><div class="panel-h"><h3>问题步</h3><span class="hint">模型标出、但没有改写的步骤。排除后不进单步训练集</span></div>
-      <div class="panel-b" id="revBad">${badOnly.map(renderBadRow).join("")}</div></div>` : ""}
+    ${(mr.thinking_rewrites || []).length || REV.bad.size ? `<div class="panel rev-bar"><div class="panel-b row">
+      <span class="faint">逐条评审</span>
+      <span class="chip">已处置 <b class="num" data-revprog>–</b></span>
+      <button onclick="revNext(null)">处理下一个</button>
+      <button class="ghost" onclick="revBatch('accept_all_rewrites')">采纳未处置改写</button>
+      ${REV.bad.size ? `<button class="ghost" onclick="revBatch('exclude_all_bad')">排除全部问题步</button>` : ""}
+      <span class="grow"></span>
+      <span class="faint">在下方对话中点开带 <span class="lb backfill">有改写</span> / <span class="lb prune">问题步</span> 标记的步骤即可评审</span>
+    </div></div>` : ""}
     ${renderRounds(rounds)}
     <div class="panel"><div class="panel-h"><h3>提纯结果</h3></div><div class="panel-b kv">
       <span class="k">原始 → 黄金</span><span><span class="num">${fmt(st.raw_steps)}</span> → <b class="num">${fmt(st.gold_steps)}</b> 步
@@ -1436,14 +1480,14 @@ async function openGold(sid) {
       <span class="k">根任务</span><span>${esc(st.root_prompt || "–")}</span>
       <span class="k">脚本判定</span><span>${esc(SCRIPT_ZH[ann.status] || ann.status || "–")}</span>
     </div></div>
-    ${d.pruned?.length ? `<div class="panel"><div class="panel-h"><h3>被剪除或折叠的弯路</h3><span class="hint">${d.pruned.length} 处</span></div>
+    ${d.pruned?.length ? `<details class="panel"><summary class="panel-h" style="cursor:pointer;list-style:none"><h3>被剪除或折叠的弯路</h3><span class="hint">${d.pruned.length} 处 · 已从训练会话删除，仅作审计 · 点击展开</span></summary>
       <div class="panel-b scroll" style="max-height:220px;padding-top:4px;padding-bottom:4px">
       ${d.pruned.map(p => `<div class="pruned-item"><div class="row" style="gap:8px"><span class="lb prune">${esc(p.reason)}</span>
         <span class="mono faint" style="font-size:11px">${esc(p.dropped_msg_id || "")}</span></div>
         <div class="muted" style="white-space:pre-wrap;font-size:12.5px;margin-top:6px">${esc(short(p.rejected_thinking, 240))}</div></div>`).join("")}
-    </div></div>` : ""}
+    </div></details>` : ""}
     ${renderMessages(rec.messages || [])}`;
-  $$("#revList details[open]").forEach(revLazy);
+  revSyncProg();
   const reviewed = rounds.length > 0 && !REV.roundsStale;
   $("#drawerFoot").innerHTML = `
     ${reviewed ? `<button class="primary" onclick="revDecide('approved')">通过<span class="kbd">A</span></button>
@@ -1454,7 +1498,11 @@ async function openGold(sid) {
     ${!rounds.length ? `<button onclick="reviewOne('${sid}')">让模型先评审</button>
       <button class="primary" onclick="revDecide('approved')">人工直接通过<span class="kbd">A</span></button>
       <button class="danger" onclick="revDecide('rejected')">人工直接驳回<span class="kbd">R</span></button>` : ""}
-    ${(ann.human_review || {}).decision ? `<button class="ghost" onclick="revDecide(null)">撤销结论</button>` : ""}
+    <button class="ghost" onclick="revOptimize('${sid}')" title="优化器全量改写 -> 独立模型审核 -> 不过自动退回修订，循环至过审">全面优化</button>
+    ${REV.finalized
+      ? `<button class="ghost" onclick="revFinalize(false)">撤销定稿</button>`
+      : `<button class="primary" onclick="revFinalize(true)" title="浏览无异议后标记定稿：全部修改生效并锁定">定稿</button>`}
+    ${(ann.human_review || {}).decision && !REV.finalized ? `<button class="ghost" onclick="revDecide(null)">撤销结论</button>` : ""}
     <button class="ghost" onclick="showJson(STATE.drawerData.annotation)">标注 JSON</button>
     <span class="grow"></span>
     <span id="revSave" class="faint" style="font-size:12px"></span>
@@ -1697,21 +1745,38 @@ function renderTrace(t) {
   </div>`;
 }
 
+function effectiveThinking(mid, m) {
+  const it = REV.items[mid];
+  if (it && it.rewrite === "accepted") return REV.modelRw[mid] || (m && m.thinking) || "";
+  if (it && it.rewrite === "edited") return it.edited_text || (m && m.thinking) || "";
+  return (m && m.thinking) || "";
+}
+function stepMarksHtml(mid) {
+  const it = REV.items[mid] || {};
+  const disp = it.rewrite === "accepted" ? `<span class="lb ok">已采纳</span>`
+    : it.rewrite === "rejected" ? `<span class="lb no">不采纳</span>`
+    : it.rewrite === "edited" ? `<span class="lb gold">手改</span>`
+    : it.step === "exclude" ? `<span class="lb no">将排除</span>`
+    : it.step === "keep" ? `<span class="lb keep">保留</span>` : "";
+  const ctx = [
+    REV.bad.has(mid) ? `<span class="lb prune">问题步</span>` : "",
+    REV.rewritten.has(mid) ? `<span class="lb backfill">有改写</span>` : "",
+  ].filter(Boolean).join(" ");
+  return (disp ? disp + " " : "") + ctx;
+}
 function renderStep(st) {
   const open = FLOW.openSteps.has(st.id);
   const mid = st.m && st.m.id;
   const marked = REV.active && mid;
+  const done = marked && revDone(mid);
   const gist = firstLine(st.think) || firstLine(st.m?.text);
-  const marks = marked ? [
-    REV.bad.has(mid) ? `<span class="lb prune">问题步</span>` : "",
-    REV.rewritten.has(mid) ? `<span class="lb backfill">有改写</span>` : "",
-  ].filter(Boolean).join(" ") : "";
+  const marks = marked ? stepMarksHtml(mid) : "";
   const calls = st.calls.slice(0, 2).map(c =>
     `<span class="call ${c.result?.isError ? "e" : ""}"><b>${esc(c.name)}</b>${hl(short(oneLine(callGist(c)), 90))}</span>`).join("");
-  return `<div class="step ${open ? "open" : ""} ${st.err ? "err" : ""} ${st.flagged ? "flagged" : ""} ${marked && REV.bad.has(mid) ? "rev-bad" : ""} ${marked && REV.rewritten.has(mid) ? "rev-rw" : ""}" id="${st.id}">
+  return `<div class="step ${open ? "open" : ""} ${st.err ? "err" : ""} ${st.flagged ? "flagged" : ""} ${marked && REV.bad.has(mid) ? "rev-bad" : ""} ${marked && REV.rewritten.has(mid) ? "rev-rw" : ""} ${done ? "rev-done" : ""}" id="${st.id}">
     <button class="step-row" aria-expanded="${open}" onclick="toggleStep('${st.id}')">
       <span class="no num">${st.no}</span>
-      <span class="gist">${marks ? marks + " " : ""}${gist ? hl(short(gist, 160)) : `<span class="faint">没有思考内容</span>`}</span>
+      <span class="gist">${marked ? `<span class="marks">${marks}</span> ` : ""}<span data-gisttxt>${gist ? hl(short(gist, 160)) : `<span class="faint">没有思考内容</span>`}</span></span>
       <span class="calls">${calls || `<span class="faint">无工具调用</span>`}${st.calls.length > 2 ? `<span class="more-calls">+${st.calls.length - 2}</span>` : ""}</span>
     </button>
     ${open ? renderStepDetail(st) : ""}
@@ -1745,22 +1810,45 @@ function renderStepDetail(st) {
     </div>`;
   }).join("");
   const it = (REV.active && m.id) ? (REV.items[m.id] || {}) : {};
+  const hasRw = REV.active && m.id && REV.rewritten.has(m.id);
+  const oldS = REV.originals[m.id] || "", scriptS = REV.scripts[m.id] || m.thinking || "", neu = REV.modelRw[m.id] || "";
+  let rwPairKey = "";
+  if (hasRw) {
+    const kM = "rw-model:" + m.id, kS = "rw-script:" + m.id;
+    REV.pairs[kS] = REV.pairs[kS] || {old: oldS, new: scriptS, caps:["原始会话", "脚本提纯"]};
+    REV.pairs[kM] = REV.pairs[kM] || {old: scriptS, new: neu, caps:["脚本提纯", "模型改写"]};
+    rwPairKey = kM;
+  }
+  const on = name => (it.rewrite === name || it.step === name) ? "rev-on" : "";
+  const pillTxt = it.step==="exclude"?"将排除":it.step==="keep"?"强制保留":it.rewrite==="edited"?"手改":it.rewrite==="accepted"?"已采纳改写":it.rewrite==="rejected"?"不采纳改写":"按质量门控";
   const reviewBox = REV.active && m.id ? `<div class="step-review" data-revcard="${esc(m.id)}">
     <div class="row"><span class="faint">训练去向</span>
-      <button data-rev="exclude" data-mid="${esc(m.id)}" class="${it.step==="exclude"?"rev-on":""}" onclick="revAct(this)">排除此步</button>
-      <button data-rev="keep" data-mid="${esc(m.id)}" class="${it.step==="keep"?"rev-on":""}" onclick="revAct(this)">强制保留</button>
-      <button data-rev="edited" data-mid="${esc(m.id)}" class="${it.rewrite==="edited"?"rev-on":""}" onclick="revAct(this)">人工改写 thinking</button>
-      <span class="grow"></span><span class="chip" data-pill>${it.step==="exclude"?"将排除":it.step==="keep"?"强制保留":it.rewrite==="edited"?"人工改写":"按质量门控"}</span>
+      ${hasRw ? `<button data-rev="accepted" data-mid="${esc(m.id)}" class="${on("accepted")}" onclick="revAct(this)">采纳改写</button>
+      <button data-rev="rejected" data-mid="${esc(m.id)}" class="${on("rejected")}" onclick="revAct(this)">不采纳</button>` : ""}
+      <button data-rev="edited" data-mid="${esc(m.id)}" class="${on("edited")}" onclick="revAct(this)">手改</button>
+      <button data-rev="exclude" data-mid="${esc(m.id)}" class="${on("exclude")}" onclick="revAct(this)">排除此步</button>
+      <button data-rev="keep" data-mid="${esc(m.id)}" class="${on("keep")}" onclick="revAct(this)">强制保留</button>
+      <button class="ghost" onclick="revNext('${esc(m.id)}')" title="跳到下一个未处置的改写/问题步">处理下一个</button>
+      <span class="grow"></span>
+      ${hasRw ? `<span class="faint num">原始 ${chars(oldS.length)} · 当前 ${chars(scriptS.length)} · 改写 ${chars(neu.length)}</span>` : ""}
+      <span class="chip" data-pill data-default="按质量门控">${pillTxt}</span>
     </div>
+    ${hasRw ? `
+    <details class="rw-diff" ontoggle="revLazy(this)"><summary>精确差异（当前版 → 模型改写提案，绿为补、红为删）</summary>
+      <div class="diff-slot" data-pair="${esc(rwPairKey)}" style="margin-top:7px"></div>
+    </details>` : ""}
     <textarea class="rev-editbox ${it.rewrite==="edited"?"":"hidden"}" data-field="edit" data-mid="${esc(m.id)}" oninput="revInput(this)"
       placeholder="直接写最终进入训练集的 thinking">${esc(it.edited_text || REV.modelRw[m.id] || m.thinking || "")}</textarea>
     <textarea class="rev-comment" data-field="comment" data-mid="${esc(m.id)}" oninput="revInput(this)"
-      placeholder="给这一步加批注（可用于按意见重审）">${esc(it.comment||"")}</textarea>
+      placeholder="修改意见。拒绝或写下意见后，可以让模型按意见重做这一步">${esc(it.comment||"")}</textarea>
   </div>` : "";
+  const effThink = (REV.active && m.id) ? effectiveThinking(m.id, m) : (m.thinking || "");
+  const effChanged = effThink !== (m.thinking || "");
   return `<div class="step-d">
     <div class="step-meta">${meta}</div>
-    ${REV.active && m.id && REV.rewritten.has(m.id) ? `<div><button class="ghost" onclick="document.getElementById('revc-${m.id}')?.scrollIntoView({block:'start'})">查看此步的改写对照</button></div>` : ""}
-    ${st.think ? `<div class="think-full">${hl(st.think)}</div>` : ""}
+    ${effThink ? `<div class="row ${effChanged ? "" : "hidden"}" data-thinknote style="margin:2px 0 6px"><span class="lb ok">已显示生效版本</span><span class="faint" style="font-size:11px">采纳/手改后的内容，通过后将进入训练集</span></div>
+    <div class="think-full" data-thinkfull>${hl(effThink)}</div>
+    ${effChanged ? `<details class="think-orig" data-thinkorig><summary>查看脚本提纯原版 · ${chars((m.thinking || "").length)}</summary><pre>${hl(m.thinking || "")}</pre></details>` : ""}` : ""}
     ${m.text ? `<div class="said md">${md(m.text)}</div>` : ""}
     ${calls}
     ${reviewBox}
