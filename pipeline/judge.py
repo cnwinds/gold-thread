@@ -412,7 +412,19 @@ def prewarm(sessions: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
             return 0
 
     t0 = time.time()
-    results = _pmap(_one, sessions, workers)
+    total_steps = sum(1 for _ in sessions) and 0
+    # 逐会话汇报进度（否则长任务期间日志一片空白，无法判断是否卡住）
+    results: List[int] = [0] * len(sessions)
+    done = [0]
+
+    def _one_logged(s: Dict[str, Any]) -> int:
+        n = _one(s)
+        done[0] += 1
+        log(f"[judge] 预热 {done[0]}/{len(sessions)} {str(s.get('sid'))[:8]} {n} 步"
+            f"（累计 {time.time() - t0:.0f}s）")
+        return n
+
+    results = _pmap(_one_logged, sessions, workers)
     steps = sum(r or 0 for r in results)
     log(f"[judge] 会话并行预热 {len(sessions)} 条（{workers} 会话 × {j.get('concurrency')} 批并发）"
         f"共 {steps} 步，耗时 {time.time() - t0:.0f}s")

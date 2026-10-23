@@ -439,6 +439,8 @@ def purify_by_judge(
                 "reason": f"judge::{d.get('reason') or 'prune'}",
                 "has_dpo": True,
                 "unit_index": idx,
+                # DPO 上下文：被删步之前已保留的全部单元（与脚本版字段一致）
+                "context_units": copy.deepcopy([u for u, _ in kept]),
                 "rejected_msg": copy.deepcopy(msg),
                 "dropped_msg_id": mid,
                 "error_output": "\n".join(t.get("content", "") for t in (msg.get("tool_results") or []))[:800],
@@ -455,6 +457,7 @@ def purify_by_judge(
                     "reason": f"judge::{d.get('reason') or 'fold'}",
                     "has_dpo": False,
                     "unit_index": idx,
+                    "context_units": copy.deepcopy([u for u, _ in kept]),
                     "rejected_msg": copy.deepcopy(msg),
                     "dropped_msg_id": mid,
                     "by": "judge",
@@ -572,7 +575,9 @@ def _dpo_from_pruned(
     for i, pd in enumerate(pruned):
         if not pd.get("has_dpo", True) or not pd.get("chosen_msg") or not pd.get("rejected_msg"):
             continue
-        convs = conv(pd["context_units"])
+        convs = conv(pd.get("context_units") or [])
+        if not convs:
+            continue
         if not convs:
             continue
         chosen = to_sharegpt(pd["chosen_msg"])
@@ -616,7 +621,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         d.mkdir(parents=True, exist_ok=True)
 
     cfgh = section_hash(
-        cfg, ["gold", "review", "synth.window_turns", "synth.max_tool_output_chars", "labeling", "turns"]
+        cfg, ["gold", "review", "judge", "synth.window_turns", "synth.max_tool_output_chars", "labeling", "turns"]
     )
     state_path = dirs["state"] / "stage2.json"
     state = read_json(state_path, default={}) or {}

@@ -13,9 +13,9 @@ paths:
 
 llm:
   # 模型参与环节统一使用该模型（通过 pi models.json 里的 provider 调用）
-  model: "glm-5.3-flash"
+  model: "MiniMax-M3.1-Flash"
   temperature: 0.2
-  max_tokens: 8192
+  max_tokens: 16384
   timeout_seconds: 300
   # 结果按 (prompt_version + 输入内容) 缓存，重跑零成本
   cache: true
@@ -123,11 +123,11 @@ judge:
   enabled: true
   # 兜底模型（下面 decide_model / audit_model 为空时用它；再空则跟随 llm.model）
   model: ""
-  # 测试阶段：所有模型统一用 glm-5.3-flash（上线后可把 audit_model 换成第三方模型做交叉验证）
+  # 测试阶段：所有模型统一用 MiniMax-M3.1-Flash
   # 步级判断（剪枝/折叠/改写/排除）：调用量最大
-  decide_model: "glm-5.3-flash"
+  decide_model: "MiniMax-M3.1-Flash"
   # 审核类（接缝是否平滑 / 质量报告与高光 / DPO 偏好对复核）
-  audit_model: "glm-5.3-flash"
+  audit_model: "MiniMax-M3.1-Flash"
   # 逐任务覆盖（留空 = 按 decide_model / audit_model 两类走）
   # 想让某一类审核也走主模型就填 glm-5.3-flash，想换第三方模型直接填模型 id
   task_models:
@@ -138,7 +138,7 @@ judge:
   seam_min_silent_chars: 80
   # 每批送判的步数。实测：一批 8 步判断最细（32 步一批时模型会漏判甚至不判），
   # 因此"多步一起处理"要走并发而不是加大批，保证判断质量不下降。
-  step_batch: 8
+  step_batch: 4
   seam_batch: 3
   dpo_batch: 4
   # 批级并发：单会话内同时在飞的模型请求数
@@ -148,7 +148,7 @@ judge:
   # 质量报告抽样步数上限，以及每块送审步数
   # （单次 payload 过大会让模型超时返回空，实测 glm 40 步一块会失败）
   max_steps_per_audit: 30
-  quality_batch: 12
+  quality_batch: 8
   # 单步送判的 thinking 截断字符
   item_think_chars: 1100
   # 模型调用失败时是否回退到脚本规则（保守：失败就保持原样）
