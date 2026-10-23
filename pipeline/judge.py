@@ -148,13 +148,21 @@ DPO_SCHEMA = """输出 JSON：
 
 def _jcfg(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     cfg = cfg or load_config()
+    global _ITEM_THINK
     j = dict(cfg.get("judge", {}) or {})
     j.setdefault("enabled", True)
     j.setdefault("model", "")
+    j.setdefault("decide_model", "")
+    j.setdefault("audit_model", "")
+    j.setdefault("task_models", {})
+    j.setdefault("item_think_chars", 1100)
+    _ITEM_THINK = int(j["item_think_chars"])
+    j.setdefault("seam_min_silent_chars", 80)
     j.setdefault("step_batch", 24)
     j.setdefault("seam_batch", 12)
     j.setdefault("dpo_batch", 8)
-    j.setdefault("max_steps_per_audit", 40)
+    j.setdefault("max_steps_per_audit", 30)
+    j.setdefault("quality_batch", 12)
     j.setdefault("labels", ["positive", "pending"])
     j.setdefault("concurrency", 6)
     j.setdefault("session_workers", 1)
@@ -179,8 +187,21 @@ def enabled(cfg: Optional[Dict[str, Any]] = None, label: Optional[str] = None) -
     return label in (j.get("labels") or ["positive", "pending"])
 
 
-def _model(cfg: Dict[str, Any], j: Dict[str, Any]) -> Optional[str]:
-    return j.get("model") or cfg["llm"].get("model")
+def _model(cfg: Dict[str, Any], j: Dict[str, Any], task: str = "") -> Optional[str]:
+    """按任务分派模型。
+
+    优先级：task_models[task] > (steps ? decide_model : audit_model) > model > llm.model
+    """
+    tm = (j.get("task_models") or {}).get(task)
+    if tm:
+        return tm
+    if task == "steps":
+        m = j.get("decide_model")
+    elif task in ("seams", "quality", "dpo"):
+        m = j.get("audit_model")
+    else:
+        m = None
+    return m or j.get("model") or cfg["llm"].get("model")
 
 
 _SEM_LOCK = threading.Lock()
@@ -209,7 +230,7 @@ def _call(system: str, schema: str, payload: Any, cfg: Dict[str, Any], j: Dict[s
             out = chat_json(
                 system,
                 user,
-                model=_model(cfg, j),
+                model=_model(cfg, j, tag),
                 temperature=temperature,
                 prompt_version=f"{PROMPT_VERSION}.{tag}",
             )
@@ -236,6 +257,34 @@ def _pmap(fn, items: List[Any], workers: int) -> List[Any]:
             except Exception:  # noqa: BLE001
                 out[i] = None
     return out
+
+
+def _run_with_split(fn, batches: List[List[Any]], workers: int, log, tag: str):
+    """批并发执行；整批失败（常见于超时/JSON 截断）时拆成单条重试。
+
+    返回 (outs, failed_cnt)。outs 与 batches 同序，失败批次对应 None。
+    """
+    outs = _pmap(fn, batches, workers)
+    failed = 0
+    for i, out in enumerate(outs):
+        if out or len(batches[i]) <= 1:
+            if not out:
+                failed += 1
+            continue
+        log(f"[judge] {tag} 批失败（{len(batches[i])} 条），拆单重试")
+        singles = _pmap(fn, [[x] for x in batches[i]], workers)
+        merged = {"decisions": [], "seams": [], "pairs": []}
+        ok_any = False
+        for o in singles:
+            if not o:
+                failed += 1
+                continue
+            ok_any = True
+            for k in merged:
+                if isinstance(o.get(k), list):
+                    merged[k].extend(o[k])
+        outs[i] = merged if ok_any else None
+    return outs, failed
 
 
 def _batched(items: List[Any], n: int) -> List[List[Any]]:
@@ -266,12 +315,15 @@ def _result_brief(m: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+_ITEM_THINK = 1100  # 单步送判的 thinking 截断（由 _jcfg 覆盖）
+
+
 def _step_payload(m: Dict[str, Any], no: int) -> Dict[str, Any]:
     return {
         "msg_id": m.get("id"),
         "no": no,
         "turn": m.get("turn_index"),
-        "thinking": _clip(m.get("raw_thinking") or m.get("thinking"), 1200),
+        "thinking": _clip(m.get("raw_thinking") or m.get("thinking"), int(_ITEM_THINK)),
         "think_len": len((m.get("raw_thinking") or m.get("thinking") or "")),
         "text": _clip(m.get("raw_text") or m.get("text"), 200),
         "tools": _tool_brief(m),
@@ -286,7 +338,7 @@ def _step_payload(m: Dict[str, Any], no: int) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def decide_steps(gold_messages: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None,
-                 log=print) -> Dict[str, Dict[str, Any]]:
+                 log=print, out_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     """返回 {msg_id: {action, reason, rewritten}}；模型未提及的步即 keep。"""
     cfg = cfg or load_config()
     j = _jcfg(cfg)
@@ -306,7 +358,12 @@ def decide_steps(gold_messages: List[Dict[str, Any]], cfg: Optional[Dict[str, An
         return _call(STEPS_SYSTEM, STEPS_SCHEMA, payload, cfg, j, "steps", log)
 
     batches = _batched(asst, j["step_batch"])
-    outs = _pmap(_one, batches, j["concurrency"])
+    outs, failed = _run_with_split(_one, batches, j["concurrency"], log, "steps")
+    if out_meta is not None:
+        out_meta["steps_batches"] = len(batches)
+        out_meta["steps_failed"] = failed
+    if failed:
+        log(f"[judge] 步级判断失败 {failed} 批（对应步保持原样，会话降级待人工）")
     for batch, out in zip(batches, outs):
         out = out or {}
         for d in out.get("decisions", []) or []:
@@ -367,7 +424,7 @@ def prewarm(sessions: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
 # ---------------------------------------------------------------------------
 
 def audit_seams(seams: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None,
-                log=print) -> Dict[str, Dict[str, Any]]:
+                log=print, out_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     """返回 {seam_id: {smooth, issue, patch_msg_id, patched_thinking}}。"""
     cfg = cfg or load_config()
     j = _jcfg(cfg)
@@ -375,8 +432,12 @@ def audit_seams(seams: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = Non
         return {}
     out_map: Dict[str, Dict[str, Any]] = {}
     batches = _batched(seams, j["seam_batch"])
-    outs = _pmap(lambda b: _call(SEAM_SYSTEM, SEAM_SCHEMA, {"seams": b}, cfg, j, "seams", log),
-                 batches, j["concurrency"])
+    outs, failed = _run_with_split(
+        lambda b: _call(SEAM_SYSTEM, SEAM_SCHEMA, {"seams": b}, cfg, j, "seams", log),
+        batches, j["concurrency"], log, "seams")
+    if out_meta is not None:
+        out_meta["seams_total"] = len(seams)
+        out_meta["seams_failed"] = failed
     for batch, out in zip(batches, outs):
         out = out or {}
         for s in out.get("seams", []) or []:
@@ -411,49 +472,92 @@ def audit_quality(gold_messages: List[Dict[str, Any]], stats: Dict[str, Any],
         step = len(asst) / cap
         sample = [asst[min(len(asst) - 1, int(i * step))] for i in range(cap)]
     root = next((m for m in gold_messages if m.get("role") == "user"), None)
-    payload = {
-        "root_task": _clip((root or {}).get("content"), 300),
-        "session_stats": {k: stats.get(k) for k in (
-            "raw_steps", "gold_steps", "folded", "pruned_detours",
-            "thinking_compressed", "thinking_backfilled", "thinking_synthesized",
-            "silent_cleared") if k in stats},
-        "sampled": len(sample),
-        "total_steps": len(asst),
-        "steps": [_step_payload(m, i + 1) for i, m in enumerate(sample)],
-    }
-    out = _call(QUALITY_SYSTEM, QUALITY_SCHEMA, payload, cfg, j, "quality", log)
-    if not out:
-        return {}
+    stats_brief = {k: stats.get(k) for k in (
+        "raw_steps", "gold_steps", "folded", "pruned_detours",
+        "thinking_compressed", "thinking_backfilled", "thinking_synthesized",
+        "silent_cleared") if k in stats}
+
+    # 分块审计：单次 payload 过大会让模型超时/漏判（实测 glm 40 步会超时返回空）
+    qb = max(4, int(j["quality_batch"]))
+    chunks = _batched(sample, qb)
+
+    def _one(chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
+        payload = {
+            "root_task": _clip((root or {}).get("content"), 300),
+            "session_stats": stats_brief,
+            "sampled": len(chunk),
+            "total_steps": len(asst),
+            "steps": [_step_payload(m, i + 1) for i, m in enumerate(chunk)],
+        }
+        return _call(QUALITY_SYSTEM, QUALITY_SCHEMA, payload, cfg, j, "quality", log)
+
+    outs = _pmap(_one, chunks, j["concurrency"])
     valid = {m.get("id") for m in asst}
-    verdict = str(out.get("verdict") or "").strip()
-    if verdict not in ("trainable", "needs_human", "discard"):
-        verdict = "needs_human"
-    try:
-        conf = float(out.get("confidence") or 0.0)
-    except (TypeError, ValueError):
-        conf = 0.0
-    highlights = []
-    for hl in out.get("highlights", []) or []:
-        if not isinstance(hl, dict) or hl.get("msg_id") not in valid:
+    sev = {"trainable": 0, "needs_human": 1, "discard": 2}
+    worst = "trainable"
+    confs: List[float] = []
+    reasons: List[str] = []
+    problems: List[str] = []
+    highlights: Dict[str, Dict[str, Any]] = {}
+    opening = closing = None
+    failed = 0
+    for out in outs:
+        if not out:
+            failed += 1
             continue
+        v = str(out.get("verdict") or "").strip()
+        if v not in sev:
+            v = "needs_human"
+        if sev[v] > sev[worst]:
+            worst = v
         try:
-            w = int(hl.get("weight") or 2)
+            confs.append(float(out.get("confidence") or 0.0))
         except (TypeError, ValueError):
-            w = 2
-        highlights.append({"msg_id": hl["msg_id"], "why": _clip(hl.get("why"), 60),
-                           "weight": max(1, min(5, w))})
+            pass
+        r = (out.get("reason") or "").strip()
+        if r and r not in reasons:
+            reasons.append(r)
+        for p in (out.get("problems") or []):
+            if isinstance(p, str) and p.strip() and p.strip() not in problems:
+                problems.append(p.strip())
+        for hl in (out.get("highlights") or []):
+            if not isinstance(hl, dict) or hl.get("msg_id") not in valid:
+                continue
+            try:
+                w = max(1, min(5, int(hl.get("weight") or 2)))
+            except (TypeError, ValueError):
+                w = 2
+            mid = hl["msg_id"]
+            if mid not in highlights or w > highlights[mid]["weight"]:
+                highlights[mid] = {"msg_id": mid, "why": _clip(hl.get("why"), 60), "weight": w}
+        opening = opening or (out.get("opening_msg_id") if out.get("opening_msg_id") in valid else None)
+        closing = closing or (out.get("closing_msg_id") if out.get("closing_msg_id") in valid else None)
+
+    if failed and len(confs) == 0:
+        log(f"[judge] 质量报告全部失败（{failed} 块），按待人工处理")
+        return {}
+    if failed:
+        # 有块失败 -> 保守降级，绝不因为漏审而放行
+        if sev[worst] < sev["needs_human"]:
+            worst = "needs_human"
+        problems.append(f"{failed} 个分块审计失败，结论不完整，需人工复核")
+
+    verdict = worst
     return {
         "verdict": verdict,
-        "confidence": round(conf, 3),
-        "reason": _clip(out.get("reason"), 200),
-        "problems": [_clip(p, 160) for p in (out.get("problems") or []) if isinstance(p, str)][:12],
-        "needs_wholesale_rewrite": bool(out.get("needs_wholesale_rewrite")),
-        "highlights": highlights,
-        "opening_msg_id": out.get("opening_msg_id") if out.get("opening_msg_id") in valid else None,
-        "closing_msg_id": out.get("closing_msg_id") if out.get("closing_msg_id") in valid else None,
+        "confidence": round(min(confs), 3) if confs else 0.0,
+        "reason": _clip("；".join(reasons), 400),
+        "problems": [_clip(p, 160) for p in problems][:16],
+        "needs_wholesale_rewrite": any(
+            bool((o or {}).get("needs_wholesale_rewrite")) for o in outs),
+        "highlights": sorted(highlights.values(), key=lambda h: -h["weight"]),
+        "opening_msg_id": opening,
+        "closing_msg_id": closing,
         "audited_steps": len(sample),
         "total_steps": len(asst),
-        "model": _model(cfg, j),
+        "chunks": len(chunks),
+        "chunks_failed": failed,
+        "model": _model(cfg, j, "quality"),
         "prompt_version": PROMPT_VERSION,
     }
 
@@ -477,18 +581,36 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
                 "sample_id": p.get("sample_id"),
                 "reason": (p.get("metadata") or {}).get("reason"),
                 "context_tail": [
-                    {"from": c.get("from"), "value": _clip(c.get("value"), 400)}
-                    for c in (p.get("conversations") or [])[-4:]
+                    {"from": c.get("from"), "value": _clip(c.get("value"), 260)}
+                    for c in (p.get("conversations") or [])[-3:]
                 ],
-                "chosen": _clip((p.get("chosen") or {}).get("value"), 1400),
-                "rejected": _clip((p.get("rejected") or {}).get("value"), 1400),
+                "chosen": _clip((p.get("chosen") or {}).get("value"), 900),
+                "rejected": _clip((p.get("rejected") or {}).get("value"), 900),
             } for p in batch]}
         return _call(DPO_SYSTEM, DPO_SCHEMA, payload, cfg, j, "dpo", log)
 
     batches = _batched(pairs, j["dpo_batch"])
     outs = _pmap(_one, batches, j["concurrency"])
+    resolved: List[Dict[str, Any]] = []
+    failed_ids: List[str] = []
     for batch, out in zip(batches, outs):
-        out = out or {}
+        if not out and len(batch) > 1:
+            # 批失败（常见于超时/JSON 截断）-> 拆成单对重试，避免整批静默放过
+            log(f"[judge] dpo 批失败（{len(batch)} 对），拆单重试")
+            singles = _pmap(_one, [[p] for p in batch], j["concurrency"])
+            for p, o in zip(batch, singles):
+                if not o:
+                    failed_ids.append(str(p.get("sample_id")))
+                else:
+                    resolved.append(o)
+            continue
+        if not out:
+            failed_ids.append(str(batch[0].get("sample_id")))
+            continue
+        resolved.append(out)
+    if failed_ids:
+        log(f"[judge] dpo 复核失败 {len(failed_ids)} 对（已标记 review_failed，不静默放过）")
+    for out in resolved:
         for it in out.get("pairs", []) or []:
             if not isinstance(it, dict):
                 continue
@@ -496,6 +618,8 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
             if v not in ("swap", "drop"):
                 continue
             out_map[str(sid)] = {"verdict": v, "reason": _clip(it.get("reason"), 60)}
+    for fid in failed_ids:
+        out_map[fid] = {"verdict": "review_failed", "reason": "模型复核失败，需人工抽查"}
     return out_map
 
 
@@ -586,7 +710,8 @@ def extract_seams(gold_messages: List[Dict[str, Any]], pruned: List[Dict[str, An
     # 4) 静默执行 / 空思考合成：单步内的"内容消失"
     for m in asst:
         flags = m.get("flags") or []
-        if "silent_executed" in flags:
+        _cleared = (m.get("raw_text") or "")
+        if "silent_executed" in flags and len(_cleared.strip()) >= int(80):
             seams.append({
                 "seam_id": f"silent::{m.get('id')}",
                 "type": "silent_cleared",

@@ -16,7 +16,7 @@ llm:
   model: "glm-5.3-flash"
   temperature: 0.2
   max_tokens: 8192
-  timeout_seconds: 180
+  timeout_seconds: 300
   # 结果按 (prompt_version + 输入内容) 缓存，重跑零成本
   cache: true
 
@@ -121,19 +121,36 @@ turns:
 # ---------------------------------------------------------------------------
 judge:
   enabled: true
-  # 空 = 跟随 llm.model；也可单独指定判断模型
+  # 兜底模型（下面 decide_model / audit_model 为空时用它；再空则跟随 llm.model）
   model: ""
+  # 测试阶段：所有模型统一用 glm-5.3-flash（上线后可把 audit_model 换成第三方模型做交叉验证）
+  # 步级判断（剪枝/折叠/改写/排除）：调用量最大
+  decide_model: "glm-5.3-flash"
+  # 审核类（接缝是否平滑 / 质量报告与高光 / DPO 偏好对复核）
+  audit_model: "glm-5.3-flash"
+  # 逐任务覆盖（留空 = 按 decide_model / audit_model 两类走）
+  # 想让某一类审核也走主模型就填 glm-5.3-flash，想换第三方模型直接填模型 id
+  task_models:
+    seams: ""       # 接缝是否平滑（局部小窗口，量大但单次廉价）
+    quality: ""     # 质量报告 + 高光（决定要不要训这条会话）
+    dpo: ""         # DPO 偏好对复核（最需要跨模型交叉验证）
+  # 被清空的播报短于该字数时不生成接缝（短播报清空不会断上下文，省调用）
+  seam_min_silent_chars: 80
   # 每批送判的步数。实测：一批 8 步判断最细（32 步一批时模型会漏判甚至不判），
   # 因此"多步一起处理"要走并发而不是加大批，保证判断质量不下降。
   step_batch: 8
-  seam_batch: 12
-  dpo_batch: 8
+  seam_batch: 3
+  dpo_batch: 4
   # 批级并发：单会话内同时在飞的模型请求数
   concurrency: 12
   # 会话级并发：同时处理多少条会话（预热阶段并行摊掉模型延迟）
   session_workers: 4
-  # 质量报告抽样步数上限
-  max_steps_per_audit: 40
+  # 质量报告抽样步数上限，以及每块送审步数
+  # （单次 payload 过大会让模型超时返回空，实测 glm 40 步一块会失败）
+  max_steps_per_audit: 30
+  quality_batch: 12
+  # 单步送判的 thinking 截断字符
+  item_think_chars: 1100
   # 模型调用失败时是否回退到脚本规则（保守：失败就保持原样）
   fallback_to_rules: true
   # 允许模型使用的动作（关掉即该动作一律不执行）

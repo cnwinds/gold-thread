@@ -407,7 +407,8 @@ def purify_by_judge(
                 silent_n += 1
         log(f"[judge] 机械静默执行 {silent_n} 步")
 
-    decisions = judge.decide_steps(flat, cfg=cfg, log=log)
+    jmeta: Dict[str, Any] = {}
+    decisions = judge.decide_steps(flat, cfg=cfg, log=log, out_meta=jmeta)
     log(f"[judge] 步级决定 {len(decisions)} 条（模型）")
 
     asst_total = sum(1 for u in units if u["type"] == "assistant_turn")
@@ -506,7 +507,7 @@ def purify_by_judge(
     seams = judge.extract_seams(gold_messages, pruned, turn_marks)
     audit = {"seams_total": len(seams), "seams_fixed": 0, "seam_issues": []}
     if seams:
-        verdicts = judge.audit_seams(seams, cfg=cfg, log=log)
+        verdicts = judge.audit_seams(seams, cfg=cfg, log=log, out_meta=audit)
         by_id = {m.get("id"): m for m in gold_messages if m.get("role") == "assistant"}
         for sid, v in verdicts.items():
             if v.get("smooth", True):
@@ -536,6 +537,7 @@ def purify_by_judge(
         "excluded": excluded,
         "decisions": len(decisions),
         "decided_by": "model",
+        "judge_failed_batches": int(jmeta.get("steps_failed", 0)) + int(jmeta.get("seams_failed", 0)),
     }
     return gold_messages, pruned, stats, audit
 
@@ -728,8 +730,15 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
 
         # 模型质量报告 + 高光分析（模型负责"值不值得训练"，程序据此门控）
         quality_report: Dict[str, Any] = {}
+        _judge_failed = int(purify_stats.get("judge_failed_batches", 0))
         if judge.enabled(cfg):
             quality_report = judge.audit_quality(gold_msgs, purify_stats, cfg=cfg, log=log)
+            if quality_report and _judge_failed:
+                # 判断有失败批次 -> 结论不完整，保守降级，避免漏审放行
+                if quality_report.get("verdict") == "trainable":
+                    quality_report["verdict"] = "needs_human"
+                quality_report.setdefault("problems", []).append(
+                    f"judge 有 {_judge_failed} 个批次失败，判断不完整，需人工复核")
             if quality_report:
                 log(
                     f"[judge] 质量报告 {sid[:8]}: {quality_report['verdict']}"
