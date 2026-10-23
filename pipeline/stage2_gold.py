@@ -632,6 +632,42 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     written = reused = 0
     counts = Counter()
 
+    # 会话级并行预热：把需要重算的会话的"步级判断"并发跑完并写入缓存，
+    # 随后主循环（顺序写盘，保证血缘与索引一致）直接命中缓存。
+    if judge.enabled(cfg):
+        warm: List[Dict[str, Any]] = []
+        for _sid, _e in sorted(raw_index["sessions"].items()):
+            _label = _e.get("label", "pending")
+            if not judge.enabled(cfg, _label):
+                continue
+            _raw = Path(_e["raw_file"])
+            if not _raw.exists():
+                continue
+            _fp = _e.get("fingerprint") or fingerprint(_raw)
+            _mp = Path(_e.get("meta_file", "")) if _e.get("meta_file") else None
+            _mfp = fingerprint(_mp) if _mp and _mp.exists() else None
+            _prev = prev_files.get(_sid)
+            _skip = (
+                not force and _prev
+                and fingerprint_equal(_prev.get("fingerprint"), _fp)
+                and fingerprint_equal(_prev.get("meta_fingerprint"), _mfp)
+                and _prev.get("flow_version") == pilog.FLOW_VERSION
+                and (prev_index.get("sessions") or {}).get(_sid, {}).get("label") == _label
+                and all(Path(p).exists() for p in _prev.get("outputs", []))
+            )
+            if _skip:
+                continue
+            _meta = read_json(_mp, default={}) if _mp and _mp.exists() else {}
+            warm.append({
+                "sid": _sid,
+                "raw_file": str(_raw),
+                "annotations": (_meta or {}).get("turn_annotations"),
+                "manual_overrides": (_meta or {}).get("manual_turn_overrides"),
+                "max_tool_output_chars": max_tool_chars,
+            })
+        if warm:
+            judge.prewarm(warm, cfg=cfg, log=log)
+
     for sid, entry in sorted(raw_index["sessions"].items()):
         label = entry.get("label", "pending")
         counts[label] += 1

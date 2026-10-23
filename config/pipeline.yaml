@@ -123,10 +123,15 @@ judge:
   enabled: true
   # 空 = 跟随 llm.model；也可单独指定判断模型
   model: ""
-  # 每批送判的步数 / 接缝数 / DPO 对数（不省 token 可调大）
-  step_batch: 16
+  # 每批送判的步数。实测：一批 8 步判断最细（32 步一批时模型会漏判甚至不判），
+  # 因此"多步一起处理"要走并发而不是加大批，保证判断质量不下降。
+  step_batch: 8
   seam_batch: 12
   dpo_batch: 8
+  # 批级并发：单会话内同时在飞的模型请求数
+  concurrency: 12
+  # 会话级并发：同时处理多少条会话（预热阶段并行摊掉模型延迟）
+  session_workers: 4
   # 质量报告抽样步数上限
   max_steps_per_audit: 40
   # 模型调用失败时是否回退到脚本规则（保守：失败就保持原样）

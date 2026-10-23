@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .common.config import load_config
@@ -148,11 +151,13 @@ def _jcfg(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     j = dict(cfg.get("judge", {}) or {})
     j.setdefault("enabled", True)
     j.setdefault("model", "")
-    j.setdefault("step_batch", 16)
+    j.setdefault("step_batch", 24)
     j.setdefault("seam_batch", 12)
     j.setdefault("dpo_batch", 8)
     j.setdefault("max_steps_per_audit", 40)
     j.setdefault("labels", ["positive", "pending"])
+    j.setdefault("concurrency", 6)
+    j.setdefault("session_workers", 1)
     j.setdefault("fallback_to_rules", True)
     acts = j.get("decisions") or {}
     j["decisions"] = {
@@ -178,21 +183,59 @@ def _model(cfg: Dict[str, Any], j: Dict[str, Any]) -> Optional[str]:
     return j.get("model") or cfg["llm"].get("model")
 
 
+_SEM_LOCK = threading.Lock()
+_SEM = None
+_SEM_SIZE = -1
+
+
+def _sem(concurrency: int):
+    """全局在飞请求闸门：批内并发与会话并发共享同一上限，避免打爆网关。"""
+    global _SEM, _SEM_SIZE
+    size = max(1, int(concurrency))
+    with _SEM_LOCK:
+        if _SEM is None or _SEM_SIZE != size:
+            _SEM = threading.Semaphore(size)
+            _SEM_SIZE = size
+        return _SEM
+
+
 def _call(system: str, schema: str, payload: Any, cfg: Dict[str, Any], j: Dict[str, Any],
           tag: str, log=print, temperature: float = 0.0) -> Dict[str, Any]:
     """调用模型；失败返回 {}（程序侧据此保持原样，绝不误删）。"""
+    user = schema + "\n\n待判断数据：\n" + json.dumps(payload, ensure_ascii=False)
+    sem = _sem(j.get("concurrency", 6))
     try:
-        out = chat_json(
-            system,
-            schema + "\n\n待判断数据：\n" + json.dumps(payload, ensure_ascii=False),
-            model=_model(cfg, j),
-            temperature=temperature,
-            prompt_version=f"{PROMPT_VERSION}.{tag}",
-        )
+        with sem:
+            out = chat_json(
+                system,
+                user,
+                model=_model(cfg, j),
+                temperature=temperature,
+                prompt_version=f"{PROMPT_VERSION}.{tag}",
+            )
         return out if isinstance(out, dict) else {}
     except Exception as exc:  # noqa: BLE001
         log(f"[judge] {tag} 调用失败，保持原样: {exc}")
         return {}
+
+
+def _pmap(fn, items: List[Any], workers: int) -> List[Any]:
+    """批量并发执行；workers<=1 时退化为顺序（便于对比与限流）。"""
+    workers = max(1, int(workers))
+    if workers == 1 or len(items) <= 1:
+        return [fn(x) for x in items]
+    from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
+
+    out: List[Any] = [None] * len(items)
+    with ThreadPoolExecutor(max_workers=min(workers, len(items))) as ex:
+        futs = {ex.submit(fn, x): i for i, x in enumerate(items)}
+        for fut in as_completed(futs):
+            i = futs[fut]
+            try:
+                out[i] = fut.result()
+            except Exception:  # noqa: BLE001
+                out[i] = None
+    return out
 
 
 def _batched(items: List[Any], n: int) -> List[List[Any]]:
@@ -254,12 +297,18 @@ def decide_steps(gold_messages: List[Dict[str, Any]], cfg: Optional[Dict[str, An
         return {}
     root = next((m for m in gold_messages if m.get("role") == "user"), None)
     decisions: Dict[str, Dict[str, Any]] = {}
-    for batch in _batched(asst, j["step_batch"]):
+
+    def _one(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload = {
             "root_task": _clip((root or {}).get("content"), 300),
             "steps": [_step_payload(m, i + 1) for i, m in enumerate(batch)],
         }
-        out = _call(STEPS_SYSTEM, STEPS_SCHEMA, payload, cfg, j, "steps", log)
+        return _call(STEPS_SYSTEM, STEPS_SCHEMA, payload, cfg, j, "steps", log)
+
+    batches = _batched(asst, j["step_batch"])
+    outs = _pmap(_one, batches, j["concurrency"])
+    for batch, out in zip(batches, outs):
+        out = out or {}
         for d in out.get("decisions", []) or []:
             if not isinstance(d, dict):
                 continue
@@ -277,6 +326,42 @@ def decide_steps(gold_messages: List[Dict[str, Any]], cfg: Optional[Dict[str, An
     return decisions
 
 
+def prewarm(sessions: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None,
+            log=print) -> Dict[str, Any]:
+    """会话级并行预热：多条会话同时发起步级判断。
+
+    结果丢弃（主循环会重算），但 llm.chat 以 (prompt_version+model+messages+参数) 的 sha256
+    落盘缓存，主循环二次调用即缓存命中 —— 真实模型延迟被会话并行摊掉，判断内容完全一致。
+
+    sessions: [{"sid","raw_file","annotations","manual_overrides","max_tool_output_chars"}]
+    """
+    from .common import pilog  # noqa: PLC0415
+
+    cfg = cfg or load_config()
+    j = _jcfg(cfg)
+    if not j["enabled"] or not sessions:
+        return {"sessions": 0, "steps": 0}
+    workers = max(1, int(j.get("session_workers", 1)))
+
+    def _one(s: Dict[str, Any]) -> int:
+        try:
+            sess = pilog.parse_session(Path(s["raw_file"]),
+                                       max_tool_output_chars=int(s.get("max_tool_output_chars", 12000)))
+            flow, _marks, _st = pilog.build_flow(sess, cfg, s.get("annotations"), s.get("manual_overrides"))
+            decide_steps(flow, cfg=cfg, log=lambda *_: None)  # 目的：写入磁盘缓存
+            return sum(1 for m in flow if m.get("role") == "assistant")
+        except Exception as exc:  # noqa: BLE001
+            log(f"[judge] 预热失败 {str(s.get('sid'))[:8]}: {exc}")
+            return 0
+
+    t0 = time.time()
+    results = _pmap(_one, sessions, workers)
+    steps = sum(r or 0 for r in results)
+    log(f"[judge] 会话并行预热 {len(sessions)} 条（{workers} 会话 × {j.get('concurrency')} 批并发）"
+        f"共 {steps} 步，耗时 {time.time() - t0:.0f}s")
+    return {"sessions": len(sessions), "steps": steps}
+
+
 # ---------------------------------------------------------------------------
 # 2) 接缝审核
 # ---------------------------------------------------------------------------
@@ -289,8 +374,11 @@ def audit_seams(seams: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = Non
     if not j["enabled"] or not seams:
         return {}
     out_map: Dict[str, Dict[str, Any]] = {}
-    for batch in _batched(seams, j["seam_batch"]):
-        out = _call(SEAM_SYSTEM, SEAM_SCHEMA, {"seams": batch}, cfg, j, "seams", log)
+    batches = _batched(seams, j["seam_batch"])
+    outs = _pmap(lambda b: _call(SEAM_SYSTEM, SEAM_SCHEMA, {"seams": b}, cfg, j, "seams", log),
+                 batches, j["concurrency"])
+    for batch, out in zip(batches, outs):
+        out = out or {}
         for s in out.get("seams", []) or []:
             if not isinstance(s, dict) or not s.get("seam_id"):
                 continue
@@ -382,7 +470,8 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
     if not j["enabled"] or not pairs:
         return {}
     out_map: Dict[str, Dict[str, Any]] = {}
-    for batch in _batched(pairs, j["dpo_batch"]):
+
+    def _one(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload = {"pairs": [
             {
                 "sample_id": p.get("sample_id"),
@@ -394,7 +483,12 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
                 "chosen": _clip((p.get("chosen") or {}).get("value"), 1400),
                 "rejected": _clip((p.get("rejected") or {}).get("value"), 1400),
             } for p in batch]}
-        out = _call(DPO_SYSTEM, DPO_SCHEMA, payload, cfg, j, "dpo", log)
+        return _call(DPO_SYSTEM, DPO_SCHEMA, payload, cfg, j, "dpo", log)
+
+    batches = _batched(pairs, j["dpo_batch"])
+    outs = _pmap(_one, batches, j["concurrency"])
+    for batch, out in zip(batches, outs):
+        out = out or {}
         for it in out.get("pairs", []) or []:
             if not isinstance(it, dict):
                 continue
