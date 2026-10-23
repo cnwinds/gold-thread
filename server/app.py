@@ -122,14 +122,6 @@ def _run_job(job: Job) -> None:
             except Exception:  # noqa: BLE001
                 pass
             job.result = res
-        elif job.stage == "optimize":
-            from pipeline.review import run_optimize
-            res = run_optimize((job.extra.get("sessions") or [None])[0], log=job.log, cfg=cfg)
-            try:
-                stage3_synth.run(force=False, log=job.log, cfg=cfg)
-            except Exception:  # noqa: BLE001
-                pass
-            job.result = res
         elif job.stage == "refine":
             from pipeline.review import run_refine
             res = run_refine((job.extra.get("sessions") or [None])[0], log=job.log, cfg=cfg)
@@ -896,13 +888,6 @@ def review_refine(sid: str, body: ReviewItemsBody) -> Dict[str, Any]:
         raise HTTPException(400, "没有可供模型修订的意见：请先批注步骤、拒绝改写或填写整体意见")
     write_json_atomic(path, ann)
     job = _start("refine", False, {"sessions": [sid]})
-    return {"job_id": job.id}
-
-
-@app.post("/api/gold/session/{sid}/optimize")
-def gold_optimize(sid: str) -> Dict[str, Any]:
-    _gold_entry(sid)
-    job = _start("optimize", True, {"sessions": [sid]})
     return {"job_id": job.id}
 
 

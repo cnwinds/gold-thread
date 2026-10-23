@@ -1362,13 +1362,6 @@ function revLazy(el) {
     slot.dataset.done = "1";
   });
 }
-async function revOptimize(sid) {
-  try {
-    const {job_id} = await api(`/api/gold/session/${sid}/optimize`, {method:"POST"});
-    toast("全面优化已启动：优化器全量改写，独立模型循环审核", "ok");
-    watchJob(job_id, () => openGold(sid));
-  } catch (e) { toast(e.message, "err"); }
-}
 async function revFinalize(fin) {
   if (!REV.active || !REV.sid) return;
   if (fin && !REV.finalized) {
@@ -1532,6 +1525,8 @@ async function openGold(sid) {
     REV.items[mid] = {rewrite: it.rewrite || null, edited_text: it.edited_text || "", step: it.step || null, comment: it.comment || ""};
   REV.note = (ann.human_review || {}).note || "";
   REV.finalized = !!(ann.human_review || {}).finalized;
+  const mrep = ann.model_report || rec.model_report || null;
+  const mr0 = mr;
   const prog = d.progress || {};
   const sp = d.synthesis_preview || {}, funnel = sp.funnel || {};
   STATE.drawerData = d;
@@ -1554,6 +1549,18 @@ async function openGold(sid) {
         <textarea id="revNote" class="rev-note" data-field="note" oninput="revInput(this)" placeholder="例如：轨迹可用，但解密那几步把偏移推导删掉了，请按原文保留关键字节">${esc(REV.note)}</textarea>
       </div>
     </div>
+    ${mrep ? `<div class="panel"><div class="panel-h"><h3>模型质量报告</h3>
+      <span class="hint">${esc(mrep.model || "")} · 审了 ${fmt(mrep.audited_steps)}/${fmt(mrep.total_steps)} 步 · 置信度 ${fmt(mrep.confidence)}</span>
+      <span class="grow"></span>
+      <span class="chip ${mrep.verdict === "trainable" ? "train" : mrep.verdict === "discard" ? "neg" : ""}">${{trainable:"可训练",needs_human:"需人工",discard:"不建议训练"}[mrep.verdict] || mrep.verdict}</span>
+      ${mrep.needs_wholesale_rewrite ? `<span class="chip neg">需整条重写 → 不建议训练</span>` : ""}</div>
+      <div class="panel-b">
+        <div class="muted" style="margin-bottom:8px">${esc(mrep.reason || "")}</div>
+        ${(mrep.problems || []).length ? `<div class="path-chips" style="margin-bottom:8px">${mrep.problems.map(p => `<span>${esc(p)}</span>`).join("")}</div>` : ""}
+        ${(mrep.highlights || []).length ? `<div class="row" style="gap:6px;flex-wrap:wrap"><span class="faint" style="font-size:11.5px">高光步（训练过采样）</span>
+          ${mrep.highlights.map(h => `<span class="chip" title="${esc(h.why)}">${esc(String(h.msg_id).slice(0, 8))} ×${h.weight}</span>`).join("")}</div>` : ""}
+        ${mr0 && mr0.kind === "optimize" ? `<div class="faint" style="margin-top:6px">旧轮次「全面优化」已退役：按手册，需要整条重写的会话应报告而不是重写。</div>` : ""}
+      </div></div>` : ""}
     <div class="panel"><div class="panel-h"><h3>Stage 3 入库预览</h3>
       <span class="hint">${sp.full_sft_allowed ? "完整黄金轨迹与单步窗口均可生成" : sp.subsegment_only ? `仅白名单子段 ${JSON.stringify(sp.subsegment_ranges||[])}` : "当前会话被门控，不生成 SFT"}</span>
       <span class="grow"></span><span class="chip ${sp.full_sft_allowed||sp.subsegment_only?"train":""}">${esc(EFF_ZH[sp.effective_state]||sp.effective_state||"未评审")}</span>
@@ -1608,7 +1615,6 @@ async function openGold(sid) {
     ${!rounds.length ? `<button onclick="reviewOne('${sid}')">让模型先评审</button>
       <button class="primary" onclick="revDecide('approved')">人工直接通过<span class="kbd">A</span></button>
       <button class="danger" onclick="revDecide('rejected')">人工直接驳回<span class="kbd">R</span></button>` : ""}
-    <button class="ghost" onclick="revOptimize('${sid}')" title="优化器全量改写 -> 独立模型审核 -> 不过自动退回修订，循环至过审">全面优化</button>
     ${REV.finalized
       ? `<button class="ghost" onclick="revFinalize(false)">撤销定稿</button>`
       : `<button class="primary" onclick="revFinalize(true)" title="浏览无异议后标记定稿：全部修改生效并锁定">定稿</button>`}

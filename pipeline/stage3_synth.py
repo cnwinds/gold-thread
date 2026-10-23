@@ -7,7 +7,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import curation
+from . import curation, judge
 from .common.config import config_hash, load_config, stage_dirs
 from .common.format import conversation, to_openai, to_sharegpt
 from .common.quality import compact_thinking, evaluate_effective_step
@@ -240,11 +240,14 @@ def evaluate_session_synthesis(
     sub_ranges = _subsegment_ranges(sid, cfg)
     in_sft_label = label in sft_labels
     blocked_by_review = eff_state not in curation.IN_SFT
+    # 模型质量报告否决：需要整条重写 / 判定丢弃 -> 不值得训练，直接报告不产样本
+    mrep = rec.get("model_report") or {}
+    model_block = bool(mrep.get("needs_wholesale_rewrite")) or (mrep.get("verdict") == "discard")
 
     # 完整轨迹仅在属于 sft_labels 且未被复核阻断时产出
-    full_sft_allowed = in_sft_label and not blocked_by_review
+    full_sft_allowed = in_sft_label and not blocked_by_review and not model_block
     # 单步窗口：允许完整 SFT 会话，或命中 sft_allow_subsegments 白名单子段且未被人工显式驳回的会话
-    subsegment_only = (not full_sft_allowed) and bool(sub_ranges) and (eff_state != "rejected")
+    subsegment_only = (not full_sft_allowed) and bool(sub_ranges) and (eff_state != "rejected") and not model_block
 
     drop_calls = {
         tc.get("id")
@@ -301,7 +304,14 @@ def evaluate_session_synthesis(
         raw_q = m.get("raw_quality") or m.get("quality") or {}
         eff_q = evaluate_effective_step(m, cwd, override_thinking=thinking, max_think_chars=4500)
 
-        if rank < 3:
+        hl_map = {h.get("msg_id"): h for h in (mrep.get("highlights") or [])}
+        if mid in hl_map:
+            stage_name, weight = "highlight", int(hl_map[mid].get("weight", 2))
+        elif mid and mid == mrep.get("closing_msg_id"):
+            stage_name, weight = "closing", int(weights.get("closing", 3))
+        elif mid and mid == mrep.get("opening_msg_id"):
+            stage_name, weight = "opening", int(weights.get("opening", 3))
+        elif rank < 3:
             stage_name, weight = "opening", int(weights.get("opening", 3))
         elif rank >= max(3, total - 3):
             stage_name, weight = "closing", int(weights.get("closing", 3))
@@ -316,7 +326,8 @@ def evaluate_session_synthesis(
         reason = ""
 
         if not full_sft_allowed and not subsegment_only:
-            reason = f"session_blocked:{eff_state}" if in_sft_label else f"label_excluded:{label}"
+            reason = ("model_discard:" + str(mrep.get("verdict") or "needs_wholesale_rewrite")) if model_block else (
+                f"session_blocked:{eff_state}" if in_sft_label else f"label_excluded:{label}")
             funnel["blocked_or_subsegment_dropped"] += 1
         elif subsegment_only and not any(s <= step_no <= e for s, e in sub_ranges):
             reason = "outside_subsegment_whitelist"
@@ -458,6 +469,8 @@ def evaluate_session_synthesis(
         "split": split,
         "model": model,
         "effective_state": eff_state,
+        "model_report": mrep or None,
+        "model_block": model_block,
         "full_sft_allowed": full_sft_allowed,
         "subsegment_only": subsegment_only,
         "subsegment_ranges": sub_ranges,
@@ -626,6 +639,32 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             f"(改写挽救 {eval_res['funnel']['rescued_steps']}, 排除 {eval_res['funnel']['excluded_steps']})"
         )
 
+    # ---- DPO 偏好对：模型复核（多模型生成的对里，风格差异/长短偏好不算正误）----
+    dpo_review_stats = {"checked": 0, "swapped": 0, "dropped": 0}
+    if dpo_pairs and judge.enabled(cfg):
+        verdicts = judge.review_dpo(dpo_pairs, cfg=cfg, log=log)
+        dpo_review_stats["checked"] = len(dpo_pairs)
+        kept_pairs = []
+        for p in dpo_pairs:
+            v = verdicts.get(p.get("sample_id")) or {}
+            kind = v.get("verdict")
+            if kind == "drop":
+                dpo_review_stats["dropped"] += 1
+                continue
+            if kind == "swap":
+                p["chosen"], p["rejected"] = p["rejected"], p["chosen"]
+                p.setdefault("metadata", {})["model_review"] = "swap"
+                dpo_review_stats["swapped"] += 1
+            if kind:
+                p.setdefault("metadata", {})["model_review"] = kind
+                p["metadata"]["model_review_reason"] = v.get("reason", "")
+            kept_pairs.append(p)
+        dpo_pairs = kept_pairs
+        log(
+            f"[judge] DPO 复核 {dpo_review_stats['checked']} 对：调换 {dpo_review_stats['swapped']}，"
+            f"丢弃 {dpo_review_stats['dropped']}，保留 {len(dpo_pairs)}"
+        )
+
     # 全局打乱（跨项目混训，且保证 ShareGPT 与 OpenAI 格式严格同序）
     if scfg.get("shuffle", True):
         rng = random.Random(int(scfg.get("seed", 42)))
@@ -761,6 +800,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         ),
         "label_counts": dict(Counter(r.get("label", "?") for r in records.values())),
         "review_states": dict(review_counts),
+        "dpo_review": dpo_review_stats,
     }
     write_json_atomic(train_root / "stats.json", stats)
 

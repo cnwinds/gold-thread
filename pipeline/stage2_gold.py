@@ -14,6 +14,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import judge
 from .common import pilog
 from .common.config import load_config, section_hash, stage_dirs
 from .common.format import to_sharegpt
@@ -308,6 +309,237 @@ def purify(
     return gold_messages, pruned, stats
 
 
+# ---------------------------------------------------------------------------
+# judge 执行器：模型给决定，程序确定性执行并留血缘
+# ---------------------------------------------------------------------------
+
+def _can_fold(prev_msg: Dict[str, Any], msg: Dict[str, Any]) -> bool:
+    ptcs = prev_msg.get("tool_calls") or []
+    tcs = msg.get("tool_calls") or []
+    if len(ptcs) != 1 or len(tcs) != 1:
+        return False
+    a, b = ptcs[0], tcs[0]
+    if a.get("name") != "write" or b.get("name") != "edit":
+        return False
+    pa = (a.get("arguments") or {}).get("path")
+    pb = (b.get("arguments") or {}).get("path")
+    return bool(pa and pa == pb)
+
+
+def _do_fold(prev_msg: Dict[str, Any], msg: Dict[str, Any], max_edits: int = 8) -> bool:
+    tcs = prev_msg.get("tool_calls") or []
+    if not tcs:
+        return False
+    args = tcs[0].setdefault("arguments", {})
+    content = args.get("content", "")
+    eargs = (msg.get("tool_calls") or [{}])[0].get("arguments") or {}
+    edits = eargs.get("edits") or ([eargs] if eargs.get("oldText") else [])
+    edits = edits[:max_edits]
+    if not edits:
+        return False
+    new_content = content
+    for ed in edits:
+        old_t, new_t = ed.get("oldText", ""), ed.get("newText", "")
+        if not old_t or old_t not in new_content:
+            return False
+        new_content = new_content.replace(old_t, new_t, 1)
+    args["content"] = new_content
+    prev_msg["folded_from"] = msg.get("id")
+    prev_msg["fold_details"] = {
+        "path": args.get("path", ""),
+        "folded_msg_id": msg.get("id"),
+        "edits_count": len(edits),
+        "before_content": content[:4000],
+        "after_content": new_content[:4000],
+        "edit_thinking": (msg.get("thinking") or "")[:800],
+    }
+    prev_msg["flags"] = sorted(set(prev_msg.get("flags", []) + ["state_folded"]))
+    return True
+
+
+def _rewrite_ok(new: str, msg: Dict[str, Any]) -> bool:
+    old = (msg.get("raw_thinking") or msg.get("thinking") or "").strip()
+    new = (new or "").strip()
+    if len(new) < 10:
+        return False
+    cap = max(int(len(old) * 1.2), 400)
+    return len(new) <= cap
+
+
+def purify_by_judge(
+    flow: List[Dict[str, Any]],
+    cfg: Dict[str, Any],
+    session_cwd: str = "",
+    turn_marks: Optional[List[Dict[str, Any]]] = None,
+    log=print,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+    """按模型决定执行删/折/改/清/排；再接缝审核。返回 (gold, pruned, stats, audit)。"""
+    gcfg = cfg.get("gold", {})
+    units = _units(flow)
+    for u in units:
+        if u["type"] == "assistant_turn":
+            m = u["msg"]
+            m.setdefault("raw_thinking", m.get("thinking") or "")
+            m.setdefault("raw_text", m.get("text") or "")
+            for tc in m.get("tool_calls") or []:
+                if tc.get("name") == "bash" and isinstance(tc.get("arguments"), dict):
+                    cmd = tc["arguments"].get("command")
+                    if isinstance(cmd, str):
+                        norm = normalize_polling_command(cmd)
+                        if norm != cmd:
+                            tc["arguments"]["command"] = norm
+                            m["flags"] = sorted(set(m.get("flags", []) + ["polling_normalized"]))
+
+    flat: List[Dict[str, Any]] = []
+    for u in units:
+        flat.append(u["msg"])
+        flat.extend(u["tools"])
+    # 手册阶段 2 第 3 条「中间步骤强制静默执行」是机械规则，由程序直接执行
+    if gcfg.get("silent_intermediate_steps", True):
+        asst_units = [u for u in units if u["type"] == "assistant_turn"]
+        silent_n = 0
+        for u in asst_units:
+            m = u["msg"]
+            if (m.get("tool_calls") or []) and (m.get("text") or "").strip():
+                m["raw_text"] = m.get("raw_text") or m.get("text")
+                m["text"] = ""
+                m["flags"] = sorted(set(m.get("flags", []) + ["silent_executed"]))
+                silent_n += 1
+        log(f"[judge] 机械静默执行 {silent_n} 步")
+
+    decisions = judge.decide_steps(flat, cfg=cfg, log=log)
+    log(f"[judge] 步级决定 {len(decisions)} 条（模型）")
+
+    asst_total = sum(1 for u in units if u["type"] == "assistant_turn")
+    prune_budget = int(asst_total * judge.MAX_STEPS_KEPT)
+    kept: List[Tuple[Dict[str, Any], int]] = []
+    pruned: List[Dict[str, Any]] = []
+    pruned_n = 0
+    folded = compressed = backfilled = excluded = 0
+    polling_norm = 0
+
+    for idx, u in enumerate(units):
+        if u["type"] != "assistant_turn":
+            kept.append((u, idx))
+            continue
+        msg = u["msg"]
+        mid = msg.get("id")
+        if any(f == "polling_normalized" for f in (msg.get("flags") or [])):
+            polling_norm += 1
+        d = decisions.get(mid) or {}
+        act = d.get("action", "keep")
+
+        if act == "prune":
+            # 不变量：首步不可删；剪除量不超过预算
+            if idx <= 1 or pruned_n >= prune_budget:
+                kept.append((u, idx))
+                continue
+            pruned.append({
+                "reason": f"judge::{d.get('reason') or 'prune'}",
+                "has_dpo": True,
+                "unit_index": idx,
+                "rejected_msg": copy.deepcopy(msg),
+                "dropped_msg_id": mid,
+                "error_output": "\n".join(t.get("content", "") for t in (msg.get("tool_results") or []))[:800],
+                "by": "judge",
+            })
+            pruned_n += 1
+            continue
+
+        if act == "fold":
+            prev = kept[-1] if kept else None
+            prev_msg = prev[0]["msg"] if prev and prev[0]["type"] == "assistant_turn" else None
+            if prev_msg is not None and _can_fold(prev_msg, msg) and _do_fold(prev_msg, msg):
+                pruned.append({
+                    "reason": f"judge::{d.get('reason') or 'fold'}",
+                    "has_dpo": False,
+                    "unit_index": idx,
+                    "rejected_msg": copy.deepcopy(msg),
+                    "dropped_msg_id": mid,
+                    "by": "judge",
+                })
+                folded += 1
+                continue
+            kept.append((u, idx))
+            continue
+
+        if act == "rewrite":
+            new = d.get("rewritten") or ""
+            if _rewrite_ok(new, msg):
+                old = (msg.get("raw_thinking") or msg.get("thinking") or "").strip()
+                msg["raw_thinking"] = msg.get("raw_thinking") or old
+                msg["thinking"] = new.strip()
+                msg["judge_reason"] = d.get("reason")
+                if len(new.strip()) < len(old) * 0.9:
+                    msg["flags"] = sorted(set(msg.get("flags", []) + ["thinking_compressed"]))
+                    compressed += 1
+                else:
+                    msg["flags"] = sorted(set(msg.get("flags", []) + ["thinking_backfilled"]))
+                    backfilled += 1
+
+
+        if act == "exclude":
+            msg["excluded"] = True
+            msg["exclude_reason"] = d.get("reason") or "judge_exclude"
+            excluded += 1
+
+        kept.append((u, idx))
+
+    # 剪枝记录补 chosen：被删步之后第一个保留的助手步（即"当时应该走的那一步"）
+    kept_asst_idx = [i for (u, i) in kept if u["type"] == "assistant_turn"]
+    for pd in pruned:
+        if not pd.get("has_dpo"):
+            continue
+        nxt = next((i for i in kept_asst_idx if i > pd["unit_index"]), None)
+        if nxt is None:
+            pd["has_dpo"] = False
+            continue
+        chosen = next(u["msg"] for (u, i) in kept if i == nxt)
+        pd["chosen_msg"] = copy.deepcopy(chosen)
+
+    gold_messages: List[Dict[str, Any]] = []
+    for u, _ in kept:
+        gold_messages.append(u["msg"])
+        gold_messages.extend(u["tools"])
+
+    # ---- 接缝审核（模型）----
+    seams = judge.extract_seams(gold_messages, pruned, turn_marks)
+    audit = {"seams_total": len(seams), "seams_fixed": 0, "seam_issues": []}
+    if seams:
+        verdicts = judge.audit_seams(seams, cfg=cfg, log=log)
+        by_id = {m.get("id"): m for m in gold_messages if m.get("role") == "assistant"}
+        for sid, v in verdicts.items():
+            if v.get("smooth", True):
+                continue
+            tgt = by_id.get(v.get("patch_msg_id") or "")
+            patch = v.get("patched_thinking") or ""
+            if tgt is not None and patch and _rewrite_ok(patch, tgt):
+                tgt["raw_thinking"] = tgt.get("raw_thinking") or tgt.get("thinking")
+                tgt["thinking"] = patch
+                tgt["flags"] = sorted(set(tgt.get("flags", []) + ["seam_repaired"]))
+                audit["seams_fixed"] += 1
+            audit["seam_issues"].append({"seam_id": sid, "issue": v.get("issue") or "",
+                                         "applied": bool(tgt is not None and patch)})
+        log(f"[judge] 接缝 {len(seams)} 处，模型判定不平滑 {sum(1 for v in verdicts.values() if not v.get('smooth', True))} 处，已修 {audit['seams_fixed']} 处")
+
+    stats = {
+        "units_in": asst_total,
+        "units_out": sum(1 for m in gold_messages if m.get("role") == "assistant"),
+        "folded": folded,
+        "pruned_detours": pruned_n,
+        "thinking_compressed": compressed,
+        "thinking_backfilled": backfilled,
+        "thinking_synthesized": 0,
+        "silent_cleared": sum(1 for m in gold_messages
+                              if m.get("role") == "assistant" and "silent_executed" in (m.get("flags") or [])),
+        "polling_normalized": polling_norm,
+        "excluded": excluded,
+        "decisions": len(decisions),
+        "decided_by": "model",
+    }
+    return gold_messages, pruned, stats, audit
+
+
 def _dpo_from_pruned(
     pruned: List[Dict[str, Any]],
     sys_msg: Optional[Dict[str, Any]],
@@ -450,8 +682,24 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 max_think_chars=4500,
             )
 
-        gold_msgs, pruned, purify_stats = purify(flow, gcfg, entry.get("cwd", ""))
+        model_audit = {}
+        if judge.enabled(cfg, label):
+            gold_msgs, pruned, purify_stats, model_audit = purify_by_judge(
+                flow, cfg, entry.get("cwd", ""), turn_marks=marks, log=log)
+        else:
+            gold_msgs, pruned, purify_stats = purify(flow, gcfg, entry.get("cwd", ""))
         project = entry.get("project_group", "unknown")
+
+        # 模型质量报告 + 高光分析（模型负责"值不值得训练"，程序据此门控）
+        quality_report: Dict[str, Any] = {}
+        if judge.enabled(cfg):
+            quality_report = judge.audit_quality(gold_msgs, purify_stats, cfg=cfg, log=log)
+            if quality_report:
+                log(
+                    f"[judge] 质量报告 {sid[:8]}: {quality_report['verdict']}"
+                    f"（高光 {len(quality_report.get('highlights') or [])} 步"
+                    f"{'，建议整条重写→按不建议训练处理' if quality_report.get('needs_wholesale_rewrite') else ''}）"
+                )
 
         # 病态步诊断（保留原始流中的全部）
         diag_path = rejects_out / f"{sid}.diagnostics.jsonl"
@@ -508,12 +756,21 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         status = "gold" if (label == "positive" and len(gold_asst) >= min_steps) else (
             "raw_only" if label == "pending" else "negative_source"
         )
+        if label == "positive" and quality_report:
+            if quality_report.get("verdict") == "discard":
+                status = "discard_recommended"
+            elif quality_report.get("needs_wholesale_rewrite"):
+                status = "discard_recommended"
         reasons = []
         if label == "positive" and len(gold_asst) < min_steps:
             reasons.append(f"too_few_steps({len(gold_asst)}<{min_steps})")
             status = "rejected"
         if not flow_stats.get("has_root"):
             reasons.append("no_root_task")
+        if quality_report.get("verdict") == "discard":
+            reasons.append(f"model_discard:{quality_report.get('reason', '')}")
+        if quality_report.get("needs_wholesale_rewrite"):
+            reasons.append("model_needs_wholesale_rewrite")
 
         proj_dir = safe_name(project)
         gold_path = sessions_out / proj_dir / f"{sid}.gold.jsonl"
@@ -548,6 +805,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 "constraints": flow_stats["constraints"],
             },
             "messages": gold_msgs,
+            "model_report": quality_report or None,
+            "model_audit": model_audit or None,
         }
         write_jsonl_atomic(gold_path, [record])
 
@@ -604,6 +863,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
 
         annotation = {
             "session_id": sid,
+            "model_report": quality_report or None,
+            "model_audit": model_audit or None,
             "label": label,
             "status": status,
             "reasons": reasons,
