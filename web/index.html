@@ -548,12 +548,22 @@
   .step-audit.dropped{box-shadow:inset 2px 0 var(--neg);opacity:.75}
 
   /* Stage 3 数据集语义卡片 */
-  .dataset-cards{display:grid;grid-template-columns:repeat(5,minmax(145px,1fr));gap:8px;margin-bottom:14px}
-  .dataset-card{padding:12px 13px;background:var(--ink-1);border:1px solid var(--line-soft);border-radius:9px;cursor:pointer}
-  .dataset-card:hover,.dataset-card.on{border-color:var(--mint);background:rgba(95,185,196,.05)}
-  .dataset-card .ds-kind{font-size:11px;color:var(--text-3)}
-  .dataset-card .ds-name{font-size:12px;margin:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .dataset-card b{font:21px var(--f-num);font-weight:400}
+  .ds-index{margin-bottom:14px}
+  .ds-group{margin-bottom:10px}
+  .ds-group:last-child{margin-bottom:0}
+  .ds-group-h{display:flex;gap:10px;align-items:baseline;padding:6px 0 5px;border-bottom:1px solid var(--line-soft)}
+  .ds-group-h span{font-size:11.5px;font-weight:600;color:var(--text-2);letter-spacing:.03em}
+  .ds-group-h em{font-style:normal;font-size:11px;color:var(--text-3);flex:1}
+  .ds-row{display:grid;grid-template-columns:14px minmax(210px,1.3fr) 108px minmax(0,1fr) 56px;gap:10px;align-items:center;
+    padding:7px 6px;border-radius:6px;cursor:pointer;border-bottom:1px solid rgba(38,43,53,.55)}
+  .ds-row:hover{background:rgba(255,255,255,.022)}
+  .ds-row.on{background:rgba(95,185,196,.07)}
+  .ds-row .ds-mark{color:var(--mint);font-size:11px}
+  .ds-row .ds-file{font-size:11.5px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ds-row.on .ds-file{color:var(--mint)}
+  .ds-row .ds-label{font-size:11.5px;color:var(--text)}
+  .ds-row .ds-hint{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ds-row .ds-num{font:14px var(--f-num);color:var(--text-2);text-align:right}
   .preview-pair{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px}
   .preview-pair>div{padding:5px 7px;border-radius:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .preview-pair .chosen{background:rgba(143,196,127,.09);color:#cbe4c2}
@@ -617,7 +627,7 @@
     .cfg-rail-h{display:none}
     .cfg-nav{width:auto;border-left:none;border-bottom:2px solid transparent;white-space:nowrap}
     .cfg-nav.on{border-left:none;border-bottom-color:var(--gold)}
-    .lineage{grid-template-columns:1fr}.dataset-cards{grid-template-columns:repeat(2,1fr)}
+    .lineage{grid-template-columns:1fr}
     .pipeline{grid-template-columns:1fr}
     .pipeline>.spacer{display:none}
     .pipe-step,.pipe-step:first-child,.pipe-step:nth-child(3){border-radius:12px;border-left:1px solid var(--line-soft)!important;margin-bottom:10px}
@@ -639,7 +649,8 @@
     .workflow-head,.audit-strip,.synth-funnel{grid-template-columns:1fr}
     .wf-stage::after,.funnel-node::after{display:none}
     .turn-edit{grid-template-columns:34px 1fr}.turn-edit select,.turn-edit .turn-action{grid-column:2}
-    .dataset-cards{grid-template-columns:1fr}
+    .ds-row{grid-template-columns:14px 1fr 60px}
+    .ds-row .ds-label,.ds-row .ds-hint{display:none}
     .station{padding:10px 0 10px 14px}
     .band{display:none}
     .toolbar input[type=text]{min-width:0;flex:1}
@@ -2018,11 +2029,7 @@ async function loadTrain() {
   const phaseOpts = kind==="dpo" ? [["stage2_pruned","剪枝弯路"],["negative_step","反例坏步"],["review_rewrite","复核改写"]]
     : kind==="sft" ? PHASE.map(([v,t])=>[v,t]) : [];
   $("#view-train").innerHTML = `
-    <div class="dataset-cards">${d.datasets.map(x => {
-      const k=datasetKind(x.name);
-      return `<div class="dataset-card ${x.name===STATE.train.name?"on":""}" data-name="${esc(x.name)}">
-        <div class="ds-kind">${esc(DS_KIND_ZH[k])}</div><div class="ds-name" title="${esc(x.name)}">${esc(x.name)}</div><b>${fmt(x.rows)}</b></div>`;
-    }).join("")}</div>
+    ${renderDatasetIndex(d.datasets, d.dir)}
     <div class="panel">
       <div class="toolbar">
         <span class="chip ${kind==="sft"||kind==="trajectory"?"train":""}">${esc(DS_KIND_ZH[kind])}</span>
@@ -2048,7 +2055,7 @@ async function loadTrain() {
         <button id="dsNext" ${end >= rows.total ? "disabled" : ""}>下一页</button>
       </div>
     </div>`;
-  $$(".dataset-card").forEach(c=>c.onclick=()=>{ STATE.train.name=c.dataset.name; STATE.train.offset=0; STATE.train.q=""; STATE.train.stage=""; loadTrain(); });
+  $$(".ds-row").forEach(c=>c.onclick=()=>{ STATE.train.name=c.dataset.name; STATE.train.offset=0; STATE.train.q=""; STATE.train.stage=""; loadTrain(); });
   $("#dsProject").onchange=e=>{tf.project=e.target.value;tf.offset=0;loadTrain();};
   $("#dsSplit").onchange=e=>{tf.split=e.target.value;tf.offset=0;loadTrain();};
   if ($("#dsStage")) $("#dsStage").onchange=e=>{tf.stage=e.target.value;tf.offset=0;loadTrain();};
@@ -2065,6 +2072,60 @@ async function loadTrain() {
     $("#drawerBody").innerHTML = renderTrainDetail(row, datasetKind(STATE.train.name));
     $("#drawerFoot").innerHTML = `<button onclick="showJson(STATE.drawerData)">查看原始 JSON</button>`;
   });
+}
+
+/* 数据集清单：按用途分组，明确哪个用来训练 */
+const DS_USE = {
+  "sft_step_windows_sharegpt.train.jsonl":      ["SFT 训练主力", "单步窗口 · 根任务锚定 + 历史 think 剥离", "primary"],
+  "sft_step_windows_sharegpt.eval.jsonl":       ["SFT 验证", "留出整个项目，用于 eval_loss", "primary"],
+  "sft_gold_trajectories_sharegpt.train.jsonl": ["完整轨迹（可选）", "长轨迹 SFT，可与单步窗口混合", "opt"],
+  "sft_gold_trajectories_sharegpt.eval.jsonl":  ["完整轨迹验证", "", "opt"],
+  "dpo_preference_pairs.train.jsonl":           ["DPO 偏好训练", "ranking 数据集：chosen / rejected", "primary"],
+  "dpo_preference_pairs.eval.jsonl":            ["DPO 偏好验证", "", "primary"],
+  "sft_step_windows_openai.jsonl":              ["全量 · OpenAI 格式", "未切分，train/eval 混在 metadata.split", "all"],
+  "sft_step_windows_sharegpt.jsonl":            ["全量 · ShareGPT", "未切分，train/eval 混在 metadata.split", "all"],
+  "sft_gold_trajectories_sharegpt.jsonl":       ["全量轨迹", "未切分", "all"],
+  "dpo_preference_pairs.jsonl":                 ["全量 DPO", "未切分", "all"],
+  "negative_diagnostics.jsonl":                 ["病态诊断库", "分析/挖负例用，不进训练", "skip"],
+  "negative_diagnostics.train.jsonl":           ["病态诊断库", "分析用，不进训练", "skip"],
+};
+function dsUseOf(name) {
+  const u = DS_USE[name];
+  if (u) return {label: u[0], hint: u[1], rank: u[2]};
+  const k = datasetKind(name);
+  return {label: DS_KIND_ZH[k], hint: "", rank: "all"};
+}
+function renderDatasetIndex(list, dir) {
+  const groups = [
+    ["primary", "拿去训练", "SFT 与 DPO 都用下面这两对（*_train 训练 / *_eval 验证）"],
+    ["opt", "可选加入", "完整长轨迹，适合与单步窗口按比例混合"],
+    ["all", "全量未切分", "train/eval 混在一起，适合自己做过滤或统计"],
+    ["skip", "不进训练", ""],
+  ];
+  const rows = g => list.filter(x => dsUseOf(x.name).rank === g);
+  const rowHtml = x => {
+    const u = dsUseOf(x.name);
+    const on = x.name === STATE.train.name;
+    const reg = x.registered ? `<span class="mono faint" style="font-size:10.5px">${esc(x.registered)}</span>` : "";
+    return `<div class="ds-row ${on ? "on" : ""}" data-name="${esc(x.name)}">
+      <span class="ds-mark">${on ? "▸" : ""}</span>
+      <span class="ds-file mono" title="${esc(x.name)}">${esc(x.name)}</span>
+      <span class="ds-label">${esc(u.label)}</span>
+      <span class="ds-hint faint">${esc(u.hint)}${reg ? (u.hint ? " · " : "") + reg : ""}</span>
+      <b class="ds-num">${x.rows == null ? "—" : fmt(x.rows)}</b>
+    </div>`;
+  };
+  return `<div class="panel ds-index">
+    <div class="panel-h"><h3>数据集</h3><span class="hint">点任意行在下方检视样本</span>
+      <span class="grow"></span><span class="mono faint" style="font-size:11px">${esc(dir || "")}</span></div>
+    <div class="panel-b">
+    ${groups.map(([g, title, hint]) => {
+      const rs = rows(g);
+      if (!rs.length) return "";
+      return `<div class="ds-group"><div class="ds-group-h"><span>${esc(title)}</span>
+        ${hint ? `<em>${esc(hint)}</em>` : ""}</div>${rs.map(rowHtml).join("")}</div>`;
+    }).join("")}
+    </div></div>`;
 }
 
 function trainRow(r,kind) {

@@ -660,6 +660,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 continue
             fname = f"{name[:-6]}.{sp}.jsonl"
             split_out[fname] = write_jsonl_atomic(train_root / fname, part)
+    counts.update(split_out)
 
     dataset_info = {
         "pi_sft_gold_trajectories": {

@@ -942,19 +942,53 @@ def gold_finalize(sid: str, body: FinalizeBody) -> Dict[str, Any]:
 # 训练数据检视 (Stage 3)
 # ---------------------------------------------------------------------------
 
+_ROW_CACHE: Dict[str, Any] = {}
+
+
+def _count_lines(path: Path) -> int:
+    """按 (mtime, size) 缓存行数，避免每次刷新都全量扫描。"""
+    st = path.stat()
+    key = str(path)
+    ck = f"{int(st.st_mtime)}:{st.st_size}"
+    hit = _ROW_CACHE.get(key)
+    if hit and hit[0] == ck:
+        return hit[1]
+    n = 0
+    with path.open("rb") as fh:
+        for line in fh:
+            if line.strip():
+                n += 1
+    _ROW_CACHE[key] = (ck, n)
+    return n
+
+
 @app.get("/api/train/datasets")
 def datasets() -> Dict[str, Any]:
     cfg = load_config()
     root = stage_dirs(cfg)["train"]
     stats = read_json(root / "stats.json", default={}) or {}
+    counts = stats.get("counts", {}) or {}
+    info = read_json(root / "dataset_info.json", default={}) or {}
+    registered = {v.get("file_name"): k for k, v in info.items() if isinstance(v, dict)}
     out = []
     for p in sorted(root.glob("*.jsonl")):
-        out.append({"name": p.name, "size": p.stat().st_size, "rows": stats.get("counts", {}).get(p.name)})
+        rows = counts.get(p.name)
+        if rows is None:
+            try:
+                rows = _count_lines(p)
+            except OSError:
+                rows = None
+        out.append({
+            "name": p.name,
+            "size": p.stat().st_size,
+            "rows": rows,
+            "registered": registered.get(p.name),
+        })
     return {
         "dir": str(root),
         "datasets": out,
         "stats": stats,
-        "dataset_info": read_json(root / "dataset_info.json", default={}),
+        "dataset_info": info,
     }
 
 
