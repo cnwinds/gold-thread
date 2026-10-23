@@ -382,6 +382,98 @@
   .round-item:last-child{border-bottom:none}
   .banner{padding:10px 12px;border-radius:8px;background:rgba(217,180,103,.08);border:1px solid rgba(217,180,103,.28);color:#e6d7b0;font-size:13px;margin-bottom:12px}
 
+  /* ---- 配置工作台 ---- */
+  .cfg-shell{display:grid;grid-template-columns:186px minmax(0,1fr);gap:0;
+    height:calc(100vh - 172px);min-height:520px;
+    background:var(--ink-1);border:1px solid var(--line-soft);border-radius:12px;overflow:hidden}
+  .cfg-rail{border-right:1px solid var(--line-soft);background:linear-gradient(180deg,#1a1e25,#181b21);padding:14px 0}
+  .cfg-rail-h{padding:0 16px 9px;font-size:11px;letter-spacing:.09em;color:var(--text-3);text-transform:uppercase}
+  .cfg-nav{display:flex;align-items:center;gap:8px;width:100%;padding:8px 16px;background:none;border:none;
+    color:var(--text-2);font-size:12.5px;text-align:left;cursor:pointer;border-left:2px solid transparent;transition:.15s}
+  .cfg-nav:hover{background:rgba(255,255,255,.025);color:var(--text)}
+  .cfg-nav.on{background:rgba(217,180,103,.07);border-left-color:var(--gold);color:var(--gold)}
+  .cfg-nav .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cfg-nav .ct{font-family:var(--f-num);font-size:11px;color:var(--text-3)}
+  .cfg-nav .dot{width:5px;height:5px;border-radius:50%;background:var(--gold);opacity:0;transition:.15s}
+  .cfg-nav.is-dirty .dot{opacity:1}
+  .cfg-main{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+  .cfg-bar{display:flex;align-items:center;gap:12px;padding:14px 22px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+  .cfg-bar h2{margin:0;font-size:15px;font-weight:600}
+  .cfg-bar .path{font-size:11px;color:var(--text-3);margin-top:2px}
+  .cfg-bar .grow{flex:1}
+  .cfg-search{background:var(--ink-0);border:1px solid var(--line-soft);border-radius:7px;color:var(--text);
+    padding:6px 11px;font-size:12px;width:180px}
+  .cfg-search:focus{outline:none;border-color:var(--gold)}
+  .cfg-scroll{overflow:auto;padding:4px 22px 90px;flex:1;min-height:0;scroll-behavior:smooth}
+  .cfg-sec{padding-top:22px;scroll-margin-top:8px}
+  .cfg-sec.flash{animation:cfgflash 1.1s ease-out}
+  @keyframes cfgflash{0%{background:rgba(217,180,103,.10)}100%{background:transparent}}
+  .cfg-sec-h{display:flex;align-items:baseline;gap:10px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+  .cfg-sec-h h3{margin:0;font-size:13px;font-weight:600;color:var(--text);letter-spacing:.01em}
+  .cfg-sec-h .hint{font-size:11.5px;color:var(--text-3);flex:1}
+  .cfg-sec-h .cnt{font-family:var(--f-num);font-size:11px;color:var(--text-3)}
+  .cfg-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:center;
+    padding:12px 2px;border-bottom:1px solid var(--line-soft)}
+  .cfg-row:last-child{border-bottom:none}
+  .cfg-row.is-dirty{background:linear-gradient(90deg,rgba(217,180,103,.055),transparent 62%)}
+  .cfg-row .nm{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text)}
+  .cfg-row .nm .dot{width:5px;height:5px;border-radius:50%;background:var(--gold);opacity:0;flex:none}
+  .cfg-row.is-dirty .nm .dot{opacity:1}
+  .cfg-row .hint{font-size:11px;color:var(--text-3);margin-top:3px;line-height:1.5}
+  .cfg-row .mono-hint{font-family:var(--f-mono);font-size:10.5px;color:#5f6674;margin-top:2px}
+  .cfg-ctl{display:flex;align-items:center;gap:10px;justify-content:flex-end;min-width:0}
+  .cfg-ctl select{background:var(--ink-0);border:1px solid var(--line-soft);border-radius:7px;color:var(--text);
+    padding:6px 9px;font-size:12px;max-width:280px;min-width:170px}
+  .cfg-ctl select:focus{outline:none;border-color:var(--gold)}
+  .cfg-ctl input[type=number],.cfg-ctl input[type=text]{background:var(--ink-0);border:1px solid var(--line-soft);
+    border-radius:7px;color:var(--text);padding:6px 9px;font-size:12px;width:110px;font-family:var(--f-num)}
+  .cfg-ctl input:focus{outline:none;border-color:var(--gold)}
+  .cfg-val{font-family:var(--f-num);font-size:12.5px;color:var(--gold);min-width:46px;text-align:right}
+  .cfg-inherit{font-family:var(--f-mono);font-size:10.5px;color:var(--text-3)}
+  input[type=range].cfg-range{-webkit-appearance:none;appearance:none;width:130px;height:3px;border-radius:2px;
+    background:var(--ink-3);outline:none}
+  input[type=range].cfg-range::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;
+    background:var(--gold);cursor:pointer;box-shadow:0 0 0 3px rgba(217,180,103,.16)}
+  input[type=range].cfg-range::-moz-range-thumb{width:12px;height:12px;border:none;border-radius:50%;background:var(--gold);cursor:pointer}
+  .cfg-sw{position:relative;display:inline-block;width:32px;height:18px;flex:none}
+  .cfg-sw input{opacity:0;width:0;height:0}
+  .cfg-sw span{position:absolute;inset:0;background:var(--ink-3);border-radius:9px;transition:.16s;cursor:pointer}
+  .cfg-sw span::before{content:"";position:absolute;width:12px;height:12px;left:3px;top:3px;background:var(--text-3);
+    border-radius:50%;transition:.16s}
+  .cfg-sw input:checked+span{background:rgba(143,196,127,.3)}
+  .cfg-sw input:checked+span::before{transform:translateX(14px);background:var(--pos)}
+  .cfg-tags{display:flex;flex-wrap:wrap;gap:4px;max-width:300px;justify-content:flex-end}
+  .cfg-tag{display:inline-flex;align-items:center;gap:4px;background:var(--ink-2);border:1px solid var(--line-soft);
+    border-radius:5px;padding:1px 6px;font-family:var(--f-mono);font-size:10.5px;color:var(--text-2)}
+  .cfg-tag i{cursor:pointer;color:var(--text-3);font-style:normal;font-size:11px}
+  .cfg-tag i:hover{color:var(--neg)}
+  .cfg-tag-in{background:var(--ink-0);border:1px dashed var(--line);border-radius:5px;color:var(--text);
+    padding:2px 7px;font-size:11px;width:132px;font-family:var(--f-mono)}
+  .cfg-tag-in::placeholder{color:#5a616e}
+  .cfg-tag-in:focus{outline:none;border-color:var(--gold);border-style:solid}
+  .cfg-adv{margin:14px 0 4px}
+  .cfg-adv>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px;
+    font-size:11.5px;color:var(--text-3);user-select:none}
+  .cfg-adv>summary::before{content:"";width:0;height:0;border-left:5px solid currentColor;border-top:4px solid transparent;
+    border-bottom:4px solid transparent;transition:transform .15s}
+  .cfg-adv[open]>summary::before{transform:rotate(90deg)}
+  .cfg-adv>summary:hover{color:var(--text-2)}
+  .cfg-pipe{display:flex;align-items:center;gap:0;padding:14px 16px;margin:14px 0 4px;border-radius:10px;
+    background:linear-gradient(90deg,rgba(95,185,196,.05),rgba(217,180,103,.05));border:1px solid var(--line-soft);flex-wrap:wrap}
+  .cfg-pipe .node{font-family:var(--f-mono);font-size:11.5px;color:var(--text);padding:4px 10px;border-radius:6px;
+    background:var(--ink-0);border:1px solid var(--line)}
+  .cfg-pipe .node.opt{border-color:rgba(95,185,196,.4);color:#9fd6dc}
+  .cfg-pipe .node.rev{border-color:rgba(217,180,103,.4);color:#e6cf95}
+  .cfg-pipe .node.hum{border-color:rgba(143,196,127,.35);color:#9fd18f}
+  .cfg-pipe .arrow{font-size:10.5px;color:var(--text-3);padding:0 8px;letter-spacing:.04em}
+  .cfg-savebar{position:sticky;bottom:0;display:flex;align-items:center;gap:12px;padding:11px 22px;
+    border-top:1px solid var(--line);background:rgba(22,25,31,.94);backdrop-filter:blur(8px);
+    transform:translateY(0);transition:.2s}
+  .cfg-savebar.hide{transform:translateY(120%);position:absolute;pointer-events:none;opacity:0}
+  .cfg-savebar .cnt{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--gold)}
+  .cfg-savebar .cnt i{width:6px;height:6px;border-radius:50%;background:var(--gold);box-shadow:0 0 0 3px rgba(217,180,103,.15)}
+  .cfg-savebar .grow{flex:1}
+  .cfg-empty{padding:40px;text-align:center;color:var(--text-3);font-size:12.5px}
   /* ---------- 全流程工作台 ---------- */
   .workflow-head{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;margin-bottom:18px;
     border:1px solid var(--line-soft);border-radius:12px;overflow:hidden;background:var(--line-soft)}
@@ -518,6 +610,13 @@
 
   @media (max-width:1100px){
     .grid2,.grid2.even,.diff-grid{grid-template-columns:1fr}
+    .cfg-shell{grid-template-columns:1fr;height:auto;min-height:0}
+    .cfg-main{overflow:visible}
+    .cfg-scroll{overflow:visible}
+    .cfg-rail{display:flex;overflow-x:auto;border-right:none;border-bottom:1px solid var(--line-soft);padding:6px}
+    .cfg-rail-h{display:none}
+    .cfg-nav{width:auto;border-left:none;border-bottom:2px solid transparent;white-space:nowrap}
+    .cfg-nav.on{border-left:none;border-bottom-color:var(--gold)}
     .lineage{grid-template-columns:1fr}.dataset-cards{grid-template-columns:repeat(2,1fr)}
     .pipeline{grid-template-columns:1fr}
     .pipeline>.spacer{display:none}
@@ -2052,39 +2151,320 @@ function renderTrainDetail(row,kind) {
 
 
 /* ------------------------------ 配置 ------------------------------ */
+const CFG = {mode:"form", yaml:"", parsed:{}, path:"", models:[], ruamel:true,
+  values:{}, dirty:{}, q:"", sec:"model", advOpen:{}};
+
+const CFG_SECS = [
+  {id:"model", name:"模型与调用", hint:"回合分类、评审与优化的默认模型及调用参数", fields:[
+    {p:"llm.model", k:"model", label:"主模型", hint:"未单独指定时，回合分类 / 脚本评审 / 优化器都用它"},
+    {p:"llm.temperature", k:"range", min:0, max:2, step:0.05, digits:2, label:"温度", hint:"0 = 稳定可复现，适合评审与结构化输出"},
+    {p:"llm.max_tokens", k:"num", label:"max_tokens", hint:"单次调用输出上限"},
+    {p:"llm.timeout_seconds", k:"num", label:"单次超时（秒）"},
+  ]},
+  {id:"optimize", name:"优化与审核", hint:"优化器全量改写 → 独立模型逐条审计 → 不过自动退回修订", pipe:true, fields:[
+    {p:"review.optimize.optimizer_model", k:"model", inherit:"llm.model", label:"优化器模型", hint:"空 = 跟随主模型；负责全量改写与按审核指令修订"},
+    {p:"review.optimize.reviewer_model", k:"model", label:"独立审核模型", hint:"建议与优化器不同模型，实现真正的独立会话审核"},
+    {p:"review.optimize.max_loops", k:"range", min:1, max:8, step:1, label:"审核循环上限", hint:"审核不过 → 退回修订，到达上限后标记待复核"},
+    {p:"review.optimize.batch_size", k:"range", min:1, max:20, step:1, label:"每批步数", hint:"不节省 token 可调大，减少调用轮次"},
+    {p:"review.enabled", k:"bool", adv:true, label:"评审参与流程", hint:"关闭时评审仍可手动运行，但不参与门控"},
+    {p:"review.hold_needs_review", k:"bool", adv:true, label:"待复核先扣住", hint:"低置信结论的会话暂不进 SFT"},
+    {p:"review.judge_gold", k:"bool", adv:true, label:"存废裁决", hint:"评审时对整条会话做出入库判断"},
+    {p:"review.judge_min_score", k:"range", min:0, max:100, step:1, adv:true, label:"入黄金最低分"},
+    {p:"review.judge_confidence_min", k:"range", min:0, max:1, step:0.05, digits:2, adv:true, label:"置信度下限", hint:"低于此值 → 待人工复核"},
+    {p:"review.compress_thinking_over", k:"num", adv:true, label:"长思考重写阈值（字）"},
+  ]},
+  {id:"admission", name:"会话准入", hint:"哪些 pi 会话有资格进入数据集", fields:[
+    {p:"admission.workspace_prefixes", k:"tags", label:"工作区前缀白名单", hint:"相对 sessions_dir 的文件夹名前缀"},
+    {p:"admission.exclude_folders", k:"tags", label:"明确排除目录", hint:"命中即整目录跳过"},
+    {p:"admission.dedupe_duplicate_prefix", k:"bool", label:"同源副本去重", hint:"迁移/复制产生的重复前缀会话只留最长一份"},
+  ]},
+  {id:"labeling", name:"标签规则", hint:"Teacher / Student 自动分流", fields:[
+    {p:"labeling.positive_model_patterns", k:"tags", label:"正例模型模式", hint:"正则，匹配主导模型名"},
+    {p:"labeling.negative_model_patterns", k:"tags", label:"反例模型模式"},
+    {p:"labeling.dominant_ratio_min", k:"range", min:0, max:1, step:0.05, digits:2, label:"主导占比阈值", hint:"低于则降级为待定"},
+  ]},
+  {id:"turns", name:"回合规则", hint:"根任务识别、噪音剥离、催促折叠与纠偏内化", fields:[
+    {p:"turns.use_model", k:"bool", label:"模型回合分类", hint:"语义边界交给模型，脚本确定性应用结果"},
+    {p:"turns.fallback_first_turn_as_root", k:"bool", label:"兜底根任务", hint:"未命中正则时把首个实质回合当根任务"},
+    {p:"turns.normalize_root_prompt", k:"bool", label:"根任务标准化", hint:"按项目关键词统一为标准破解指令"},
+    {p:"turns.fold_await_user_messages", k:"bool", label:"折叠等待语", hint:"删掉「停下来请示」的纯文本，使执行流连续"},
+    {p:"turns.root_task_patterns", k:"tags", adv:true, label:"根任务识别"},
+    {p:"turns.continuation_patterns", k:"tags", adv:true, label:"催促折叠"},
+    {p:"turns.correction_patterns", k:"tags", adv:true, label:"纠偏内化"},
+    {p:"turns.irrelevant_patterns", k:"tags", adv:true, label:"噪音剥离"},
+  ]},
+  {id:"synth", name:"训练合成", hint:"单步窗口、过采样权重与切分策略", fields:[
+    {p:"synth.window_turns", k:"range", min:1, max:24, step:1, label:"窗口步数", hint:"根任务锚定后附带的历史步数"},
+    {p:"synth.sft_labels", k:"tags", label:"SFT 标签", hint:"只有这些标签的会话生成 SFT 正样本"},
+    {p:"synth.eval_ratio", k:"range", min:0, max:0.5, step:0.05, digits:2, label:"验证集比例", hint:"按项目整包切分，防止相邻步泄漏"},
+    {p:"synth.shuffle", k:"bool", label:"全局打乱", hint:"跨项目打乱，防止优化器偏向单一游戏"},
+    {p:"synth.weights.opening", k:"range", min:1, max:5, step:1, adv:true, label:"开局权重"},
+    {p:"synth.weights.key_decision", k:"range", min:1, max:5, step:1, adv:true, label:"关键步权重"},
+    {p:"synth.weights.closing", k:"range", min:1, max:5, step:1, adv:true, label:"收尾权重"},
+    {p:"synth.weights.routine", k:"range", min:1, max:5, step:1, adv:true, label:"常规步权重"},
+  ]},
+];
+
+const cfgGet = (obj, p) => p.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+const cfgFmt = (f, v) => f.digits != null ? Number(v).toFixed(f.digits) : String(v);
+
+function cfgLoadValues() {
+  CFG.values = {}; CFG.dirty = {};
+  CFG_SECS.forEach(s => s.fields.forEach(f => {
+    const v = cfgGet(CFG.parsed, f.p);
+    CFG.values[f.p] = v === undefined
+      ? (f.k === "tags" ? [] : f.k === "bool" ? false : f.k === "num" ? 0 : f.k === "model" ? "" : Number(f.min || 0))
+      : (f.k === "range" || f.k === "num") ? Number(v) : v;
+  }));
+}
+function cfgResolve(path) {
+  const f = cfgFind(path);
+  if (f && f.inherit && !CFG.values[path]) return CFG.values[f.inherit] || "—";
+  return CFG.values[path];
+}
+function cfgFind(p) { for (const s of CFG_SECS) for (const f of s.fields) if (f.p === p) return f; return null; }
+function cfgDirtyCount() { return CFG_SECS.reduce((a, s) => a + s.fields.filter(f => CFG.dirty[f.p]).length, 0); }
+function cfgSecDirty(sec) { return sec.fields.some(f => CFG.dirty[f.p]); }
+function cfgMarkDirty(path) {
+  const cur = CFG.values[path], base = cfgGet(CFG.parsed, path);
+  const changed = JSON.stringify(cur) !== JSON.stringify(base === undefined ? (cfgFind(path).k === "tags" ? [] : cur) : base);
+  CFG.dirty[path] = changed;
+  cfgPaintDirty();
+}
+function cfgPaintDirty() {
+  const n = cfgDirtyCount();
+  $$(".cfg-row").forEach(r => { const p = r.dataset.path; if (p) r.classList.toggle("is-dirty", !!CFG.dirty[p]); });
+  $$(".cfg-nav").forEach(b => {
+    const sec = CFG_SECS.find(s => s.id === b.dataset.sec);
+    if (sec) b.classList.toggle("is-dirty", cfgSecDirty(sec));
+  });
+  const bar = $("#cfgSaveBar");
+  if (bar) {
+    bar.classList.toggle("hide", n === 0);
+    const c = bar.querySelector("[data-cnt]");
+    if (c) c.textContent = `${n} 项未保存`;
+  }
+}
+function cfgInput(el) {
+  const p = el.dataset.cfg, f = cfgFind(p);
+  if (!f) return;
+  if (f.k === "bool") CFG.values[p] = el.checked;
+  else if (f.k === "range" || f.k === "num") { const n = Number(el.value); if (!Number.isNaN(n)) CFG.values[p] = n; }
+  else CFG.values[p] = el.value;
+  const out = el.parentElement.querySelector("[data-val]");
+  if (out && (f.k === "range")) out.textContent = cfgFmt(f, CFG.values[p]);
+  if (p === "llm.model" || p.endsWith("_model")) cfgRepaintPipe();
+  cfgMarkDirty(p);
+}
+function cfgRepaintPipe() {
+  const box = $("#cfgPipe");
+  if (!box) return;
+  box.innerHTML = cfgPipeHtml();
+}
+function cfgPipeHtml() {
+  const opt = cfgResolve("review.optimize.optimizer_model") || "主模型";
+  const rev = cfgResolve("review.optimize.reviewer_model") || "主模型";
+  const loops = CFG.values["review.optimize.max_loops"] ?? 3;
+  return `<div class="node opt">${esc(opt)}</div><span class="arrow">全量改写 ⟶</span>
+    <div class="node rev">${esc(rev)}</div><span class="arrow">逐条审计 ⟶ 不过退回修订（≤${esc(loops)} 轮）⟶</span>
+    <div class="node hum">人工浏览 → 定稿</div>`;
+}
+function cfgControl(f) {
+  const v = CFG.values[f.p];
+  if (f.k === "bool") return `<label class="cfg-sw"><input type="checkbox" data-cfg="${esc(f.p)}" ${v ? "checked" : ""} onchange="cfgInput(this)"><span></span></label>`;
+  if (f.k === "range") return `<input type="range" class="cfg-range" min="${f.min}" max="${f.max}" step="${f.step || 1}" data-cfg="${esc(f.p)}" value="${v}" oninput="cfgInput(this)"><span class="cfg-val" data-val>${cfgFmt(f, v)}</span>`;
+  if (f.k === "num") return `<input type="number" data-cfg="${esc(f.p)}" value="${esc(v)}" oninput="cfgInput(this)">`;
+  if (f.k === "model") {
+    const opts = [];
+    if (f.inherit) opts.push(`<option value="" ${!v ? "selected" : ""}>跟随主模型 · ${esc(cfgResolve(f.inherit) || "—")}</option>`);
+    CFG.models.forEach(m => opts.push(`<option value="${esc(m.id)}" ${String(v) === m.id ? "selected" : ""}>${esc(m.id)}</option>`));
+    if (v && !CFG.models.some(m => m.id === v)) opts.push(`<option value="${esc(v)}" selected>${esc(v)} · pi 中未找到</option>`);
+    const prov = (CFG.models.find(m => m.id === cfgResolve(f.p)) || {}).provider || "";
+    return `<select data-cfg="${esc(f.p)}" onchange="cfgInput(this)">${opts.join("")}</select>${prov ? `<span class="cfg-inherit">${esc(prov)}</span>` : ""}`;
+  }
+  if (f.k === "tags") {
+    const arr = Array.isArray(v) ? v : [];
+    return `<div class="cfg-tags" data-tags="${esc(f.p)}">${arr.map((t, i) => `<span class="cfg-tag">${esc(String(t))}<i onclick="cfgTagDel('${esc(f.p)}',${i})">×</i></span>`).join("")}<input class="cfg-tag-in" placeholder="+ 回车添加" onkeydown="cfgTagKey(event,'${esc(f.p)}')"></div>`;
+  }
+  return `<input type="text" data-cfg="${esc(f.p)}" value="${esc(v)}" oninput="cfgInput(this)">`;
+}
+function cfgTagKey(e, p) {
+  if (e.key !== "Enter" && e.key !== ",") return;
+  e.preventDefault();
+  const val = e.target.value.trim();
+  if (!val) return;
+  if (!Array.isArray(CFG.values[p])) CFG.values[p] = [];
+  if (CFG.values[p].includes(val)) { toast("已存在", "err"); return; }
+  CFG.values[p].push(val); e.target.value = "";
+  cfgRepaintTags(p); cfgMarkDirty(p);
+}
+function cfgTagDel(p, i) { CFG.values[p].splice(i, 1); cfgRepaintTags(p); cfgMarkDirty(p); }
+function cfgRepaintTags(p) {
+  $$(`.cfg-tags[data-tags="${CSS.escape(p)}"]`).forEach(box => {
+    box.querySelectorAll(".cfg-tag").forEach(x => x.remove());
+    const input = box.querySelector(".cfg-tag-in");
+    CFG.values[p].forEach((t, i) => {
+      const s = document.createElement("span");
+      s.className = "cfg-tag";
+      s.innerHTML = `${esc(String(t))}<i onclick="cfgTagDel('${esc(p)}',${i})">×</i>`;
+      box.insertBefore(s, input);
+    });
+  });
+}
+function cfgRowHtml(f) {
+  return `<div class="cfg-row" data-path="${esc(f.p)}">
+    <div><div class="nm"><i class="dot"></i>${esc(f.label)}</div>
+      ${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ""}
+      <div class="mono-hint">${esc(f.p)}</div></div>
+    <div class="cfg-ctl">${cfgControl(f)}</div>
+  </div>`;
+}
+function cfgSecHtml(s) {
+  const q = CFG.q.toLowerCase();
+  const hit = f => !q || (f.label + f.p + (f.hint || "")).toLowerCase().includes(q);
+  const main = s.fields.filter(f => !f.adv && hit(f));
+  const adv = s.fields.filter(f => f.adv && hit(f));
+  if (!main.length && !adv.length) return "";
+  return `<section class="cfg-sec" id="cfgsec-${s.id}" data-sec="${s.id}">
+    <div class="cfg-sec-h"><h3>${esc(s.name)}</h3><span class="hint">${esc(s.hint || "")}</span>
+      <span class="cnt">${s.fields.length} 项</span></div>
+    ${s.pipe ? `<div class="cfg-pipe" id="cfgPipe">${cfgPipeHtml()}</div>` : ""}
+    ${main.map(cfgRowHtml).join("")}
+    ${adv.length ? `<details class="cfg-adv" ${CFG.advOpen[s.id] || q ? "open" : ""} ontoggle="CFG.advOpen['${s.id}']=this.open">
+      <summary>高级参数 · ${adv.length} 项</summary>${adv.map(cfgRowHtml).join("")}</details>` : ""}
+  </section>`;
+}
+function cfgRailHtml() {
+  return CFG_SECS.map(s => {
+    const visible = !CFG.q || s.fields.some(f => (f.label + f.p + (f.hint || "")).toLowerCase().includes(CFG.q.toLowerCase()));
+    if (!visible) return "";
+    return `<button class="cfg-nav ${CFG.sec === s.id ? "on" : ""}" data-sec="${s.id}" onclick="cfgGoto('${s.id}')">
+      <span class="nm">${esc(s.name)}</span><span class="ct">${s.fields.length}</span><i class="dot"></i></button>`;
+  }).join("");
+}
+function cfgGoto(id) {
+  CFG.sec = id;
+  const navs = $$(".cfg-nav");
+  navs.forEach(b => b.classList.toggle("on", b.dataset.sec === id));
+  const el = document.getElementById("cfgsec-" + id);
+  if (!el) return;
+  const sc = $("#cfgScroll") || $(".cfg-scroll");
+  if (sc && sc.scrollHeight > sc.clientHeight + 4) {
+    const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 6;
+    sc.scrollTo({top: Math.max(0, top), behavior: "smooth"});
+  } else {
+    // 容器不可滚（窄屏 / 内容不足）时退回页面滚动
+    el.scrollIntoView({block: "start", behavior: "smooth"});
+  }
+  el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+}
+async function cfgSave() {
+  const values = [];
+  CFG_SECS.forEach(s => s.fields.forEach(f => { if (CFG.dirty[f.p]) values.push({path: f.p, value: CFG.values[f.p]}); }));
+  if (!values.length) { toast("没有改动", "ok"); return; }
+  try {
+    const r = await api("/api/config/structured", {method:"POST", body: JSON.stringify({values})});
+    const d = await api("/api/config");
+    CFG.parsed = d.parsed || {}; CFG.yaml = d.yaml;
+    cfgLoadValues(); cfgPaintDirty();
+    loadConfig();
+    toast(`已保存 ${r.applied} 项 · 注释保留 · 版本 ${String(r.config_hash).slice(0, 8)}`, "ok");
+  } catch (e) { toast(e.message, "err"); }
+}
+function cfgDiscard() { cfgLoadValues(); loadConfig(); }
+
 async function loadConfig() {
-  if ($("#cfgEditor")) return;
-  const d = await api("/api/config");
+  let d, md;
+  try {
+    [d, md] = await Promise.all([api("/api/config"), api("/api/llm/models").catch(() => ({models: [], ruamel: false}))]);
+  } catch (e) { $("#view-config").innerHTML = `<div class="panel"><div class="empty">${esc(e.message)}</div></div>`; return; }
+  CFG.yaml = d.yaml; CFG.parsed = d.parsed || {}; CFG.path = d.path;
+  CFG.models = md.models || []; CFG.ruamel = md.ruamel !== false;
+  if (!Object.keys(CFG.values).length) cfgLoadValues();
+
   $("#view-config").innerHTML = `
-    <div class="panel">
-      <div class="toolbar">
-        <span class="mono muted">${esc(d.path)}</span><span class="grow"></span>
-        <button id="cfgValidate">校验 YAML</button>
-        <button id="cfgTest">测试模型连接</button>
-        <button id="cfgSave" class="primary">保存配置</button>
+    <div class="cfg-shell">
+      <aside class="cfg-rail"><div class="cfg-rail-h">配置分组</div><nav id="cfgNav">${cfgRailHtml()}</nav></aside>
+      <div class="cfg-main">
+        <div class="cfg-bar">
+          <div><h2>配置</h2><div class="path mono">${esc(CFG.path)}${CFG.ruamel ? " · 注释保留" : " · 无 ruamel，注释会丢失"}</div></div>
+          <span class="grow"></span>
+          <input class="cfg-search" id="cfgSearch" placeholder="搜索设置项…" value="${esc(CFG.q)}">
+          <div class="seg-ctl">${[["form","分项"],["yaml","YAML"]].map(([v,t])=>`<button data-v="${v}" class="${CFG.mode===v?"on":""}" onclick="CFG.mode='${v}';CFG.values={};loadConfig()">${t}</button>`).join("")}</div>
+          <button class="ghost" id="cfgTest">测试主模型</button>
+        </div>
+        ${CFG.mode === "form" ? `
+        <div class="cfg-scroll" id="cfgScroll">${CFG_SECS.map(cfgSecHtml).join("") || `<div class="cfg-empty">没有匹配「${esc(CFG.q)}」的设置项</div>`}</div>
+        <div class="cfg-savebar hide" id="cfgSaveBar">
+          <span class="cnt"><i></i><b data-cnt>0 项未保存</b></span>
+          <span class="faint" style="font-size:11.5px">只提交改动项 · YAML 注释与顺序保持</span>
+          <span class="grow"></span>
+          <button class="ghost" onclick="cfgDiscard()">放弃</button>
+          <button class="primary" onclick="cfgSave()">保存配置</button>
+        </div>` : `
+        <div class="cfg-scroll">
+          <textarea id="cfgEditor" class="editor" spellcheck="false" style="height:calc(100vh - 320px)">${esc(CFG.yaml)}</textarea>
+          <div class="note"><span class="kbd">Ctrl</span><span class="kbd">S</span> 保存 · 分项界面覆盖不了的复杂改动在这里改</div>
+        </div>
+        <div class="cfg-savebar"><span class="faint" style="font-size:12px">YAML 源码模式 · 保存前会自动校验</span><span class="grow"></span>
+          <button class="ghost" id="cfgValidate">校验</button><button class="primary" id="cfgSaveYaml">保存 YAML</button></div>`}
       </div>
-      <textarea id="cfgEditor" class="editor" spellcheck="false">${esc(d.yaml)}</textarea>
-      <div class="note">模型相关配置在 <span class="mono">llm</span> 与 <span class="mono">review</span> 段；准入与标签规则在 <span class="mono">admission</span>、<span class="mono">labeling</span>、<span class="mono">turns</span> 段。<span class="kbd">Ctrl</span><span class="kbd">S</span> 保存。</div>
     </div>`;
-  const save = async () => {
-    try {
-      const r = await api("/api/config", {method:"PUT", body: JSON.stringify({yaml: $("#cfgEditor").value})});
-      toast("配置已保存，版本 " + r.config_hash, "ok"); refreshMeta().catch(() => {});
-    } catch (e) { toast(e.message, "err"); }
-  };
-  $("#cfgSave").onclick = save;
-  $("#cfgEditor").onkeydown = e => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
-    if (e.key === "Tab") { e.preventDefault(); const t = e.target, s = t.selectionStart; t.setRangeText("  ", s, t.selectionEnd, "end"); }
-  };
-  $("#cfgValidate").onclick = async () => {
-    const r = await api("/api/config/validate", {method:"POST", body: JSON.stringify({yaml: $("#cfgEditor").value})});
-    r.ok ? toast("YAML 合法，顶层键：" + r.keys.join("、"), "ok") : toast("YAML 有误：" + r.error, "err");
-  };
+
+  if (CFG.mode === "form") {
+    const sc = $("#cfgScroll");
+    if (sc) {
+      let raf = null;
+      sc.addEventListener("scroll", () => {
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+          raf = null;
+          const base = sc.getBoundingClientRect().top + 56;
+          let cur = null;
+          CFG_SECS.forEach(s => {
+            const el = document.getElementById("cfgsec-" + s.id);
+            if (el && el.getBoundingClientRect().top <= base) cur = s.id;
+          });
+          cur = cur || CFG_SECS[0].id;
+          if (cur !== CFG.sec) {
+            CFG.sec = cur;
+            $$(".cfg-nav").forEach(b => b.classList.toggle("on", b.dataset.sec === cur));
+          }
+        });
+      }, {passive: true});
+    }
+    const si = $("#cfgSearch");
+    if (si) si.oninput = e => {
+      CFG.q = e.target.value.trim();
+      const sc2 = $("#cfgScroll");
+      if (sc2) sc2.innerHTML = CFG_SECS.map(cfgSecHtml).join("") || `<div class="cfg-empty">没有匹配「${esc(CFG.q)}」的设置项</div>`;
+      $("#cfgNav").innerHTML = cfgRailHtml();
+      $$(".cfg-nav").forEach(b => b.classList.toggle("on", b.dataset.sec === CFG.sec));
+      cfgPaintDirty();
+    };
+    cfgPaintDirty();
+  } else {
+    const saveYaml = async () => {
+      try {
+        const r = await api("/api/config", {method:"PUT", body: JSON.stringify({yaml: $("#cfgEditor").value})});
+        toast("已保存 · 版本 " + r.config_hash, "ok");
+        CFG.yaml = $("#cfgEditor").value; refreshMeta().catch(() => {});
+      } catch (e) { toast(e.message, "err"); }
+    };
+    $("#cfgSaveYaml").onclick = saveYaml;
+    $("#cfgValidate").onclick = async () => {
+      const r = await api("/api/config/validate", {method:"POST", body: JSON.stringify({yaml: $("#cfgEditor").value})});
+      r.ok ? toast("YAML 合法 · 顶层键：" + r.keys.join("、"), "ok") : toast("有误：" + r.error, "err");
+    };
+    $("#cfgEditor").onkeydown = e => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveYaml(); }
+      if (e.key === "Tab") { e.preventDefault(); const t = e.target, s = t.selectionStart; t.setRangeText("  ", s, t.selectionEnd, "end"); }
+    };
+  }
   $("#cfgTest").onclick = async () => {
-    toast("正在测试模型连接…");
-    const r = await api("/api/llm/test", {method:"POST", body: JSON.stringify({})});
-    r.ok ? toast(`模型可用：${r.model}（${r.provider}），回复「${r.reply||"仅推理内容"}」`, "ok") : toast("连接失败：" + r.error, "err");
+    toast("正在测试主模型连接…");
+    const r = await api("/api/llm/test", {method:"POST", body: JSON.stringify({model: CFG.values["llm.model"] || null})});
+    r.ok ? toast(`可用：${r.model}（${r.provider}）回复「${r.reply || "仅推理内容"}」`, "ok") : toast("失败：" + r.error, "err");
   };
 }
 

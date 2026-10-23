@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import re
 import threading
@@ -29,7 +30,13 @@ from pipeline.common.config import (
     save_config_text,
     stage_dirs,
 )
-from pipeline.common.llm import test_model
+from pipeline.common.llm import load_pi_models, test_model
+
+try:
+    from ruamel.yaml import YAML as _RuamelYAML
+    _HAS_RUAMEL = True
+except ImportError:  # noqa: BLE001
+    _HAS_RUAMEL = False
 from pipeline.common.store import (
     load_index,
     now_iso,
@@ -246,6 +253,71 @@ def llm_test(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return {"ok": True, **test_model(model)}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
+
+
+@app.get("/api/llm/models")
+def llm_models() -> Dict[str, Any]:
+    try:
+        providers = load_pi_models()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"读取 pi models.json 失败: {exc}") from exc
+    out = []
+    for pname, pv in providers.items():
+        for entry in pv.get("models", []) or []:
+            mid = entry.get("id") if isinstance(entry, dict) else entry
+            if not mid:
+                continue
+            out.append({"id": mid, "provider": pname, "reasoning": bool(entry.get("reasoning")) if isinstance(entry, dict) else False})
+    return {"models": out, "ruamel": _HAS_RUAMEL}
+
+
+class ConfigPatchBody(BaseModel):
+    values: List[Dict[str, Any]] = []
+
+
+def _set_path(data: Dict[str, Any], path: str, value: Any) -> None:
+    keys = path.split(".")
+    cur = data
+    for k in keys[:-1]:
+        if not isinstance(cur.get(k), dict):
+            cur[k] = {}
+        cur = cur[k]
+    cur[keys[-1]] = value
+
+
+@app.post("/api/config/structured")
+def config_structured(body: ConfigPatchBody) -> Dict[str, Any]:
+    """按 path->value 深度合并进当前配置；ruamel 往返保留注释与顺序。"""
+    text = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else ""
+    import yaml as yaml_lib  # noqa: PLC0415
+
+    engine = "ruamel"
+    if _HAS_RUAMEL:
+        yml = _RuamelYAML()
+        yml.preserve_quotes = True
+        data = yml.load(text) or {}
+        for v in body.values:
+            _set_path(data, v["path"], v["value"])
+        buf = io.StringIO()
+        yml.dump(data, buf)
+        new_text = buf.getvalue()
+    else:
+        engine = "pyyaml"
+        data = yaml_lib.safe_load(text) or {}
+        for v in body.values:
+            _set_path(data, v["path"], v["value"])
+        new_text = yaml_lib.safe_dump(data, allow_unicode=True, sort_keys=False)
+    parsed = yaml_lib.safe_load(new_text)
+    if not isinstance(parsed, dict):
+        raise HTTPException(400, "配置根节点必须是对象")
+    save_config_text(new_text)
+    return {
+        "ok": True,
+        "engine": engine,
+        "config_hash": config_hash(load_config()),
+        "yaml": new_text,
+        "applied": len(body.values),
+    }
 
 
 # ---------------------------------------------------------------------------

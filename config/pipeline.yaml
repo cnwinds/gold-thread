@@ -13,7 +13,7 @@ paths:
 
 llm:
   # 模型参与环节统一使用该模型（通过 pi models.json 里的 provider 调用）
-  model: "deepseek-v4.1-flash-1017"
+  model: "glm-5.3-flash"
   temperature: 0.2
   max_tokens: 8192
   timeout_seconds: 180
@@ -26,10 +26,10 @@ llm:
 admission:
   # 只准入这些工作区目录前缀（相对 sessions_dir 的文件夹名，小写比较）
   workspace_prefixes:
-    - "--d--crack-"
+  - "--d--crack-"
   # 明确排除的文件夹（例如 crack 根目录下的泛化问答）
   exclude_folders:
-    - "--d--crack--"
+  - "--d--crack--"
   # 迁移/复制产生的重复会话前缀副本（按 session_id 前缀排除，可留空）
   dedupe_duplicate_prefix: true
 
@@ -39,10 +39,10 @@ admission:
 # ---------------------------------------------------------------------------
 labeling:
   positive_model_patterns:
-    - "^deepseek"
-    - "^glm-"
+  - "^deepseek"
+  - "^glm-"
   negative_model_patterns:
-    - "qwen"
+  - "qwen"
   # 主导模型出现歧义（第二模型占比超过该值）时降到 pending 待复核
   dominant_ratio_min: 0.6
   unknown_label: "pending"
@@ -57,59 +57,61 @@ turns:
   model_max_turn_chars: 800
   # 根任务指令识别（命中第一条后，之前的一切回合视为前置噪音）
   root_task_patterns:
-    - "\\.xapk"
-    - "\\.apk"
-    - "我要破解"
-    - "帮我破解"
-    - "帮我分析"
-    - "自己研究破解"
-    - "安全研究员"
-    - "还原成明文"
+  - "\\.xapk"
+  - "\\.apk"
+  - "我要破解"
+  - "帮我破解"
+  - "帮我分析"
+  - "自己研究破解"
+  - "安全研究员"
+  - "还原成明文"
   # 未命中根任务正则时，是否把首个非噪音回合当作根任务（新项目更稳）
   fallback_first_turn_as_root: true
   # 是否按项目关键词规范化首条根任务指令（对齐标准训练 Prompt 分布）
   normalize_root_prompt: true
   root_normalizations:
-    jigsawcard: "帮我破解 E:\\Download\\com.oakever.jigsawcard@arm64-v8a.xapk 游戏，获取 资源，配置，代码 所有解密文件保存在本文件夹"
-    meowdoku: "帮我破解 E:\\Download\\com.oakever.meowdoku@arm64-v8a.xapk 游戏，获取 资源，配置，代码 所有文件保存在本文件夹"
+    jigsawcard: "帮我破解 E:\\Download\\com.oakever.jigsawcard@arm64-v8a.xapk 游戏，获取 资源，配置，代码
+      所有解密文件保存在本文件夹"
+    meowdoku: "帮我破解 E:\\Download\\com.oakever.meowdoku@arm64-v8a.xapk 游戏，获取 资源，配置，代码
+      所有文件保存在本文件夹"
 
   # 与任务无关的回合（配置模型 / hi 测试 / API 报错 / 硬件闲聊）
   irrelevant_patterns:
-    - "^hi$"
-    - "^hello$"
-    - "^/modle"
-    - "^/model"
-    - "^/clear$"
-    - "^继续$"
-    - "models\\.json"
-    - "sub2api"
-    - "openwebui"
-    - "ollama"
-    - "gpt-image-2"
-    - "增加.*模型"
-    - "添加.*model"
-    - "隔壁的会话报错了"
-    - "选这个模型报错"
+  - "^hi$"
+  - "^hello$"
+  - "^/modle"
+  - "^/model"
+  - "^/clear$"
+  - "^继续$"
+  - "models\\.json"
+  - "sub2api"
+  - "openwebui"
+  - "ollama"
+  - "gpt-image-2"
+  - "增加.*模型"
+  - "添加.*model"
+  - "隔壁的会话报错了"
+  - "选这个模型报错"
   # 命中以下模式的短回合不被判为噪音（避免误杀真正的任务指令）
   irrelevant_whitelist_patterns:
-    - "破解"
-    - "\\.apk"
-    - "\\.xapk"
+  - "破解"
+  - "\\.apk"
+  - "\\.xapk"
 
   # 过程催促 / 确认 / 纪律纠偏：折叠进主线，不产生「无头 Prompt」
   continuation_patterns:
-    - "^继续$"
-    - "^继续[A-Za-z]?$"
-    - "^可以$"
-    - "^可以。?$"
-    - "^好的?$"
-    - "^补全结构$"
-    - "^所有的文件都要还原成明文$"
+  - "^继续$"
+  - "^继续[A-Za-z]?$"
+  - "^可以$"
+  - "^可以。?$"
+  - "^好的?$"
+  - "^补全结构$"
+  - "^所有的文件都要还原成明文$"
   correction_patterns:
-    - "不要参考其他的目录"
-    - "你不要看其他的目录"
-    - "不要看别的目录"
-    - "专心干自己的目录"
+  - "不要参考其他的目录"
+  - "你不要看其他的目录"
+  - "不要看别的目录"
+  - "专心干自己的目录"
   # 折叠时是否删掉上一轮「停下来请示用户」的纯文本消息
   fold_await_user_messages: true
 
@@ -159,10 +161,10 @@ review:
 
   # ---- 全面优化 + 独立审核循环 ----
   optimize:
-    # 优化器模型（空 = llm.model）
-    optimizer_model: ""
-    # 独立审核模型：建议配置为与优化器不同的模型，实现真正的独立会话审核
-    reviewer_model: ""
+    # 优化器模型（空 = llm.model，即 deepseek-v4.1-flash）
+    optimizer_model: "glm-5.3-flash"
+    # 独立审核模型：glm-5.3-flash（与优化器不同模型，实现真正独立审核）
+    reviewer_model: "deepseek-v4.1-flash-1017"
     # 审核不过 -> 退回优化器修订，最大循环轮数
     max_loops: 3
     # 每批送优化/审计的步数（不节省 token 可适当调大）
@@ -186,9 +188,9 @@ synth:
   sft_labels: ["positive"]
   # 允许「个别反例/混合会话内的高分成功子段」进入 SFT 单步窗口
   sft_allow_subsegments:
-    - session_id: "01a15c80"
-      start_step: 50
-      end_step: 106
+  - session_id: "01a15c80"
+    start_step: 50
+    end_step: 106
   # 跨项目全局打乱（防止优化器偏向单一游戏）
   shuffle: true
   seed: 42

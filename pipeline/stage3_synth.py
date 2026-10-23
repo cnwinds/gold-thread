@@ -646,6 +646,21 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     for name, rows in out.items():
         counts[name] = write_jsonl_atomic(train_root / name, rows)
 
+    # 物理切分：train / eval 各写一份，训练框架可直接读取，无需自行过滤
+    split_out: Dict[str, int] = {}
+    for name, rows in out.items():
+        if not rows:
+            continue
+        by_split: Dict[str, List[Dict[str, Any]]] = {"train": [], "eval": []}
+        for r in rows:
+            sp = (r.get("metadata") or {}).get("split", "train")
+            by_split.setdefault(sp, []).append(r)
+        for sp, part in by_split.items():
+            if not part:
+                continue
+            fname = f"{name[:-6]}.{sp}.jsonl"
+            split_out[fname] = write_jsonl_atomic(train_root / fname, part)
+
     dataset_info = {
         "pi_sft_gold_trajectories": {
             "file_name": "sft_gold_trajectories_sharegpt.jsonl",
@@ -698,6 +713,33 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             },
         },
     }
+    # 物理切分版本（train/eval 已分开，建议训练时直接用这两个）
+    _SGPT_TAGS = {
+        "role_tag": "from", "content_tag": "value", "user_tag": "human",
+        "assistant_tag": "gpt", "system_tag": "system", "observation_tag": "observation",
+    }
+    for base in ("sft_step_windows_sharegpt", "sft_gold_trajectories_sharegpt"):
+        for sp in ("train", "eval"):
+            fname = f"{base}.{sp}.jsonl"
+            if (train_root / fname).exists():
+                key = f"pi_{base.replace('_sharegpt', '')}_{sp}"
+                dataset_info[key] = {
+                    "file_name": fname,
+                    "formatting": "sharegpt",
+                    "columns": {"messages": "conversations", "tools": "tools"},
+                    "tags": dict(_SGPT_TAGS),
+                }
+    for sp in ("train", "eval"):
+        fname = f"dpo_preference_pairs.{sp}.jsonl"
+        if (train_root / fname).exists():
+            dataset_info[f"pi_dpo_preference_pairs_{sp}"] = {
+                "file_name": fname,
+                "ranking": True,
+                "formatting": "sharegpt",
+                "columns": {"messages": "conversations", "chosen": "chosen",
+                            "rejected": "rejected", "tools": "tools"},
+                "tags": dict(_SGPT_TAGS),
+            }
     write_json_atomic(train_root / "dataset_info.json", dataset_info)
 
     stats = {
