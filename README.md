@@ -166,6 +166,7 @@ gold-thread/
 - `probe_24g.py` —— 模拟小显存加载（bf16 / 8bit / 4bit 可行性探测）
 - `prep_dpo_window.py` —— DPO 窗口裁剪（从头部丢旧步，保留 system + 根任务 + 最近步）
 - `serve_api.sh` —— 合并模型后一键起 OpenAI 兼容 API（LLaMA-Factory hf 后端）
+- **`train_monitor.py`** —— **训练进程监控器**：实时 tail 日志 + OOM 秒级诊断 + 进程退出一秒通知（推荐用它替代裸跑 `llamafactory-cli`）
 
 > 训练实跑记录与踩坑经验见 `data/03_train/RESULT.md`（含 Liger 必开原因、DPO ref_model 修正、
 > eval OOM 绕过、流式+tools 补丁、SDK 兼容修复、脚本 bug 修复等硬经验）完整交接说明见 `data/03_train/handoff.md`。
