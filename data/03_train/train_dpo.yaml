@@ -3,7 +3,7 @@ model_name_or_path: /data/models/Qwen3.8-27B
 adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft   # SFT 适配器；或改为合并后的目录
 trust_remote_code: true
 flash_attn: fa2
-enable_liger_kernel: true
+enable_liger_kernel: false                            # qwen3_5 不在 Liger 支持列表，必须先关
 
 ### method
 stage: dpo
