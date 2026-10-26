@@ -507,7 +507,7 @@ def purify_by_judge(
         gold_messages.extend(u["tools"])
 
     # ---- 接缝审核（模型）----
-    seams = judge.extract_seams(gold_messages, pruned, turn_marks)
+    seams = judge.extract_seams(gold_messages, pruned, turn_marks, cfg=cfg)
     audit = {"seams_total": len(seams), "seams_fixed": 0, "seam_issues": []}
     if seams:
         verdicts = judge.audit_seams(seams, cfg=cfg, log=log, out_meta=audit)

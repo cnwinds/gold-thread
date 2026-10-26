@@ -737,8 +737,8 @@ const PATHO_ZH = {
   over_rumination_doubt_loop:"反复自我怀疑", mental_hex_checkmark:"心算十六进制自证", tool_logical_failure:"工具逻辑失败",
   cross_dir_violation:"跨目录越界", hallucinated_source_search:"臆造源码搜索",
 };
-const PHASE = [["opening","开局","#8d9ab2"],["key_decision","关键决策","#d9b467"],["routine","常规推进","#5fb9c4"],["closing","收尾","#a9b2dc"]];
-const DPO_SRC_ZH = {stage2_pruned:"剪掉的弯路", negative_step:"反例中的坏步"};
+const PHASE = [["highlight","高光","#d9b467"],["opening","开局","#8d9ab2"],["key_decision","关键决策","#c9a46a"],["routine","常规推进","#5fb9c4"],["closing","收尾","#a9b2dc"]];
+const DPO_SRC_ZH = {stage2_pruned:"剪掉的弯路", negative_step:"反例中的坏步", review_rewrite:"复核改写"};
 const SKIP_ZH = {non_crack_folder:"非目标目录", excluded_folder:"排除目录", empty:"空会话"};
 const PAGES = {
   overview: ["数据精炼工作台", "从源会话准入、回合清洗、黄金提纯到 SFT / DPO 生成：看清每一层的输入、损耗、人工门控与最终产出。"],
@@ -1526,7 +1526,6 @@ async function openGold(sid) {
   REV.note = (ann.human_review || {}).note || "";
   REV.finalized = !!(ann.human_review || {}).finalized;
   const mrep = ann.model_report || rec.model_report || null;
-  const mr0 = mr;
   const prog = d.progress || {};
   const sp = d.synthesis_preview || {}, funnel = sp.funnel || {};
   STATE.drawerData = d;
@@ -1539,8 +1538,6 @@ async function openGold(sid) {
         <div class="row" style="margin-bottom:8px">${mr.verdict ? verdictTag(mr.verdict) : `<span class="faint">未评审</span>`}
           ${prog.rewrites ? `<span class="chip">改写已处置 <b>${fmt(prog.rewrites_done)}</b> / ${fmt(prog.rewrites)}</span>` : ""}
           ${prog.bad_steps ? `<span class="chip">问题步已处置 <b>${fmt(prog.bad_done)}</b> / ${fmt(prog.bad_steps)}</span>` : ""}
-          ${mr.kind === "optimize" ? `<span class="chip">全面优化</span><span class="chip">优化器 ${esc(mr.optimizer_model || mr.model || "")}</span><span class="chip">独立审核 ${esc(mr.reviewer_model || "")}</span>
-          <span class="chip">审核循环 ${(mr.loops || []).filter(l => l.phase === "audit").length} 轮</span><span class="chip">改动 ${fmt((mr.thinking_rewrites || []).length)} 步</span>` : ""}
           ${REV.finalized ? `<span class="chip train">已定稿</span>` : ""}
         </div>
         ${(mr.reasons || []).map(r => `<div>${esc(r)}</div>`).join("") || `<div class="faint">模型还没有给出理由</div>`}
@@ -1559,7 +1556,6 @@ async function openGold(sid) {
         ${(mrep.problems || []).length ? `<div class="path-chips" style="margin-bottom:8px">${mrep.problems.map(p => `<span>${esc(p)}</span>`).join("")}</div>` : ""}
         ${(mrep.highlights || []).length ? `<div class="row" style="gap:6px;flex-wrap:wrap"><span class="faint" style="font-size:11.5px">高光步（训练过采样）</span>
           ${mrep.highlights.map(h => `<span class="chip" title="${esc(h.why)}">${esc(String(h.msg_id).slice(0, 8))} ×${h.weight}</span>`).join("")}</div>` : ""}
-        ${mr0 && mr0.kind === "optimize" ? `<div class="faint" style="margin-top:6px">旧轮次「全面优化」已退役：按手册，需要整条重写的会话应报告而不是重写。</div>` : ""}
       </div></div>` : ""}
     <div class="panel"><div class="panel-h"><h3>Stage 3 入库预览</h3>
       <span class="hint">${sp.full_sft_allowed ? "完整黄金轨迹与单步窗口均可生成" : sp.subsegment_only ? `仅白名单子段 ${JSON.stringify(sp.subsegment_ranges||[])}` : "当前会话被门控，不生成 SFT"}</span>
@@ -2223,22 +2219,43 @@ const CFG = {mode:"form", yaml:"", parsed:{}, path:"", models:[], ruamel:true,
 
 const CFG_SECS = [
   {id:"model", name:"模型与调用", hint:"回合分类、评审与优化的默认模型及调用参数", fields:[
-    {p:"llm.model", k:"model", label:"主模型", hint:"未单独指定时，回合分类 / 脚本评审 / 优化器都用它"},
+    {p:"llm.model", k:"model", label:"主模型", hint:"兜底模型：回合分类、步级判断、审核都未单独指定时用它"},
     {p:"llm.temperature", k:"range", min:0, max:2, step:0.05, digits:2, label:"温度", hint:"0 = 稳定可复现，适合评审与结构化输出"},
     {p:"llm.max_tokens", k:"num", label:"max_tokens", hint:"单次调用输出上限"},
     {p:"llm.timeout_seconds", k:"num", label:"单次超时（秒）"},
   ]},
-  {id:"optimize", name:"优化与审核", hint:"优化器全量改写 → 独立模型逐条审计 → 不过自动退回修订", pipe:true, fields:[
-    {p:"review.optimize.optimizer_model", k:"model", inherit:"llm.model", label:"优化器模型", hint:"空 = 跟随主模型；负责全量改写与按审核指令修订"},
-    {p:"review.optimize.reviewer_model", k:"model", label:"独立审核模型", hint:"建议与优化器不同模型，实现真正的独立会话审核"},
-    {p:"review.optimize.max_loops", k:"range", min:1, max:8, step:1, label:"审核循环上限", hint:"审核不过 → 退回修订，到达上限后标记待复核"},
-    {p:"review.optimize.batch_size", k:"range", min:1, max:20, step:1, label:"每批步数", hint:"不节省 token 可调大，减少调用轮次"},
-    {p:"review.enabled", k:"bool", adv:true, label:"评审参与流程", hint:"关闭时评审仍可手动运行，但不参与门控"},
-    {p:"review.hold_needs_review", k:"bool", adv:true, label:"待复核先扣住", hint:"低置信结论的会话暂不进 SFT"},
-    {p:"review.judge_gold", k:"bool", adv:true, label:"存废裁决", hint:"评审时对整条会话做出入库判断"},
-    {p:"review.judge_min_score", k:"range", min:0, max:100, step:1, adv:true, label:"入黄金最低分"},
-    {p:"review.judge_confidence_min", k:"range", min:0, max:1, step:0.05, digits:2, adv:true, label:"置信度下限", hint:"低于此值 → 待人工复核"},
-    {p:"review.compress_thinking_over", k:"num", adv:true, label:"长思考重写阈值（字）"},
+  {id:"judge", name:"判断与审核", hint:"模型的全部判断权都在这里：删哪些步、接缝是否平滑、值不值得训练、偏好对是否成立", pipe:true, fields:[
+    {p:"judge.enabled", k:"bool", label:"启用模型判断层", hint:"关闭则回退到脚本规则（质量会下降，仅用于对比）"},
+    {p:"judge.decide_model", k:"model", inherit:"llm.model", follow:"跟随主模型", label:"步级判断模型", hint:"决定 keep/prune/fold/rewrite/exclude；调用量最大"},
+    {p:"judge.audit_model", k:"model", inherit:"llm.model", follow:"跟随主模型", label:"审核模型", hint:"接缝 / 质量报告 / DPO 复核的默认模型"},
+    {p:"judge.task_models.seams", k:"model", inherit:"judge.audit_model", follow:"跟随审核模型", label:"└ 接缝审核模型", hint:"留空 = 跟随审核模型；接缝窗口小、量大"},
+    {p:"judge.task_models.quality", k:"model", inherit:"judge.audit_model", follow:"跟随审核模型", label:"└ 质量报告模型", hint:"留空 = 跟随审核模型；决定这条会话要不要训"},
+    {p:"judge.task_models.dpo", k:"model", inherit:"judge.audit_model", follow:"跟随审核模型", label:"└ DPO 复核模型", hint:"留空 = 跟随审核模型；最需要跨模型交叉验证"},
+    {p:"judge.step_batch", k:"range", min:1, max:16, step:1, label:"步级判断每批步数", hint:"实测 8 步以上会明显漏判，质量优先别调大"},
+    {p:"judge.seam_batch", k:"range", min:1, max:12, step:1, label:"接缝每批条数", hint:"过大易失败（已内置批失败拆单重试）"},
+    {p:"judge.dpo_batch", k:"range", min:1, max:16, step:1, label:"DPO 每批对数"},
+    {p:"judge.quality_batch", k:"range", min:4, max:20, step:1, label:"质量报告每块步数", hint:"单块过大模型会超时返回空"},
+    {p:"judge.max_steps_per_audit", k:"range", min:10, max:80, step:5, label:"质量报告抽样上限", hint:"超出则均匀抽样"},
+    {p:"judge.item_think_chars", k:"range", min:400, max:2000, step:100, label:"送判 thinking 截断（字）"},
+    {p:"judge.concurrency", k:"range", min:1, max:24, step:1, label:"批级并发", hint:"网关限速时调低，过高会超时/503"},
+    {p:"judge.session_workers", k:"range", min:1, max:8, step:1, label:"会话并行预热", hint:"并行摊掉模型延迟，判断内容不变（命中缓存）"},
+    {p:"judge.labels", k:"tags", label:"参与判断的标签", hint:"默认 positive / pending；反例会话走脚本即可"},
+    {p:"judge.fallback_to_rules", k:"bool", adv:true, label:"失败回退脚本规则"},
+    {p:"judge.seam_min_silent_chars", k:"range", min:0, max:200, step:10, adv:true, label:"静默接缝最小字数", hint:"被清空的播报短于此值不生成接缝"},
+    {p:"judge.decisions.prune", k:"bool", adv:true, label:"允许 prune（剪除）"},
+    {p:"judge.decisions.fold", k:"bool", adv:true, label:"允许 fold（状态折叠）"},
+    {p:"judge.decisions.rewrite", k:"bool", adv:true, label:"允许 rewrite（改写思维链）"},
+    {p:"judge.decisions.exclude", k:"bool", adv:true, label:"允许 exclude（排除出训练）"},
+  ]},
+  {id:"review", name:"手动评审（可选）", hint:"在黄金数据页手动点「让模型评审」时生效，与流程自动化无关", fields:[
+    {p:"review.enabled", k:"bool", label:"启用评审链路"},
+    {p:"review.judge_gold", k:"bool", label:"存废裁决", hint:"让模型对整条会话做出入库判断"},
+    {p:"review.judge_min_score", k:"range", min:0, max:100, step:1, label:"入黄金最低分"},
+    {p:"review.judge_confidence_min", k:"range", min:0, max:1, step:0.05, digits:2, label:"置信度下限", hint:"低于此值 → 待人工复核"},
+    {p:"review.hold_needs_review", k:"bool", label:"待复核先扣住", hint:"低置信结论的会话暂不进 SFT"},
+    {p:"review.compress_thinking_over", k:"range", min:200, max:4000, step:50, adv:true, label:"长思考重写阈值（字）"},
+    {p:"review.max_steps_per_session", k:"range", min:5, max:80, step:5, adv:true, label:"单会话送审步数上限"},
+    {p:"review.judge_max_think_chars", k:"range", min:500, max:6000, step:100, adv:true, label:"裁决 thinking 截断（字）"},
   ]},
   {id:"admission", name:"会话准入", hint:"哪些 pi 会话有资格进入数据集", fields:[
     {p:"admission.workspace_prefixes", k:"tags", label:"工作区前缀白名单", hint:"相对 sessions_dir 的文件夹名前缀"},
@@ -2329,12 +2346,15 @@ function cfgRepaintPipe() {
   box.innerHTML = cfgPipeHtml();
 }
 function cfgPipeHtml() {
-  const opt = cfgResolve("review.optimize.optimizer_model") || "主模型";
-  const rev = cfgResolve("review.optimize.reviewer_model") || "主模型";
-  const loops = CFG.values["review.optimize.max_loops"] ?? 3;
-  return `<div class="node opt">${esc(opt)}</div><span class="arrow">全量改写 ⟶</span>
-    <div class="node rev">${esc(rev)}</div><span class="arrow">逐条审计 ⟶ 不过退回修订（≤${esc(loops)} 轮）⟶</span>
-    <div class="node hum">人工浏览 → 定稿</div>`;
+  const dec = cfgResolve("judge.decide_model") || "主模型";
+  const seam = cfgResolve("judge.task_models.seams") || cfgResolve("judge.audit_model") || "主模型";
+  const qual = cfgResolve("judge.task_models.quality") || cfgResolve("judge.audit_model") || "主模型";
+  const dpo = cfgResolve("judge.task_models.dpo") || cfgResolve("judge.audit_model") || "主模型";
+  return `<div class="node opt">${esc(dec)}</div><span class="arrow">步级判断：删/折/改/排 ⟶</span>
+    <div class="node rev">${esc(seam)}</div><span class="arrow">接缝修复 ⟶</span>
+    <div class="node rev">${esc(qual)}</div><span class="arrow">质量报告+高光 ⟶</span>
+    <div class="node rev">${esc(dpo)}</div><span class="arrow">DPO 复核 ⟶</span>
+    <div class="node hum">人工复核 → 定稿</div>`;
 }
 function cfgControl(f) {
   const v = CFG.values[f.p];
@@ -2343,7 +2363,7 @@ function cfgControl(f) {
   if (f.k === "num") return `<input type="number" data-cfg="${esc(f.p)}" value="${esc(v)}" oninput="cfgInput(this)">`;
   if (f.k === "model") {
     const opts = [];
-    if (f.inherit) opts.push(`<option value="" ${!v ? "selected" : ""}>跟随主模型 · ${esc(cfgResolve(f.inherit) || "—")}</option>`);
+    if (f.inherit) opts.push(`<option value="" ${!v ? "selected" : ""}>${esc(f.follow || "跟随主模型")} · ${esc(cfgResolve(f.inherit) || "—")}</option>`);
     CFG.models.forEach(m => opts.push(`<option value="${esc(m.id)}" ${String(v) === m.id ? "selected" : ""}>${esc(m.id)}</option>`));
     if (v && !CFG.models.some(m => m.id === v)) opts.push(`<option value="${esc(v)}" selected>${esc(v)} · pi 中未找到</option>`);
     const prov = (CFG.models.find(m => m.id === cfgResolve(f.p)) || {}).provider || "";

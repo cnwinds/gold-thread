@@ -235,6 +235,9 @@ def evaluate_session_synthesis(
     eff_state = effective["state"]
     rewrites: Dict[str, str] = effective["rewrites"]
     excluded = set(effective["excluded"])
+    # judge 在 step 级直接判定 exclude 的步（跨目录偷看等）：此前未接线，等于白判
+    excluded |= {m.get("id") for m in msgs
+                 if m.get("role") == "assistant" and m.get("excluded")}
     human_kept = set(effective.get("kept") or [])
 
     sub_ranges = _subsegment_ranges(sid, cfg)

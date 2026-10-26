@@ -412,7 +412,6 @@ def prewarm(sessions: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
             return 0
 
     t0 = time.time()
-    total_steps = sum(1 for _ in sessions) and 0
     # 逐会话汇报进度（否则长任务期间日志一片空白，无法判断是否卡住）
     results: List[int] = [0] * len(sessions)
     done = [0]
@@ -578,6 +577,22 @@ def audit_quality(gold_messages: List[Dict[str, Any]], stats: Dict[str, Any],
 # 4) DPO 复核
 # ---------------------------------------------------------------------------
 
+def _verdict_cache_path(cfg: Dict[str, Any]) -> Path:
+    from .common.config import stage_dirs  # noqa: PLC0415
+
+    return stage_dirs(cfg)["state"] / "dpo_review_cache.json"
+
+
+def _vkey(model: str, tag: str, p: Dict[str, Any]) -> str:
+    from .common.store import sha256_text  # noqa: PLC0415
+
+    return sha256_text(json.dumps({
+        "m": model, "pv": f"{PROMPT_VERSION}.{tag}", "sid": p.get("sample_id"),
+        "chosen": (p.get("chosen") or {}).get("value"),
+        "rejected": (p.get("rejected") or {}).get("value"),
+    }, ensure_ascii=False, sort_keys=True))[:20]
+
+
 def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None,
                log=print) -> Dict[str, Dict[str, Any]]:
     """返回 {sample_id: {verdict, reason}}（非 good 项）。"""
@@ -586,6 +601,50 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
     if not j["enabled"] or not pairs:
         return {}
     out_map: Dict[str, Dict[str, Any]] = {}
+    model_id = _model(cfg, j, "dpo") or ""
+    cpath = _verdict_cache_path(cfg)
+    try:
+        from .common.store import read_json as _rj, write_json_atomic as _wj  # noqa: PLC0415
+        cache: Dict[str, Any] = _rj(cpath, default={}) or {}
+    except Exception:  # noqa: BLE001
+        cache, _rj, _wj = {}, None, None
+    pending: List[Dict[str, Any]] = []
+    for p in pairs:
+        hit = cache.get(_vkey(model_id, "dpo", p))
+        if isinstance(hit, dict):
+            if hit.get("verdict") in ("swap", "drop"):
+                out_map[str(p.get("sample_id"))] = hit
+        else:
+            pending.append(p)
+    if len(pending) != len(pairs):
+        log(f"[judge] dpo 缓存命中 {len(pairs) - len(pending)}/{len(pairs)} 对")
+    pairs = pending
+    if not pairs:
+        return out_map
+
+    _clock = threading.Lock()
+
+    def _persist(batch: List[Dict[str, Any]], out: Dict[str, Any]) -> None:
+        """把一批的判定立刻写入缓存：后续重跑可断点续跑。"""
+        if _wj is None or not out:
+            return
+        if not isinstance(out.get("pairs"), list):
+            return  # 结构不对：不写缓存，交由重试/下次运行处理
+        non_good = {str(it.get("sample_id")): it for it in out["pairs"]
+                    if isinstance(it, dict) and it.get("verdict") in ("swap", "drop")}
+        with _clock:
+            for p in batch:
+                sid = str(p.get("sample_id"))
+                if sid in non_good:
+                    it = non_good[sid]
+                    cache[_vkey(model_id, "dpo", p)] = {"verdict": it["verdict"],
+                                                        "reason": _clip(it.get("reason"), 60)}
+                else:
+                    cache[_vkey(model_id, "dpo", p)] = {"verdict": "good", "reason": ""}
+            try:
+                _wj(cpath, cache)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _one(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload = {"pairs": [
@@ -599,7 +658,9 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
                 "chosen": _clip((p.get("chosen") or {}).get("value"), 900),
                 "rejected": _clip((p.get("rejected") or {}).get("value"), 900),
             } for p in batch]}
-        return _call(DPO_SYSTEM, DPO_SCHEMA, payload, cfg, j, "dpo", log)
+        out = _call(DPO_SYSTEM, DPO_SCHEMA, payload, cfg, j, "dpo", log)
+        _persist(batch, out)
+        return out
 
     batches = _batched(pairs, j["dpo_batch"])
     outs = _pmap(_one, batches, j["concurrency"])
@@ -640,11 +701,13 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
 # ---------------------------------------------------------------------------
 
 def extract_seams(gold_messages: List[Dict[str, Any]], pruned: List[Dict[str, Any]],
-                  turn_marks: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+                  turn_marks: Optional[List[Dict[str, Any]]] = None,
+                  cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """从已执行的删/折操作机械推导接缝：被移除内容的摘要 + 前后相邻步。
 
     不生成任何判断，只是把"哪里被切断了"结构化出来，交给模型审。
     """
+    min_silent = int(_jcfg(cfg).get("seam_min_silent_chars", 80))
     asst = [m for m in gold_messages if m.get("role") == "assistant"]
     by_id = {m.get("id"): i for i, m in enumerate(asst)}
     seams: List[Dict[str, Any]] = []
@@ -723,7 +786,7 @@ def extract_seams(gold_messages: List[Dict[str, Any]], pruned: List[Dict[str, An
     for m in asst:
         flags = m.get("flags") or []
         _cleared = (m.get("raw_text") or "")
-        if "silent_executed" in flags and len(_cleared.strip()) >= int(80):
+        if "silent_executed" in flags and len(_cleared.strip()) >= min_silent:
             seams.append({
                 "seam_id": f"silent::{m.get('id')}",
                 "type": "silent_cleared",

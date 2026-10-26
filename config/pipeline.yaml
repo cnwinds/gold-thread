@@ -140,9 +140,9 @@ judge:
   # 因此"多步一起处理"要走并发而不是加大批，保证判断质量不下降。
   step_batch: 4
   seam_batch: 3
-  dpo_batch: 4
+  dpo_batch: 2
   # 批级并发：单会话内同时在飞的模型请求数
-  concurrency: 12
+  concurrency: 2
   # 会话级并发：同时处理多少条会话（预热阶段并行摊掉模型延迟）
   session_workers: 4
   # 质量报告抽样步数上限，以及每块送审步数
@@ -204,17 +204,6 @@ review:
   judge_confidence_min: 0.7
   # 待人工复核、结论过期的会话先扣住，不进 SFT，直到人工通过
   hold_needs_review: true
-
-  # ---- 全面优化 + 独立审核循环 ----
-  optimize:
-    # 优化器模型（空 = llm.model，即 deepseek-v4.1-flash）
-    optimizer_model: "glm-5.3-flash"
-    # 独立审核模型：glm-5.3-flash（与优化器不同模型，实现真正独立审核）
-    reviewer_model: "deepseek-v4.1-flash-1017"
-    # 审核不过 -> 退回优化器修订，最大循环轮数
-    max_loops: 3
-    # 每批送优化/审计的步数（不节省 token 可适当调大）
-    batch_size: 6
 
 # ---------------------------------------------------------------------------
 # 第 5 层：训练数据合成（stage3）
