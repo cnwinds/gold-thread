@@ -165,9 +165,10 @@ gold-thread/
 - `verify_longctx.py` / `verify_longctx_api.py` —— 长上下文档级验收
 - `probe_24g.py` —— 模拟小显存加载（bf16 / 8bit / 4bit 可行性探测）
 - `prep_dpo_window.py` —— DPO 窗口裁剪（从头部丢旧步，保留 system + 根任务 + 最近步）
+- `serve_api.sh` —— 合并模型后一键起 OpenAI 兼容 API（LLaMA-Factory hf 后端）
 
 > 训练实跑记录与踩坑经验见 `data/03_train/RESULT.md`（含 Liger 必开原因、DPO ref_model 修正、
-> eval OOM 绕过、脚本 bug 修复等硬经验）完整交接说明见 `data/03_train/handoff.md`。
+> eval OOM 绕过、流式+tools 补丁、SDK 兼容修复、脚本 bug 修复等硬经验）完整交接说明见 `data/03_train/handoff.md`。
 
 切分按 `project_group` 整包留出（默认 `eval_ratio` 取项目数比例），
 避免同一游戏的相邻步泄漏到验证集。
