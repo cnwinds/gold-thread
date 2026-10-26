@@ -1,0 +1,50 @@
+### 冒烟用：Qwen3-8B（标准注意力，48G 上很宽松）
+### 目的：验证 模板 / mask_history / tools 列 / 窗口结构 / 合并 / vLLM 全链路
+### 确认无误后再换回 27B 的 train_sft.yaml
+### model
+model_name_or_path: /data/models/Qwen3-8B
+trust_remote_code: true
+flash_attn: fa2
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 16
+lora_target: all
+enable_liger_kernel: true                            # 融合 CE，避免 fp32 logits OOM
+
+### dataset
+dataset_dir: /data/goldthread/03_train
+dataset: pi_sft_step_windows_train_v2
+eval_dataset: pi_sft_step_windows_eval_v2
+template: qwen3                                      # 小模型用 qwen3，不是 qwen3_8
+cutoff_len: 32768                                    # 48G 上可以开更大
+packing: false
+mask_history: true                                   # 只训练最后一轮
+overwrite_cache: true
+preprocessing_num_workers: 8
+max_samples: 200                                     # 冒烟：只跑 200 条
+
+### output
+output_dir: /data/saves/smoke-qwen3-8b-sft
+logging_steps: 5
+save_steps: 100
+save_total_limit: 1
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 4
+learning_rate: 2.0e-4
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+
+### eval
+per_device_eval_batch_size: 2
+eval_strategy: steps
+eval_steps: 50

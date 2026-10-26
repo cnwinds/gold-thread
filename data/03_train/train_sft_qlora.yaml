@@ -1,0 +1,49 @@
+### model
+model_name_or_path: /data/models/Qwen3.8-27B
+trust_remote_code: true
+flash_attn: fa2
+enable_liger_kernel: false
+quantization_bit: 4                                  # NF4
+quantization_method: bitsandbytes
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 32
+lora_target: mlp
+quantization_type: nf4
+double_quantization: true
+
+### dataset
+dataset_dir: /data/goldthread/03_train
+dataset: pi_sft_step_windows_train_v2
+eval_dataset: pi_sft_step_windows_eval_v2
+template: qwen3_8
+cutoff_len: 16384
+packing: false
+mask_history: true                                    # 只训练最后一轮
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /data/saves/qwen38-27b-goldthread-sft-qlora
+logging_steps: 5
+save_steps: 100
+save_total_limit: 2
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 1.0e-4
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+
+### eval
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 100

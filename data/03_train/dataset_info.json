@@ -1,0 +1,244 @@
+{
+    "pi_sft_step_windows_train": {
+        "file_name": "sft_step_windows_sharegpt.train.jsonl",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_sft_step_windows_eval": {
+        "file_name": "sft_step_windows_sharegpt.eval.jsonl",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_sft_gold_trajectories_train": {
+        "file_name": "sft_gold_trajectories_sharegpt.train.jsonl",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_sft_gold_trajectories_eval": {
+        "file_name": "sft_gold_trajectories_sharegpt.eval.jsonl",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_dpo_preference_pairs_train": {
+        "file_name": "dpo_preference_pairs.train.jsonl",
+        "ranking": true,
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "chosen": "chosen",
+            "rejected": "rejected",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_dpo_preference_pairs_eval": {
+        "file_name": "dpo_preference_pairs.eval.jsonl",
+        "ranking": true,
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "chosen": "chosen",
+            "rejected": "rejected",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_sft_step_windows_train_v2": {
+        "file_name": "sft_step_windows_sharegpt.train.v2.jsonl",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_sft_step_windows_eval_v2": {
+        "file_name": "sft_step_windows_sharegpt.eval.v2.jsonl",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_sft_gold_trajectories_train_v2": {
+        "file_name": "sft_gold_trajectories_sharegpt.train.v2.jsonl",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_sft_gold_trajectories_eval_v2": {
+        "file_name": "sft_gold_trajectories_sharegpt.eval.v2.jsonl",
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_dpo_preference_pairs_train_v2": {
+        "file_name": "dpo_preference_pairs.train.v2.jsonl",
+        "ranking": true,
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "chosen": "chosen",
+            "rejected": "rejected",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_dpo_preference_pairs_eval_v2": {
+        "file_name": "dpo_preference_pairs.eval.v2.jsonl",
+        "ranking": true,
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "chosen": "chosen",
+            "rejected": "rejected",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_dpo_preference_pairs_train_v2w": {
+        "file_name": "dpo_preference_pairs.train.v2w.jsonl",
+        "ranking": true,
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "chosen": "chosen",
+            "rejected": "rejected",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    },
+    "pi_dpo_preference_pairs_eval_v2w": {
+        "file_name": "dpo_preference_pairs.eval.v2w.jsonl",
+        "ranking": true,
+        "formatting": "sharegpt",
+        "columns": {
+            "messages": "conversations",
+            "chosen": "chosen",
+            "rejected": "rejected",
+            "tools": "tools"
+        },
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+            "observation_tag": "observation"
+        }
+    }
+}

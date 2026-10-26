@@ -1,0 +1,48 @@
+### 当前阶段主配置：Qwen3-8B 全量训练（48G / 80G 都能跑）
+### 用途：先把「数据 → 训练 → 合并 → 推理」整条链路跑出可用模型
+### 换 27B 时只需改 model_name_or_path 与 template: qwen3_8
+### model
+model_name_or_path: /data/models/Qwen3-8B
+trust_remote_code: true
+flash_attn: fa2
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 32
+lora_target: all
+enable_liger_kernel: true          # 融合 CE：省掉 fp32 logits（32K 长样本必开）
+
+### dataset
+dataset_dir: /data/goldthread/03_train
+dataset: pi_sft_step_windows_train_v2
+eval_dataset: pi_sft_step_windows_eval_v2
+template: qwen3
+cutoff_len: 32768
+packing: false
+mask_history: true
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /data/saves/qwen3-8b-goldthread-sft
+logging_steps: 5
+save_steps: 100
+save_total_limit: 2
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 4
+learning_rate: 2.0e-4
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+
+### eval（训练中关掉：eval 不走 liger 融合 CE，长样本会 OOM；训完单独跑）
+per_device_eval_batch_size: 1
+eval_strategy: "no"

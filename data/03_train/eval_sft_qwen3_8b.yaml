@@ -1,0 +1,35 @@
+### 训后单独跑 eval（训练中关掉 eval 的原因见 train_sft_qwen3_8b.yaml）
+### 用法：llamafactory-cli train eval_sft_qwen3_8b.yaml
+### 说明：bs=1 + liger 融合 CE；若仍 OOM 把 cutoff_len 降到 16384 或 8192
+### model
+model_name_or_path: /data/models/Qwen3-8B
+adapter_name_or_path: /data/saves/qwen3-8b-goldthread-sft
+trust_remote_code: true
+flash_attn: fa2
+
+### method
+stage: sft
+do_train: false
+do_eval: true
+finetuning_type: lora
+lora_rank: 32
+lora_target: all
+enable_liger_kernel: true
+
+### dataset
+dataset_dir: /data/goldthread/03_train
+eval_dataset: pi_sft_step_windows_eval_v2
+template: qwen3
+cutoff_len: 16384
+packing: false
+mask_history: true
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /data/saves/qwen3-8b-goldthread-eval
+overwrite_output_dir: true
+
+### eval
+per_device_eval_batch_size: 1
+bf16: true

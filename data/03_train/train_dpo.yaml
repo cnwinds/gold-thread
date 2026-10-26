@@ -1,0 +1,48 @@
+### model
+model_name_or_path: /data/models/Qwen3.8-27B
+adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft   # SFT 适配器；或改为合并后的目录
+trust_remote_code: true
+flash_attn: fa2
+enable_liger_kernel: true
+
+### method
+stage: dpo
+do_train: true
+finetuning_type: lora
+lora_rank: 32
+lora_target: mlp
+pref_beta: 0.1
+pref_loss: sigmoid
+# deepspeed:                                            # 单卡不要设
+
+### dataset
+dataset_dir: /data/goldthread/03_train
+dataset: pi_dpo_preference_pairs_train_v2
+eval_dataset: pi_dpo_preference_pairs_eval_v2
+template: qwen3_8
+cutoff_len: 8192                                       # DPO 双前向，激活翻倍
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /data/saves/qwen38-27b-goldthread-dpo
+logging_steps: 5
+save_steps: 100
+save_total_limit: 2
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 5.0e-5
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+
+### eval
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 50
