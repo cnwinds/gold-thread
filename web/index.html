@@ -474,53 +474,106 @@
   .cfg-savebar .cnt i{width:6px;height:6px;border-radius:50%;background:var(--gold);box-shadow:0 0 0 3px rgba(217,180,103,.15)}
   .cfg-savebar .grow{flex:1}
   .cfg-empty{padding:40px;text-align:center;color:var(--text-3);font-size:12.5px}
-  /* ---- 运行清单 runbook ---- */
-  .rb-head{margin-bottom:14px}
-  .rb-head-top{display:flex;align-items:flex-start;gap:16px;padding:16px 18px 12px}
-  .rb-title-lg{font-size:15px;font-weight:600}
-  .rb-progress{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-3)}
-  .rb-progress b{font:22px var(--f-num);color:var(--gold);font-weight:400}
+  /* ---- 运行工作台（Master-Detail 纵向轨道） ---- */
   .rb-bar{display:inline-block;width:90px;height:4px;border-radius:2px;background:var(--ink-3);overflow:hidden}
-  .rb-bar.wide{width:150px;height:5px}
+  .rb-bar.wide{width:140px;height:5px}
   .rb-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--mint),var(--pos));transition:width .3s}
-  .rb-head-acts{display:flex;align-items:center;gap:8px;padding:0 18px 13px;flex-wrap:wrap}
-  .rb-running{display:flex;align-items:center;gap:9px;margin:0 18px 12px;padding:9px 12px;border-radius:8px;
-    background:rgba(95,185,196,.07);border:1px solid rgba(95,185,196,.3);font-size:12.5px;color:#bfe6ea}
-  .rb-live{width:7px;height:7px;border-radius:50%;background:var(--mint);animation:rbpulse 1.1s infinite}
+  .rb-live{width:7px;height:7px;border-radius:50%;background:var(--mint);animation:rbpulse 1.1s infinite;flex:none}
   @keyframes rbpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
-  .rb-next{display:flex;align-items:center;gap:9px;margin:0 18px 15px;padding:9px 12px;border-radius:8px;
-    background:rgba(217,180,103,.06);border:1px solid rgba(217,180,103,.26);font-size:12.5px;color:#e6d7b0;flex-wrap:wrap}
-  .rb-next.done{background:rgba(143,196,127,.07);border-color:rgba(143,196,127,.3);color:#cbe4c2}
-  .rb-body{display:flex;flex-direction:column;gap:14px;margin-bottom:14px}
-  .rb-phase{background:var(--ink-1);border:1px solid var(--line-soft);border-radius:11px;overflow:hidden}
-  .rb-phase-h{display:flex;align-items:baseline;gap:10px;padding:13px 18px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
-  .rb-phase-h h3{margin:0;font-size:13.5px;font-weight:600}
-  .rb-phase-desc{font-size:11.5px;color:var(--text-3)}
-  .rb-phase-count{font-family:var(--f-num);font-size:11.5px;color:var(--text-3)}
-  .rb-steps{padding:2px 0}
-  .rb-step{display:grid;grid-template-columns:26px minmax(0,1fr);gap:2px;padding:10px 18px 10px 14px;
-    border-bottom:1px solid rgba(38,43,53,.5)}
-  .rb-step:last-child{border-bottom:none}
-  .rb-mark{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-    font-size:10.5px;margin-top:2px;background:var(--ink-3);color:var(--text-3)}
-  .rb-done .rb-mark{background:rgba(143,196,127,.18);color:var(--pos)}
-  .rb-run .rb-mark{background:rgba(95,185,196,.2);color:var(--mint);animation:rbpulse 1.1s infinite}
-  .rb-warn .rb-mark{background:rgba(217,180,103,.18);color:var(--gold)}
-  .rb-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .rb-label{font-size:12.5px;color:var(--text)}
-  .rb-todo .rb-label{color:var(--text-2)}
-  .rb-owner{font-size:10.5px;padding:0 6px;border-radius:4px;background:var(--ink-3);color:var(--text-3)}
+  .rb-owner{font-size:10.5px;padding:1px 6px;border-radius:4px;background:var(--ink-3);color:var(--text-3)}
   .rb-owner.o-m{background:rgba(217,180,103,.14);color:#e0c88f}
   .rb-owner.o-h{background:rgba(169,178,220,.16);color:var(--pend)}
   .rb-owner.o-p{background:rgba(95,185,196,.12);color:#9fd6dc}
-  .rb-state{font-size:10.5px;color:var(--text-3)}
-  .rb-done .rb-state{color:var(--pos)}
-  .rb-warn .rb-state{color:var(--gold)}
-  .rb-run .rb-state{color:var(--mint)}
-  .rb-value{font-family:var(--f-mono);font-size:11.5px;color:var(--text-2);text-align:right}
-  .rb-detail{font-size:11px;color:var(--text-3);margin-top:2px;line-height:1.55}
-  .rb-hint{font-size:11px;color:#6f7684;margin-top:2px;font-family:var(--f-mono)}
-  .rb-hint.ok{color:var(--pos)}
+
+  .rw-head{display:flex;align-items:center;gap:14px;padding:14px 20px;margin-bottom:16px;
+    background:var(--ink-1);border:1px solid var(--line-soft);border-radius:11px;flex-wrap:wrap}
+  .rw-head-stat{display:flex;align-items:baseline;gap:8px}
+  .rw-head-stat b{font:24px var(--f-num);color:var(--gold);font-weight:400}
+  .rw-head-stat span{font-size:12.5px;color:var(--text-3)}
+  .rw-head-next{font-size:12.5px;color:var(--text-2);padding-left:14px;border-left:1px solid var(--line-soft)}
+  .rw-head-next em{font-style:normal;color:var(--text);font-weight:600}
+  .rw-head-acts{display:flex;gap:8px;align-items:center;margin-left:auto}
+
+  .rw-shell{display:grid;grid-template-columns:288px minmax(0,1fr);gap:18px;align-items:start;margin-bottom:16px}
+  .rw-rail{position:relative;display:flex;flex-direction:column;gap:8px}
+  .rw-rail::before{content:"";position:absolute;left:22px;top:24px;bottom:24px;width:1px;background:var(--line)}
+  .rw-node{position:relative;display:flex;align-items:flex-start;gap:12px;width:100%;padding:13px 14px 13px 12px;
+    background:var(--ink-1);border:1px solid var(--line-soft);border-radius:10px;color:inherit;
+    cursor:pointer;text-align:left;font:inherit;transition:border-color .15s,background .15s}
+  .rw-node:hover{border-color:#3a4252;background:#20252e}
+  .rw-node.sel{border-color:var(--gold);background:rgba(217,180,103,.05)}
+  .rw-node .rn-dot{position:relative;z-index:1;width:22px;height:22px;border-radius:50%;flex:none;
+    display:grid;place-items:center;font:11px var(--f-num);background:var(--ink-0);border:1.5px solid var(--line);color:var(--text-3)}
+  .rw-node.done .rn-dot{border-color:var(--pos);color:var(--pos);background:rgba(143,196,127,.12)}
+  .rw-node.run .rn-dot{border-color:var(--mint);color:var(--mint);background:rgba(95,185,196,.15)}
+  .rw-node.warn .rn-dot{border-color:var(--gold);color:var(--gold);background:rgba(217,180,103,.14)}
+  .rw-node.sel .rn-dot{box-shadow:0 0 0 3px rgba(217,180,103,.18)}
+  .rw-node .rn-body{flex:1;min-width:0}
+  .rw-node .rn-top{display:flex;align-items:center;gap:8px}
+  .rw-node .rn-name{font-size:13.5px;font-weight:600;color:var(--text)}
+  .rw-node .rn-cnt{margin-left:auto;font:12px var(--f-num);color:var(--text-3)}
+  .rw-node.done .rn-cnt{color:var(--pos)}
+  .rw-node .rn-sub{font-size:11.5px;color:var(--text-3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rw-node .rn-bar{height:2px;border-radius:1px;background:var(--ink-3);margin-top:8px;overflow:hidden}
+  .rw-node .rn-bar i{display:block;height:100%;background:var(--pos);transition:width .3s}
+  .rw-node.warn .rn-bar i{background:var(--gold)}
+  .rw-node.run .rn-bar i{background:var(--mint)}
+
+  .rw-stage{background:var(--ink-1);border:1px solid var(--line-soft);border-radius:12px;overflow:hidden}
+  .rw-stage-h{display:flex;align-items:flex-start;gap:14px;padding:18px 22px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+  .rw-stage-h h2{margin:0;font-size:16px;font-weight:600}
+  .rw-stage-h p{margin:4px 0 0;font-size:12.5px;color:var(--text-2)}
+  .rw-stage-acts{display:flex;gap:8px;align-items:center;margin-left:auto}
+
+  .rw-step{border-bottom:1px solid var(--line-soft)}
+  .rw-step:last-child{border-bottom:none}
+  .rw-step-row{width:100%;display:grid;grid-template-columns:22px minmax(0,1fr) auto auto 16px;gap:10px;
+    align-items:center;padding:12px 22px;background:none;border:none;color:inherit;font:inherit;
+    text-align:left;cursor:pointer;transition:background .12s}
+  .rw-step-row:hover{background:rgba(255,255,255,.02)}
+  .rw-step.focus{background:rgba(217,180,103,.04)}
+  .rw-step.run{background:rgba(95,185,196,.05)}
+  .rw-step .rs-mark{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;
+    font-size:10px;background:var(--ink-3);color:var(--text-3)}
+  .rw-step.done .rs-mark{background:rgba(143,196,127,.18);color:var(--pos)}
+  .rw-step.run .rs-mark{background:rgba(95,185,196,.22);color:var(--mint)}
+  .rw-step.warn .rs-mark{background:rgba(217,180,103,.2);color:var(--gold)}
+  .rw-step .rs-title{display:flex;align-items:center;gap:8px;min-width:0}
+  .rw-step .rs-label{font-size:13px;color:var(--text);font-weight:500}
+  .rw-step.todo .rs-label{color:var(--text-2);font-weight:400}
+  .rw-step .rs-val{font:12px var(--f-mono);color:var(--text-2);text-align:right}
+  .rw-step.done .rs-val{color:var(--text-2)}
+  .rw-step.warn .rs-val{color:var(--gold)}
+  .rw-step.run .rs-val{color:var(--mint)}
+  .rw-step .rs-chev{color:var(--text-3);font-size:10px;transition:transform .15s;text-align:center}
+  .rw-step.open .rs-chev{transform:rotate(90deg);color:var(--gold)}
+  .rw-step-detail{display:none;padding:0 22px 14px 54px;font-size:12px;color:var(--text-2);line-height:1.65}
+  .rw-step.open .rw-step-detail{display:block}
+  .rw-step-detail .rs-meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:6px;font:11.5px var(--f-mono);color:var(--text-3)}
+  .rw-step-detail .rs-acts{margin-top:10px;display:flex;gap:8px}
+
+  .rw-pack{padding:22px;display:flex;flex-direction:column;gap:16px}
+  .rw-pack-card{padding:18px 20px;border-radius:10px;background:var(--ink-0);border:1px solid var(--line)}
+  .rw-pack-card.ready{border-color:rgba(143,196,127,.35);background:linear-gradient(135deg,rgba(143,196,127,.07),rgba(95,185,196,.04))}
+  .rw-pack-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .rw-pack-item{padding:12px 14px;border-radius:8px;background:var(--ink-0);border:1px solid var(--line-soft)}
+  .rw-pack-item span{display:block;font-size:11px;color:var(--text-3)}
+  .rw-pack-item b{font:15px var(--f-mono);color:var(--text);font-weight:500;margin-top:3px;display:block}
+
+  .rb-fold{margin-bottom:12px;border:1px solid var(--line-soft);border-radius:10px;overflow:hidden;background:var(--ink-1)}
+  .rb-fold>summary{cursor:pointer;list-style:none;padding:11px 18px;font-size:12.5px;color:var(--text-2);display:flex;align-items:center;gap:10px;user-select:none}
+  .rb-fold>summary::-webkit-details-marker{display:none}
+  .rb-fold>summary::before{content:"";width:0;height:0;border-left:5px solid var(--text-3);border-top:4px solid transparent;
+    border-bottom:4px solid transparent;transition:transform .15s;flex:none}
+  .rb-fold[open]>summary::before{transform:rotate(90deg)}
+  .rb-fold>summary .hint{font-size:11.5px;color:var(--text-3)}
+  .rb-fold .rb-fold-b{border-top:1px solid var(--line-soft)}
+
+  @media (max-width:960px){
+    .rw-shell{grid-template-columns:1fr}
+    .rw-rail::before{display:none}
+    .rw-pack-grid{grid-template-columns:1fr}
+  }
 
   /* ---------- 全流程工作台 ---------- */
   .workflow-head{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;margin-bottom:18px;
@@ -732,7 +785,7 @@
       <div class="nav-cap">操作</div>
       <button data-tab="runs">
         <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5 3.5v9l7-4.5z" stroke-linejoin="round"/></svg>
-        运行</button>
+        梳理与交付</button>
       <button data-tab="config">
         <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.4" fill="var(--ink-1)"/><circle cx="10.5" cy="8" r="1.4" fill="var(--ink-1)"/><circle cx="5" cy="12" r="1.4" fill="var(--ink-1)"/></svg>
         配置</button>
@@ -793,14 +846,14 @@ const PAGES = {
   raw:      ["Stage 1 · 采集与清洗", "审计会话准入、标签与逐回合分类；可直接修正根任务、噪音、续接和纠偏判定。"],
   gold:     ["Stage 2 · 黄金提纯与复核", "对照原始思考、脚本清洗和模型改写；逐步采纳、手改、排除后即时预览训练集去向。"],
   train:    ["Stage 3 · 训练样本", "按 SFT 窗口、完整轨迹、DPO 与病态诊断分别检视，追踪每条样本的项目、切分和生成原因。"],
-  runs:     ["运行", "按阶段增量运行或全量重建。模型调用已缓存，重跑不会重复计费。"],
+  runs:     ["数据梳理 · 运行与交付", "自顶向下：先看四阶段全局，再聚焦当前步骤；按需展开详情，完成后下载交付 zip。"],
   config:   ["配置", "直接编辑 pipeline.yaml，保存后重跑管线生效。"],
 };
 
 let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:"", eff:""}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:"", project:"", stage:"", split:""}, job: null, drawerData: null, poured: false };
 const REV = {active:false, sid:null, items:{}, note:"", originals:{}, scripts:{}, modelRw:{}, bad:new Set(), rewritten:new Set(), pairs:{}, timer:null, dirty:false, hasReview:false, roundsStale:false, finalized:false};
 const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模型通过", auto_reject:"模型剔除", held:"待人工复核", stale:"过期待确认", unreviewed:"未评审", finalized:"定稿"};
-const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
+const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold"||s==="finalized", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
 
 async function api(path, opts={}) {
   const res = await fetch(path, {headers: {"Content-Type":"application/json"}, ...opts});
@@ -1500,6 +1553,10 @@ async function loadGold() {
   for (const s of d.sessions) {
     s.effective = s.effective || "unreviewed";
     for (const [k, fn] of Object.entries(EFF_GROUP)) if (fn(s.effective)) counts[k]++;
+  }
+  // 如果当前选中的状态筛选在该标签下为 0 条，但总会话不为空，自动回退到有待办的分组或全部
+  if (f.eff && counts[f.eff] === 0 && d.sessions.length > 0) {
+    f.eff = counts.queue > 0 ? "queue" : counts.unreviewed > 0 ? "unreviewed" : "";
   }
   const rows = d.sessions.filter(s => !f.eff || (EFF_GROUP[f.eff] && EFF_GROUP[f.eff](s.effective)));
   STATE.gold.ids = rows.map(s => s.session_id);
@@ -2603,108 +2660,292 @@ async function loadConfig() {
   };
 }
 
-/* ------------------------------ 运行 ------------------------------ */
-const RB_OWNER_ZH = { "程序": "程序", "模型": "模型", "人工": "人工" };
+/* ------------------------------ 运行（Master-Detail 轨道） ------------------------------ */
 const RB_STATUS = {
-  done:    ["已完成", "rb-done"],
-  running: ["正在做", "rb-run"],
-  ready:   ["待执行", "rb-ready"],
-  todo:    ["未开始", "rb-todo"],
-  warn:    ["需处理", "rb-warn"],
+  done:    ["已完成", "done"],
+  running: ["正在做", "run"],
+  ready:   ["待执行", "ready"],
+  todo:    ["未开始", "todo"],
+  warn:    ["需处理", "warn"],
 };
+const RW_UI = { selectedPhase: null, openStep: null };
 
-function rbStepRow(s) {
-  const [txt, cls] = RB_STATUS[s.status] || RB_STATUS.todo;
-  const running = s.status === "running";
-  return `<div class="rb-step ${cls}">
-    <div class="rb-mark">${s.status === "done" ? "✓" : running ? "▶" : s.status === "warn" ? "!" : "·"}</div>
-    <div class="rb-main">
-      <div class="rb-title">
-        <span class="rb-label">${esc(s.label)}</span>
-        <span class="rb-owner o-${s.owner === "模型" ? "m" : s.owner === "人工" ? "h" : "p"}">${esc(s.owner)}</span>
-        <span class="rb-state">${txt}</span>
-        <span class="grow"></span>
-        <span class="rb-value">${esc(s.value || "")}</span>
+function rwPhaseState(p) {
+  if (p.steps.some(s => s.status === "running")) return "run";
+  if (p.steps.some(s => s.status === "warn")) return "warn";
+  if (p.done >= p.total && p.total > 0) return "done";
+  return "todo";
+}
+
+function rwDefaultPhase(rb) {
+  if (rb.job && rb.job.progress?.id) {
+    const ph = (rb.phases || []).find(p => p.steps.some(s => s.id === rb.job.progress.id));
+    if (ph) return ph.id;
+  }
+  if (rb.next?.phase) return rb.next.phase;
+  if (rb.deliverable?.zip_path) return "delivery";
+  return (rb.phases?.[0] && rb.phases[0].id) || "stage1";
+}
+
+function selectRwPhase(id) {
+  RW_UI.selectedPhase = id;
+  RW_UI.openStep = null;
+  if (STATE.runbook) renderRunsView(STATE.runbook, STATE.runHist || { runs: [] });
+}
+
+function toggleRwStep(id) {
+  RW_UI.openStep = RW_UI.openStep === id ? null : id;
+  if (STATE.runbook) renderRunsView(STATE.runbook, STATE.runHist || { runs: [] });
+}
+
+function jumpToGold(eff="queue") {
+  STATE.gold.label = "";
+  STATE.gold.project = "";
+  STATE.gold.q = "";
+  STATE.gold.eff = eff;
+  setTab("gold");
+}
+
+function jumpToRaw() {
+  STATE.raw.label = "";
+  STATE.raw.project = "";
+  STATE.raw.q = "";
+  setTab("raw");
+}
+
+function jumpToTrain(dsName="") {
+  if (dsName) STATE.train.name = dsName;
+  STATE.train.offset = 0;
+  setTab("train");
+}
+
+function rwStepActions(s) {
+  const acts = [];
+  if (s.phase === "stage1") {
+    if (s.status !== "done") acts.push(`<button class="primary" onclick="event.stopPropagation();runStage('stage1',false)">运行 Stage 1</button>`);
+    acts.push(`<button class="ghost" onclick="event.stopPropagation();jumpToRaw()">查看原始会话</button>`);
+  } else if (s.phase === "stage2") {
+    if (s.status === "warn" || s.status === "ready") {
+      acts.push(`<button class="primary" onclick="event.stopPropagation();runStage('stage2',false)">运行 Stage 2 补齐</button>`);
+    }
+    acts.push(`<button onclick="event.stopPropagation();jumpToGold('')">去黄金数据页查看</button>`);
+  } else if (s.phase === "human") {
+    acts.push(`<button class="primary" onclick="event.stopPropagation();jumpToGold('queue')">前往人工复核</button>`);
+  } else if (s.phase === "stage3") {
+    if (s.id === "s3.package") {
+      acts.push(`<button class="primary" onclick="event.stopPropagation();exportPackage()">生成交付 zip</button>`);
+    } else if (s.status === "warn" || s.status === "ready") {
+      acts.push(`<button class="primary" onclick="event.stopPropagation();runStage('stage3',false)">运行 Stage 3</button>`);
+    }
+    if (s.id === "s3.dpo_review") {
+      acts.push(`<button onclick="event.stopPropagation();jumpToTrain('dpo_preference_pairs.jsonl')">查看 DPO 样本</button>`);
+    } else if (s.id === "s3.handoff") {
+      acts.push(`<button onclick="event.stopPropagation();openHandoff()">查看 handoff.md</button>`);
+    } else {
+      acts.push(`<button class="ghost" onclick="event.stopPropagation();jumpToTrain()">查看训练数据</button>`);
+    }
+  }
+  return acts.join("");
+}
+
+function rwInlineJump(s) {
+  if (s.status !== "warn" && s.status !== "ready") return "";
+  if (s.phase === "human") {
+    return `<button class="primary" style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();jumpToGold('queue')">去复核 →</button>`;
+  }
+  if (s.phase === "stage2") {
+    return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();runStage('stage2',false)">续跑补齐 →</button>
+      <button class="ghost" style="padding:3px 8px;font-size:11.5px" onclick="event.stopPropagation();jumpToGold('')">查看 →</button>`;
+  }
+  if (s.id === "s3.dpo_review") {
+    return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();runStage('stage3',false)">续跑 →</button>`;
+  }
+  if (s.id === "s3.package") {
+    return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();exportPackage()">打包 →</button>`;
+  }
+  return "";
+}
+
+function rwStageAction(phaseId, rb) {
+  if (phaseId === "stage1") return `<button onclick="jumpToRaw()">查看原始数据</button><button onclick="runStage('stage1',false)">运行 Stage 1</button>`;
+  if (phaseId === "stage2") return `<button onclick="jumpToGold('')">查看黄金数据</button><button onclick="runStage('stage2',false)">运行 Stage 2</button>`;
+  if (phaseId === "human") return `<button class="primary" onclick="jumpToGold('queue')">去黄金数据页复核</button>`;
+  if (phaseId === "stage3") return `<button onclick="jumpToTrain()">查看训练集</button><button onclick="runStage('stage3',false)">运行 Stage 3</button>`;
+  return "";
+}
+
+function rwRenderStageDetail(p, rb) {
+  const focusId = rb.job?.progress?.id || rb.next?.id;
+  const openId = RW_UI.openStep !== null ? RW_UI.openStep : focusId;
+  return `<div class="rw-stage">
+    <div class="rw-stage-h">
+      <div>
+        <h2>${esc(p.name)}</h2>
+        <p>${esc(p.desc || "")} · 已完成 ${p.done}/${p.total} 步</p>
       </div>
-      <div class="rb-detail">${esc(s.detail || "")}</div>
-      ${s.hint ? `<div class="rb-hint">${esc(s.hint)}</div>` : ""}
-      ${s.done_this_run ? `<div class="rb-hint ok">本次运行已完成</div>` : ""}
+      <div class="rw-stage-acts">${rwStageAction(p.id, rb)}</div>
+    </div>
+    <div>
+      ${p.steps.map(s => {
+        const [stxt, scls] = RB_STATUS[s.status] || RB_STATUS.todo;
+        const isFocus = s.id === focusId;
+        const isOpen = s.id === openId;
+        const mark = s.status === "done" ? "✓" : s.status === "running" ? "▶" : s.status === "warn" ? "!" : "·";
+        const jumpBtn = rwInlineJump(s);
+        return `<div class="rw-step ${scls} ${isFocus ? "focus" : ""} ${isOpen ? "open" : ""}">
+          <div class="rw-step-row" onclick="toggleRwStep('${s.id}')">
+            <span class="rs-mark">${mark}</span>
+            <span class="rs-title">
+              <span class="rs-label">${esc(s.label)}</span>
+              <span class="rb-owner o-${s.owner === "模型" ? "m" : s.owner === "人工" ? "h" : "p"}">${esc(s.owner)}</span>
+              ${isFocus ? `<span class="tag t-pending" style="font-size:10.5px;padding:0 6px">${s.status === "running" ? "正在执行" : "当前待办"}</span>` : ""}
+            </span>
+            <span class="rs-val">${esc(s.value || stxt)}</span>
+            <span class="row" style="gap:6px;flex-wrap:nowrap">
+              <span class="faint" style="font-size:11px">${esc(stxt)}</span>
+              ${jumpBtn}
+            </span>
+            <span class="rs-chev">▶</span>
+          </div>
+          <div class="rw-step-detail">
+            <div>${esc(s.detail || "")}</div>
+            <div class="rs-meta">
+              ${s.output ? `<span>产出：${esc(s.output)}</span>` : ""}
+              ${s.hint ? `<span>状态：${esc(s.hint)}</span>` : ""}
+              <span>步骤 ID：${esc(s.id)}</span>
+            </div>
+            <div class="rs-acts">${rwStepActions(s)}</div>
+          </div>
+        </div>`;
+      }).join("")}
     </div>
   </div>`;
 }
 
-function rbPhase(p) {
-  const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
-  return `<section class="rb-phase" id="rb-${p.id}">
-    <div class="rb-phase-h">
-      <h3>${esc(p.name)}</h3>
-      <span class="rb-phase-desc">${esc(p.desc || "")}</span>
-      <span class="grow"></span>
-      <span class="rb-phase-count">${p.done}/${p.total}</span>
-      <span class="rb-bar"><i style="width:${pct}%"></i></span>
+function rwRenderDeliveryDetail(rb) {
+  const del = rb.deliverable || {};
+  const mb = del.zip_size_bytes ? (del.zip_size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "—";
+  return `<div class="rw-stage">
+    <div class="rw-stage-h">
+      <div>
+        <h2>⑤ 训练交付包</h2>
+        <p>将数据集、LLaMA-Factory 配置与 handoff.md 打包为 zip，直接交给下游 AI 训练并交付模型。</p>
+      </div>
+      <div class="rw-stage-acts">
+        ${del.zip_path ? `<button class="primary" onclick="downloadZip()">下载交付 zip</button>` : ""}
+        ${del.handoff_exists ? `<button onclick="openHandoff()">阅读 handoff.md</button>` : ""}
+        <button class="ghost" onclick="exportPackage()">${del.zip_path ? "重新打包" : "生成交付 zip"}</button>
+      </div>
     </div>
-    <div class="rb-steps">${p.steps.map(rbStepRow).join("")}</div>
-  </section>`;
+    <div class="rw-pack">
+      <div class="rw-pack-card ${del.zip_path ? "ready" : ""}">
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px">
+          ${del.zip_path ? "交付包已就绪，可随时下载" : del.handoff_exists ? "handoff.md 已生成，点击「生成交付 zip」即可打包" : "等待 Stage 3 完成后自动生成"}
+        </div>
+        <div class="muted" style="font-size:12.5px;line-height:1.65">
+          把解压后的目录交给另一个 AI，让它阅读 <span class="mono">handoff.md</span> 第 11 节「AI Agent 接手清单」，即可自动完成环境安装、SFT 微调、DPO 对齐与 LoRA 合并导出。
+        </div>
+      </div>
+      <div class="rw-pack-grid">
+        <div class="rw-pack-item"><span>压缩包文件名</span><b>${esc(del.zip_name || "待生成")}</b></div>
+        <div class="rw-pack-item"><span>体积</span><b>${mb}</b></div>
+        <div class="rw-pack-item"><span>生成时间</span><b>${esc(stamp(del.zip_generated_at) || "—")}</b></div>
+      </div>
+      <div class="rw-pack-card">
+        <div style="font-size:12.5px;font-weight:600;margin-bottom:8px">包内清单（针对 Qwen3.8-27B Dense 稠密模型，下游 AI 直接消费）</div>
+        <div class="mono muted" style="font-size:12px;line-height:1.8">
+          handoff.md · 27B 硬件显存核算 → 环境搭建 → SFT/QLoRA → DPO → 合并导出 → 验收清单<br>
+          train_sft.yaml · 27B BF16 LoRA 主配置（含 FlashAttention-2 + DeepSpeed ZeRO-2）<br>
+          train_sft_qlora.yaml · 27B 4-bit QLoRA 备选配置（48G 单卡 / 2×24G 可跑）<br>
+          train_dpo.yaml + ds_z2/z3_config.json · DPO 偏好对齐与 DeepSpeed 配置文件<br>
+          dataset_info.json / data/*.jsonl · 全部 SFT 单步窗口、完整轨迹、DPO 偏好对
+        </div>
+      </div>
+    </div>
+  </div>`;
 }
 
-async function loadRuns() {
-  let rb = null, hist = { runs: [] };
-  try {
-    [rb, hist] = await Promise.all([api("/api/runbook"), api("/api/runs")]);
-  } catch (e) {
-    $("#view-runs").innerHTML = `<div class="panel"><div class="empty">${esc(e.message)}</div></div>`;
-    return;
-  }
+function renderRunsView(rb, hist) {
   STATE.runbook = rb;
+  STATE.runHist = hist;
   const pct = rb.total ? Math.round((rb.done / rb.total) * 100) : 0;
+  const selId = RW_UI.selectedPhase || rwDefaultPhase(rb);
+  RW_UI.selectedPhase = selId;
   const job = rb.job;
   const next = rb.next;
+  const del = rb.deliverable || {};
+
+  const railNodes = (rb.phases || []).map((p, idx) => {
+    const st = rwPhaseState(p);
+    const pPct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+    const sel = p.id === selId ? "sel" : "";
+    const icon = st === "done" ? "✓" : st === "run" ? "▶" : st === "warn" ? "!" : (idx + 1);
+    const hintStep = p.steps.find(s => s.status === "running" || s.status === "warn") || p.steps[p.steps.length - 1];
+    return `<button type="button" class="rw-node ${st} ${sel}" onclick="selectRwPhase('${p.id}')">
+      <span class="rn-dot">${icon}</span>
+      <span class="rn-body">
+        <span class="rn-top">
+          <span class="rn-name">${esc(p.name.replace(/^[①②③④]\s*/, ""))}</span>
+          <span class="rn-cnt">${p.done}/${p.total}</span>
+        </span>
+        <span class="rn-sub">${esc(hintStep ? (hintStep.label + (hintStep.value ? " · " + hintStep.value : "")) : p.desc)}</span>
+        <span class="rn-bar"><i style="width:${pPct}%"></i></span>
+      </span>
+    </button>`;
+  }).join("");
+
+  const delState = del.zip_path ? "done" : del.handoff_exists ? "warn" : "todo";
+  const delNode = `<button type="button" class="rw-node ${delState} ${selId === "delivery" ? "sel" : ""}" onclick="selectRwPhase('delivery')">
+    <span class="rn-dot">${del.zip_path ? "✓" : "5"}</span>
+    <span class="rn-body">
+      <span class="rn-top">
+        <span class="rn-name">训练交付包</span>
+        <span class="rn-cnt">${del.zip_path ? "已就绪" : "待打包"}</span>
+      </span>
+      <span class="rn-sub">${esc(del.zip_name || "handoff.md + 数据集 zip")}</span>
+      <span class="rn-bar"><i style="width:${del.zip_path ? 100 : del.handoff_exists ? 50 : 0}%"></i></span>
+    </span>
+  </button>`;
+
+  const selPhase = (rb.phases || []).find(p => p.id === selId);
+  const rightPane = selId === "delivery" || !selPhase
+    ? rwRenderDeliveryDetail(rb)
+    : rwRenderStageDetail(selPhase, rb);
+
+  const statusText = job
+    ? `<span class="rb-live" style="display:inline-block;margin-right:6px"></span>正在执行 <em>${esc(job.stage)}</em>${job.progress?.msg ? " · " + esc(job.progress.msg) : ""}`
+    : next
+    ? `当前卡点：<em>${esc(next.label)}</em>（${esc(next.owner)} · ${esc((RB_STATUS[next.status]||RB_STATUS.todo)[0])}）`
+    : `全部步骤已完成 · 交付包可下载`;
+
   $("#view-runs").innerHTML = `
-    <div class="panel rb-head">
-      <div class="rb-head-top">
-        <div>
-          <div class="rb-title-lg">数据梳理流程</div>
-          <div class="faint" style="font-size:12px;margin-top:3px">
-            下面每一步都对应程序/模型/人工真实做的一件事；有产物才算完成。
-          </div>
-        </div>
-        <span class="grow"></span>
-        <div class="rb-progress">
-          <b>${rb.done}</b><span>/${rb.total} 步完成</span>
-          <span class="rb-bar wide"><i style="width:${pct}%"></i></span>
-        </div>
+    <div class="rw-head">
+      <div class="rw-head-stat">
+        <b>${rb.done} / ${rb.total}</b>
+        <span>步已完成</span>
       </div>
-      <div class="rb-head-acts">
-        <button class="primary" onclick="runStage('all',false)">运行全流程（增量）</button>
+      <span class="rb-bar wide"><i style="width:${pct}%"></i></span>
+      <div class="rw-head-next">${statusText}</div>
+      <div class="rw-head-acts">
+        <button class="primary" onclick="runStage('all',false)">运行全流程</button>
+        ${del.zip_path ? `<button onclick="downloadZip()">下载交付 zip</button>` : ""}
         <button class="danger" onclick="runStage('all',true)">强制重建</button>
-        <span class="grow"></span>
-        <span class="faint" style="font-size:11.5px">数据目录 <span class="mono">${esc(rb.data_dir)}</span></span>
       </div>
-      ${job ? `<div class="rb-running">
-        <span class="rb-live"></span>
-        正在执行 <b>${esc(job.stage)}</b>${job.progress && job.progress.id ? ` · ${esc(job.progress.id)}` : ""}
-        ${job.progress && job.progress.msg ? ` · ${esc(job.progress.msg)}` : ""}
-      </div>` : ""}
-      ${next ? `<div class="rb-next">下一步：<b>${esc(next.label)}</b>
-        <span class="rb-owner o-${next.owner === "模型" ? "m" : next.owner === "人工" ? "h" : "p"}">${esc(next.owner)}</span>
-        <span class="faint">· ${esc((RB_STATUS[next.status] || RB_STATUS.todo)[0])}</span>
-        ${next.phase === "human" ? `<button class="ghost" onclick="setTab('gold')">去复核</button>` : ""}
-        ${next.phase === "stage3" ? `<button class="ghost" onclick="runStage('stage3',false)">运行 stage3</button>` : ""}
-      </div>` : `<div class="rb-next done">全部步骤已完成，可以直接拿数据训练。
-        <button class="ghost" onclick="openHandoff()">查看 handoff.md</button></div>`}
     </div>
 
-    <div class="rb-body">${(rb.phases || []).map(rbPhase).join("")}</div>
-
-    <div class="console-wrap">
-      <div class="console-h"><h3>实时日志</h3><span class="grow"></span>
-        <span id="jobStatus" class="faint" style="font-size:12px">没有进行中的任务</span></div>
-      <div class="console" id="jobConsole"></div>
+    <div class="rw-shell">
+      <div class="rw-rail">${railNodes}${delNode}</div>
+      <div>${rightPane}</div>
     </div>
 
-    <div class="panel"><div class="panel-h"><h3>历史运行</h3><span class="hint">最近 ${(hist.runs||[]).length} 次</span>
-      <span class="grow"></span><button class="ghost" onclick="loadRuns()">刷新清单</button></div>
-      <div class="scroll" style="max-height:380px"><table><thead><tr><th>阶段</th><th>状态</th><th>开始</th><th>耗时</th><th>结果</th></tr></thead><tbody>
+    <details class="rb-fold"${job ? " open" : ""}>
+      <summary>实时运行日志 <span class="hint" id="jobStatus">${job ? "运行中…" : "空闲"}</span></summary>
+      <div class="rb-fold-b"><div class="console" id="jobConsole" style="height:260px;border:none;border-radius:0"></div></div>
+    </details>
+
+    <details class="rb-fold">
+      <summary>历史运行记录 <span class="hint">最近 ${(hist.runs||[]).length} 次</span></summary>
+      <div class="rb-fold-b"><div class="scroll" style="max-height:260px"><table><thead><tr><th>阶段</th><th>状态</th><th>开始</th><th>耗时</th><th>结果</th></tr></thead><tbody>
       ${(hist.runs||[]).map(r=>{
         const dur = r.created_at && r.finished_at ? Math.max(0, (new Date(r.finished_at) - new Date(r.created_at)) / 1000) : null;
         return `<tr><td class="sid">${esc(r.stage)}${r.force?` <span class="chip" style="margin-left:4px">全量</span>`:""}</td>
@@ -2712,8 +2953,32 @@ async function loadRuns() {
         <td class="muted" title="${esc(stamp(r.created_at))}">${ago(r.created_at)}</td>
         <td class="num muted">${dur === null ? "–" : dur < 60 ? dur.toFixed(0) + " 秒" : (dur/60).toFixed(1) + " 分"}</td>
         <td class="mono faint" style="font-size:11px"><div class="clip" style="max-width:600px">${esc(short(JSON.stringify(r.result||r.error||""),200))}</div></td></tr>`;}).join("") || emptyRow(5, "还没有运行记录")}
-      </tbody></table></div></div>`;
+      </tbody></table></div></div>
+    </details>`;
   paintJob();
+}
+
+async function loadRuns() {
+  try {
+    const [rb, hist] = await Promise.all([api("/api/runbook"), api("/api/runs")]);
+    renderRunsView(rb, hist);
+  } catch (e) {
+    $("#view-runs").innerHTML = `<div class="panel"><div class="empty">${esc(e.message)}</div></div>`;
+  }
+}
+
+async function exportPackage() {
+  toast("正在打包交付 zip…");
+  try {
+    const r = await api("/api/export/package", {method: "POST"});
+    const mb = (r.size_bytes / (1024 * 1024)).toFixed(1);
+    toast(`交付包已生成：${r.zip_name}（${mb} MB）`, "ok");
+    loadRuns();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function downloadZip() {
+  window.location.href = "/api/export/download";
 }
 
 async function openHandoff() {
@@ -2752,8 +3017,9 @@ function paintJob() {
 }
 function watchJob(jobId, onDone) {
   if (JOB_TIMER) clearInterval(JOB_TIMER);
+  if (RB_TIMER) clearInterval(RB_TIMER);
   JOB_ID = jobId; JOB_LINES = []; JOB_META = null;
-  let offset = 0;
+  let offset = 0, rbTick = 0;
   const tick = async () => {
     try {
       const j = await api(`/api/jobs/${jobId}?offset=${offset}`);
@@ -2762,15 +3028,28 @@ function watchJob(jobId, onDone) {
       offset += (j.logs||[]).length;
       JOB_META = j;
       paintJob();
+      // 运行中每 2 秒刷新 runbook，使步骤状态与 @@STEP 上报同步
+      if (STATE.tab === "runs" && ++rbTick % 2 === 0) {
+        api("/api/runbook").then(rb => {
+          if (STATE.tab === "runs" && JOB_ID === jobId)
+            renderRunsView(rb, STATE.runHist || { runs: [] });
+        }).catch(() => {});
+      }
       if (j.status !== "running") {
         clearInterval(JOB_TIMER); JOB_TIMER = null;
-        if (j.status === "done") { toast(`${j.stage} 已完成`, "ok"); STATE.poured = true; refreshMeta().catch(() => {}); if (onDone) onDone(j); }
-        else toast(`${j.stage} 失败：${j.error||""}`, "err");
+        if (RB_TIMER) { clearInterval(RB_TIMER); RB_TIMER = null; }
+        if (j.status === "done") {
+          toast(`${j.stage} 已完成`, "ok"); STATE.poured = true;
+          refreshMeta().catch(() => {});
+          if (STATE.tab === "runs") loadRuns();
+          if (onDone) onDone(j);
+        } else toast(`${j.stage} 失败：${j.error||""}`, "err");
       }
     } catch (e) { /* job may not be registered yet */ }
   };
   tick(); JOB_TIMER = setInterval(tick, 900);
 }
+let RB_TIMER = null;
 
 /* ------------------------------ 抽屉 / 通用 ------------------------------ */
 function openDrawer(title, sub="") {

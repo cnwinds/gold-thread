@@ -139,6 +139,15 @@ def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
     if decision:
         return {"state": "stale", "rewrites": {}, "excluded": [], "kept": []}
     if not rnd:
+        # 尚未跑 review.py 时，优先使用 stage2 judge 产出的 model_report 作为模型结论
+        rep = ann.get("model_report") or {}
+        rep_verdict = rep.get("verdict")
+        if rep.get("needs_wholesale_rewrite") or rep_verdict == "discard":
+            return {"state": "auto_reject", "rewrites": {}, "excluded": _excluded(), "kept": []}
+        if rep_verdict == "needs_human":
+            return {"state": "held" if hold else "auto_gold", "rewrites": _rewrites(False), "excluded": _excluded(), "kept": _kept()}
+        if rep_verdict == "trainable" and float(rep.get("confidence") or 0) >= conf_min:
+            return {"state": "auto_gold", "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
         # 即使尚未进行模型评审，人工手改或排除的单步也立即生效
         return {"state": "unreviewed", "rewrites": _rewrites(False), "excluded": _excluded(), "kept": _kept()}
     verdict = rnd.get("verdict")

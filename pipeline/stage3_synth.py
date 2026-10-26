@@ -829,6 +829,15 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     except Exception as exc:  # noqa: BLE001
         log(f"[stage3] handoff 生成失败: {exc}")
 
+    # 交付包：handoff + 数据集 zip，交给下游 AI 直接训练
+    try:
+        from pipeline.package import build_delivery_zip  # noqa: PLC0415
+
+        pkg = build_delivery_zip(train_root, cfg, log=log)
+        stepcat.emit(log, "s3.package", 1, 1, pkg.get("zip_name", "delivery.zip"))
+    except Exception as exc:  # noqa: BLE001
+        log(f"[stage3] 交付包生成失败: {exc}")
+
     dump_index(
         train_root / "index.json",
         {

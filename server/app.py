@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -386,6 +386,7 @@ def _runbook_state() -> Dict[str, Any]:
         verdicts: Dict[str, int] = {}
         needs_rw = 0
         seams_total = seams_fixed = 0
+        seams_failed = 0
         for v in gold_sessions.values():
             ann = read_json(Path(v.get("annotation_file", "")), default={}) or {}
             rep = ann.get("model_report") or {}
@@ -396,18 +397,22 @@ def _runbook_state() -> Dict[str, Any]:
                     needs_rw += 1
             seams_total += int(aud.get("seams_total", 0) or 0)
             seams_fixed += int(aud.get("seams_fixed", 0) or 0)
+            seams_failed += int(aud.get("seams_failed", 0) or 0)
         put("s2.normalize", "done" if gold_steps else "ready", f"静默 {silent} 步", "机械规则，无需模型")
         put("s2.judge_steps", "warn" if failed_batches else ("done" if decided else "ready"),
-            f"{decided} 条决定", f"失败批 {failed_batches}" if failed_batches else "模型逐条判断")
+            f"{decided} 条决定", f"失败批 {failed_batches}（点续跑补齐）" if failed_batches else "模型逐条判断")
         put("s2.apply", "done" if gold_steps else "ready", f"黄金 {gold_steps} 步",
             f"剪除 {pruned} / 折叠 {folded}")
         put("s2.seams_extract", "done" if seams_total else "ready", f"{seams_total} 处接缝", "程序机械提取")
-        put("s2.judge_seams", "done" if seams_total else "ready", f"修复 {seams_fixed} 处",
-            f"接缝 {seams_total} 处")
-        warn_q = verdicts.get("discard", 0) or needs_rw
-        put("s2.judge_quality", "warn" if warn_q else ("done" if verdicts else "ready"),
-            f"{sum(verdicts.values())} 条已审",
-            " · ".join(f"{k} {n}" for k, n in sorted(verdicts.items())) or "尚未审计")
+        put("s2.judge_seams", "warn" if seams_failed else ("done" if seams_total else "ready"),
+            f"修复 {seams_fixed} 处" + (f"（失败 {seams_failed}）" if seams_failed else ""),
+            f"接缝 {seams_total} 处" + (" · 点「运行 Stage 2 补齐」重试失败项" if seams_failed else ""))
+        audited_n = sum(verdicts.values())
+        missing_q = len(gold_sessions) - audited_n
+        put("s2.judge_quality", "warn" if missing_q > 0 else ("done" if verdicts else "ready"),
+            f"{audited_n} / {len(gold_sessions)} 条已审",
+            (" · ".join(f"{k} {n}" for k, n in sorted(verdicts.items()))
+             + (f" · 缺 {missing_q} 条未审（点续跑补齐）" if missing_q > 0 else "")) or "尚未审计")
         dpo_total = int(counts.get("dpo_preference_pairs.jsonl", 0) or 0)
         put("s2.dpo_build", "done" if dpo_total else "ready", f"{dpo_total} 对",
             "剪枝弯路 + 反例坏步")
@@ -485,9 +490,19 @@ def _runbook_state() -> Dict[str, Any]:
         ho = train_root / "handoff.md"
         put("s3.handoff", "done" if ho.exists() else "ready",
             "handoff.md 已生成" if ho.exists() else "待生成", "含环境搭建 → 训练 → 评估全流程")
+        delivery_dir = train_root / "delivery"
+        zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"), key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
+        if zips:
+            z = zips[0]
+            mb = z.stat().st_size / (1024 * 1024)
+            put("s3.package", "done", z.name, f"{mb:.1f} MB · 含 handoff + 数据集")
+        elif ho.exists():
+            put("s3.package", "ready", "待打包", "运行 stage3 或点「生成交付包」")
+        else:
+            put("s3.package", "todo", "等待 handoff", "")
     else:
         for sid in ("s3.gate", "s3.windows", "s3.traj", "s3.dpo_review",
-                    "s3.split", "s3.manifest", "s3.handoff"):
+                    "s3.split", "s3.manifest", "s3.handoff", "s3.package"):
             put(sid, "todo", "等待 stage2 与人工复核", "")
 
     return st
@@ -523,16 +538,72 @@ def runbook() -> Dict[str, Any]:
     total = len(steps_out)
     done = sum(1 for x in steps_out if x["status"] == "done")
     nxt = next((x for x in steps_out if x["status"] in ("running", "warn", "ready", "todo")), None)
+    remaining = [{"id": x["id"], "label": x["label"], "phase": x["phase"],
+                  "owner": x["owner"], "status": x["status"]}
+                 for x in steps_out if x["status"] not in ("done",)]
+    completed = [{"id": x["id"], "label": x["label"], "phase": x["phase"],
+                  "value": x.get("value", "")}
+                 for x in steps_out if x["status"] == "done"]
+    current = next((x for x in steps_out if x["status"] == "running"), None)
+    train_root = stage_dirs(cfg)["train"]
+    delivery_dir = train_root / "delivery"
+    zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
+                  key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
+    deliverable = {
+        "ready": bool(zips) and done >= total - 1,
+        "handoff_exists": (train_root / "handoff.md").exists(),
+        "zip_path": str(zips[0]) if zips else None,
+        "zip_name": zips[0].name if zips else None,
+        "zip_size_bytes": zips[0].stat().st_size if zips else 0,
+        "zip_generated_at": time.strftime("%Y-%m-%dT%H:%M:%S",
+                                         time.localtime(zips[0].stat().st_mtime)) if zips else None,
+    }
+    # 建议的下一步操作（界面直接渲染按钮）
+    actions: List[Dict[str, str]] = []
+    if nxt:
+        if nxt["phase"] == "human":
+            actions.append({"kind": "tab", "target": "gold", "label": "去人工复核"})
+        elif nxt["id"].startswith("s1.") or nxt["id"].startswith("s2."):
+            actions.append({"kind": "run", "target": "all" if nxt["phase"] == "stage1" else "stage2", "label": "运行管线"})
+        elif nxt["phase"] == "stage3":
+            actions.append({"kind": "run", "target": "stage3", "label": "运行 stage3"})
+        if nxt["status"] == "warn":
+            actions.append({"kind": "tab", "target": "gold" if "human" in nxt["id"] or nxt["phase"] == "human" else "runs",
+                            "label": "查看详情"})
+    if deliverable["handoff_exists"] and not deliverable["zip_path"]:
+        actions.append({"kind": "export", "target": "zip", "label": "生成交付包"})
+    if deliverable["zip_path"]:
+        actions.append({"kind": "download", "target": "zip", "label": "下载交付 zip"})
+        actions.append({"kind": "handoff", "target": "handoff", "label": "查看 handoff.md"})
     return {
         "phases": phases,
         "total": total,
         "done": done,
+        "remaining_count": len(remaining),
+        "remaining": remaining,
+        "completed": completed,
+        "current": current,
         "job": running.as_dict(with_logs=False) if running else None,
         "next": ({"id": nxt["id"], "label": nxt["label"], "phase": nxt["phase"],
-                  "owner": nxt["owner"], "status": nxt["status"]} if nxt else None),
+                  "owner": nxt["owner"], "status": nxt["status"],
+                  "detail": nxt.get("detail", ""), "output": nxt.get("output", "")} if nxt else None),
+        "actions": actions,
+        "deliverable": deliverable,
         "config_hash": config_hash(cfg),
         "data_dir": str(cfg["paths"]["data_dir"]),
-        "handoff": str(stage_dirs(cfg)["train"] / "handoff.md"),
+        "handoff": str(train_root / "handoff.md"),
+        "flow": [
+            {"id": "source", "label": "pi 会话", "path": str(cfg["paths"].get("sessions_dir", "~/.pi/agent/sessions")),
+             "desc": "Agent 执行轨迹源文件"},
+            {"id": "stage1", "label": "01_raw", "path": str(stage_dirs(cfg)["raw"]),
+             "desc": "准入 + 回合分类 + 不可变副本"},
+            {"id": "stage2", "label": "02_gold", "path": str(stage_dirs(cfg)["gold"]),
+             "desc": "模型判断 + 程序执行 + 人工复核"},
+            {"id": "stage3", "label": "03_train", "path": str(train_root),
+             "desc": "SFT/DPO 样本 + handoff"},
+            {"id": "delivery", "label": "交付 zip", "path": str(delivery_dir),
+             "desc": "handoff + 数据集，交给下游训练"},
+        ],
     }
 
 
@@ -1179,6 +1250,58 @@ def train_handoff() -> Dict[str, Any]:
     if not p.exists():
         raise HTTPException(404, "handoff.md 还没生成，跑一次 stage3 就会产出")
     return {"path": str(p), "markdown": p.read_text(encoding="utf-8")}
+
+
+@app.post("/api/export/package")
+def export_package() -> Dict[str, Any]:
+    """手动生成交付 zip（handoff + 数据集）。"""
+    from pipeline.package import build_delivery_zip  # noqa: PLC0415
+
+    cfg = load_config()
+    train_root = stage_dirs(cfg)["train"]
+    if not (train_root / "handoff.md").exists():
+        raise HTTPException(400, "handoff.md 尚未生成，请先运行 stage3")
+    try:
+        return build_delivery_zip(train_root, cfg)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"打包失败: {exc}") from exc
+
+
+@app.get("/api/export/package")
+def export_package_info() -> Dict[str, Any]:
+    """返回当前交付包信息（若存在）。"""
+    cfg = load_config()
+    train_root = stage_dirs(cfg)["train"]
+    delivery_dir = train_root / "delivery"
+    zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
+                  key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
+    if not zips:
+        return {"exists": False, "handoff_exists": (train_root / "handoff.md").exists()}
+    z = zips[0]
+    return {
+        "exists": True,
+        "zip_path": str(z),
+        "zip_name": z.name,
+        "size_bytes": z.stat().st_size,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(z.stat().st_mtime)),
+    }
+
+
+@app.get("/api/export/download")
+def export_download():
+    """下载最新交付 zip。"""
+    cfg = load_config()
+    delivery_dir = stage_dirs(cfg)["train"] / "delivery"
+    zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
+                  key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
+    if not zips:
+        raise HTTPException(404, "交付包尚未生成，请运行 stage3 或 POST /api/export/package")
+    z = zips[0]
+    return FileResponse(
+        path=str(z),
+        filename=z.name,
+        media_type="application/zip",
+    )
 
 
 @app.get("/api/train/datasets")
