@@ -1146,6 +1146,118 @@ cat > /data/inference_report.md <<'MD'
 MD
 ```
 
+### 10.9 远程 API 推理服务部署
+
+> **目标**：本机启动推理服务后，外部客户端可通过标准 **OpenAI 兼容 API** 远程调用。
+
+#### 10.9.1 服务端启动（对外暴露）
+
+三种常见方案，选一个即可：
+
+**① vLLM（推荐，工具调用完整、吞吐最高）**
+
+```bash
+# 绑定 0.0.0.0 允许外部机器访问；默认 127.0.0.1 仅本机
+vllm serve /data/models/Qwen3.8-27B-merged \
+    --host 0.0.0.0 --port 8000 \
+    --max-model-len 65536 \
+    --gpu-memory-utilization 0.92 \
+    --max-num-seqs 4 \
+    --enable-auto-tool-choice --tool-call-parser hermes
+```
+
+**② llama.cpp / llama-server（低资源，CPU/GPU 混合）**
+
+```bash
+llama-server -m /data/models/qwen38-27b-Q4_K_M.gguf \
+    -c 65536 -ngl 99 --host 0.0.0.0 --port 8000
+```
+
+**③ SGLang（大 batch 吞吐优先）**
+
+```bash
+python -m sglang.launch_server \
+    --model-path /data/models/Qwen3.8-27B-merged \
+    --host 0.0.0.0 --port 8000 \
+    --tp-size 1 --mem-fraction-static 0.88
+```
+
+> **关键**：`--host` 必须显式写 `0.0.0.0`；默认 `127.0.0.1` 会让外部机器连不上。
+
+#### 10.9.2 防火墙与安全
+
+```bash
+# 确认端口已监听在所有接口
+ss -tlnp | grep 8000
+# 应显示 0.0.0.0:8000，而不是 127.0.0.1:8000
+
+# 若机器有公网 IP，强烈建议限制来源（示例：仅允许 10.0.0.0/8 内网）
+# iptables -A INPUT -p tcp --dport 8000 -s 10.0.0.0/8 -j ACCEPT
+# iptables -A INPUT -p tcp --dport 8000 -j DROP
+```
+
+**API Key 鉴权（vLLM 支持）**：
+
+```bash
+vllm serve ... --api-key sk-your-secret-key
+# 请求时必须带：Authorization: Bearer sk-your-secret-key
+```
+
+#### 10.9.3 外部客户端调用示例
+
+**curl 快速验证**：
+
+```bash
+curl http://<推理机IP>:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-secret-key" \
+  -d '{{"model":"Qwen3.8-27B-merged","messages":[{{"role":"user","content":"分析这段汇编代码"}}],"max_tokens":256,"temperature":0.3}}'
+```
+
+**Python openai SDK**：
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://<推理机IP>:8000/v1",
+    api_key="sk-your-secret-key",  # 没设 --api-key 时可填任意值
+)
+
+resp = client.chat.completions.create(
+    model="Qwen3.8-27B-merged",
+    messages=[{{"role":"user","content":"分析这段汇编代码"}}],
+    max_tokens=2048,
+    temperature=0.3,
+)
+print(resp.choices[0].message.content)
+```
+
+**从另一台机器远程验收长上下文**：
+
+```bash
+# 在能访问推理机的任意机器上运行
+python verify_longctx_api.py \
+    --base-url http://<推理机IP>:8000/v1 \
+    --model Qwen3.8-27B-merged \
+    --lengths 8192,32768,65536
+```
+
+#### 10.9.4 性能与并发调参
+
+| 场景 | 推荐参数 |
+| :--- | :--- |
+| 单人开发/内部试用 | `--max-num-seqs 1 --gpu-memory-utilization 0.85` |
+| 小团队并发（≤ 4 人） | `--max-num-seqs 4 --max-num-batched-tokens 8192` |
+| 长上下文优先 | `--enable-chunked-prefill --max-num-batched-tokens 4096` |
+| 高吞吐 API 服务 | `--max-num-seqs 8~16 --max-model-len 8192` |
+
+#### 10.9.5 常见问题
+
+- **外部连不上 8000 端口**：① 确认 `--host 0.0.0.0`（默认值是 `127.0.0.1`） ② 检查云厂商安全组 / 防火墙是否放行 TCP 8000 ③ 确认 `ss -tlnp` 显示的是 `0.0.0.0:8000`
+- **跨域（CORS）报错**：前端 Web 直接调 API 出现 CORS → vLLM 原生不支持跨域配置；建议走后端代理，或在 vLLM 前加 nginx 做反向代理并配 `Access-Control-Allow-Origin`
+- **API Key 无效**：确认启动时加了 `--api-key`；请求头格式是 `Authorization: Bearer <key>`（注意 Bearer 后有空格）；curl 中 JSON 的 key 值用单引号包裹或 heredoc 避免 shell 转义
+
 ---
 
 ## 11. 排障表
