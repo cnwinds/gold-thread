@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from pipeline import curation, stage1_extract, stage2_gold, stage3_synth
+from pipeline import steps as stepcat
 from pipeline.common import pilog
 from pipeline.common.config import (
     CONFIG_PATH,
@@ -67,8 +68,24 @@ class Job:
         self.error: Optional[str] = None
         self.created_at = now_iso()
         self.finished_at: Optional[str] = None
+        self.progress: Dict[str, Any] = {}
+        self.done_steps: List[str] = []
 
     def log(self, msg: str) -> None:
+        # 结构化进度：pipeline 通过 `@@STEP {json}` 上报，不进可见日志
+        if msg.startswith("@@STEP "):
+            try:
+                p = json.loads(msg[7:])
+                p["at"] = now_iso()
+                self.progress = p
+                sid = p.get("id")
+                if sid and sid not in self.done_steps:
+                    d, t = p.get("done"), p.get("total")
+                    if d is not None and t is not None and t > 0 and d >= t:
+                        self.done_steps.append(sid)
+            except Exception:  # noqa: BLE001
+                pass
+            return
         line = f"{time.strftime('%H:%M:%S')} {msg}"
         self.logs.append(line)
         if len(self.logs) > 5000:
@@ -85,6 +102,8 @@ class Job:
             "error": self.error,
             "result": self.result,
             "log_count": len(self.logs),
+            "progress": self.progress,
+            "done_steps": self.done_steps,
         }
         if with_logs:
             d["logs"] = self.logs[offset:]
@@ -309,6 +328,211 @@ def config_structured(body: ConfigPatchBody) -> Dict[str, Any]:
         "config_hash": config_hash(load_config()),
         "yaml": new_text,
         "applied": len(body.values),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 运行清单（runbook）：界面与真实执行一一对应
+# ---------------------------------------------------------------------------
+
+def _runbook_state() -> Dict[str, Any]:
+    """从真实产物推导每一步状态：todo / ready / done / warn。"""
+    cfg = load_config()
+    dirs = stage_dirs(cfg)
+    raw = load_index(dirs["raw"] / "index.json")
+    gold = load_index(dirs["gold"] / "index.json")
+    train_root = dirs["train"]
+    stats = read_json(train_root / "stats.json", default={}) or {}
+    info = read_json(train_root / "dataset_info.json", default={}) or {}
+    counts = stats.get("counts") or {}
+    # load_index 把 extra 字段平铺在顶层（历史数据可能嵌在 extra 里，两种都兼容）
+    raw_extra = raw.get("extra") or raw
+    raw_sessions = raw.get("sessions") or {}
+    gold_sessions = gold.get("sessions") or {}
+
+    st: Dict[str, Dict[str, Any]] = {}
+
+    def put(step_id: str, status: str, value: str = "", hint: str = "") -> None:
+        st[step_id] = {"status": status, "value": value, "hint": hint}
+
+    # ---- stage1 ----
+    skipped = raw_extra.get("skipped") or {}
+    folder_stats = raw_extra.get("folder_stats") or {}
+    scanned = sum(folder_stats.values())
+    if raw_sessions:
+        put("s1.scan", "done", f"扫描 {scanned} 个文件", f"{len(folder_stats)} 个目录")
+        put("s1.admit", "done", f"准入 {len(raw_sessions)} 个会话",
+            f"忽略 {skipped.get('non_crack_folder', 0)} / 排除 {skipped.get('excluded_folder', 0)}")
+        dup = raw_extra.get("duplicates") or {}
+        put("s1.dedupe", "done", f"去重 {len(dup)} 个", "同 cwd + 同首条消息的副本")
+        with_ann = sum(1 for v in raw_sessions.values() if (v.get("stats") or {}).get("model_classified"))
+        put("s1.classify", "done" if with_ann else "ready",
+            f"{with_ann} / {len(raw_sessions)} 条已分类", "模型回合分类")
+        put("s1.flow", "done", f"{len(raw_sessions)} 条成流",
+            f"回合合计 {sum((v.get('stats') or {}).get('turns_total', 0) for v in raw_sessions.values())}")
+    else:
+        for sid in ("s1.scan", "s1.admit", "s1.dedupe", "s1.classify", "s1.flow"):
+            put(sid, "todo", "尚未运行", "点「运行全流程」从采集开始")
+
+    # ---- stage2 ----
+    if gold_sessions:
+        stats_list = [(v.get("stats") or {}) for v in gold_sessions.values()]
+        gold_steps = sum(s.get("gold_steps", 0) for s in stats_list)
+        folded = sum(s.get("folded", 0) for s in stats_list)
+        pruned = sum(s.get("pruned_detours", 0) for s in stats_list)
+        failed_batches = sum(s.get("judge_failed_batches", 0) for s in stats_list)
+        decided = sum(s.get("decisions", 0) for s in stats_list)
+        silent = sum(s.get("silent_cleared", 0) for s in stats_list)
+        verdicts: Dict[str, int] = {}
+        needs_rw = 0
+        seams_total = seams_fixed = 0
+        for v in gold_sessions.values():
+            ann = read_json(Path(v.get("annotation_file", "")), default={}) or {}
+            rep = ann.get("model_report") or {}
+            aud = ann.get("model_audit") or {}
+            if rep:
+                verdicts[rep.get("verdict", "?")] = verdicts.get(rep.get("verdict", "?"), 0) + 1
+                if rep.get("needs_wholesale_rewrite"):
+                    needs_rw += 1
+            seams_total += int(aud.get("seams_total", 0) or 0)
+            seams_fixed += int(aud.get("seams_fixed", 0) or 0)
+        put("s2.normalize", "done" if gold_steps else "ready", f"静默 {silent} 步", "机械规则，无需模型")
+        put("s2.judge_steps", "warn" if failed_batches else ("done" if decided else "ready"),
+            f"{decided} 条决定", f"失败批 {failed_batches}" if failed_batches else "模型逐条判断")
+        put("s2.apply", "done" if gold_steps else "ready", f"黄金 {gold_steps} 步",
+            f"剪除 {pruned} / 折叠 {folded}")
+        put("s2.seams_extract", "done" if seams_total else "ready", f"{seams_total} 处接缝", "程序机械提取")
+        put("s2.judge_seams", "done" if seams_total else "ready", f"修复 {seams_fixed} 处",
+            f"接缝 {seams_total} 处")
+        warn_q = verdicts.get("discard", 0) or needs_rw
+        put("s2.judge_quality", "warn" if warn_q else ("done" if verdicts else "ready"),
+            f"{sum(verdicts.values())} 条已审",
+            " · ".join(f"{k} {n}" for k, n in sorted(verdicts.items())) or "尚未审计")
+        dpo_total = int(counts.get("dpo_preference_pairs.jsonl", 0) or 0)
+        put("s2.dpo_build", "done" if dpo_total else "ready", f"{dpo_total} 对",
+            "剪枝弯路 + 反例坏步")
+    else:
+        for sid in ("s2.normalize", "s2.judge_steps", "s2.apply", "s2.seams_extract",
+                    "s2.judge_seams", "s2.judge_quality", "s2.dpo_build"):
+            put(sid, "todo", "等待 stage1", "")
+
+    # ---- human ----
+    if gold_sessions:
+        review_states: Dict[str, int] = {}
+        finalized = 0
+        for v in gold_sessions.values():
+            ann = read_json(Path(v.get("annotation_file", "")), default={}) or {}
+            eff = curation.resolve(ann, cfg)
+            review_states[eff["state"]] = review_states.get(eff["state"], 0) + 1
+            if (ann.get("human_review") or {}).get("finalized"):
+                finalized += 1
+        pending = sum(review_states.get(k, 0) for k in ("unreviewed", "held", "stale"))
+        put("h.review", "warn" if pending else "done",
+            f"待处理 {pending} 条 / 共 {len(gold_sessions)}",
+            " · ".join(f"{k} {n}" for k, n in sorted(review_states.items())))
+        put("h.finalize", "done" if finalized else "ready", f"已定稿 {finalized} 条",
+            "定稿后修改会被拦截，需先撤销")
+    else:
+        put("h.review", "todo", "等待 stage2", "")
+        put("h.finalize", "todo", "等待复核", "")
+
+    # ---- stage3 ----
+    win = int(counts.get("sft_step_windows_sharegpt.jsonl", 0) or 0)
+    if win:
+        drop = stats.get("drop_reasons") or {}
+        put("s3.gate", "done",
+            f"拦下 {int(drop.get('session_blocked', 0)) + int(drop.get('model_discard', 0))} 步",
+            f"model_discard {drop.get('model_discard', 0)} / pathology {drop.get('pathology', 0)}")
+        put("s3.windows", "done", f"{win} 条窗口",
+            f"train {counts.get('sft_step_windows_sharegpt.train.jsonl', 0)} / "
+            f"eval {counts.get('sft_step_windows_sharegpt.eval.jsonl', 0)}")
+        put("s3.traj", "done",
+            f"{counts.get('sft_gold_trajectories_sharegpt.jsonl', 0)} 条轨迹", "")
+        dpo_pairs = int(counts.get("dpo_preference_pairs.jsonl", 0) or 0)
+        cache = read_json(Path(dirs["state"]) / "dpo_review_cache.json", default={}) or {}
+        rev = stats.get("dpo_review") or {}
+        # 缓存会累积历史键，这里按当前偏好对重新计算"已复核数"
+        done_rev = 0
+        pairs_file = train_root / "dpo_preference_pairs.jsonl"
+        if pairs_file.exists():
+            from pipeline import judge as _judge  # noqa: PLC0415
+
+            _model = _judge._model(cfg, _judge._jcfg(cfg), "dpo") or ""
+            for line in pairs_file.open(encoding="utf-8"):
+                if not line.strip():
+                    continue
+                try:
+                    p = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if _judge._vkey(_model, "dpo", p) in cache:
+                    done_rev += 1
+        failed_rev_all = sum(1 for v in cache.values() if v.get("verdict") == "review_failed")
+        failed_rev = sum(1 for v in cache.values() if v.get("verdict") == "review_failed")
+        if dpo_pairs and done_rev < dpo_pairs:
+            put("s3.dpo_review", "warn", f"{done_rev} / {dpo_pairs} 对已复核",
+                "未完成：重跑 stage3 会断点续跑")
+        elif failed_rev:
+            put("s3.dpo_review", "warn", f"{done_rev}/{dpo_pairs}（失败 {failed_rev}）", "需重跑补齐")
+        else:
+            put("s3.dpo_review", "done" if dpo_pairs else "ready", f"{done_rev} 对已复核",
+                f"调换 {rev.get('swapped', 0)} / 丢弃 {rev.get('dropped', 0)}")
+        smap = split_map = stats.get("split") or {}
+        put("s3.split", "done", f"{len(smap)} 个项目已切分",
+            " · ".join(f"{k}→{v}" for k, v in list(smap.items())[:4]))
+        put("s3.manifest", "done", f"{len(info)} 个数据集登记",
+            "dataset_info.json / stats.json / *.train|eval")
+        ho = train_root / "handoff.md"
+        put("s3.handoff", "done" if ho.exists() else "ready",
+            "handoff.md 已生成" if ho.exists() else "待生成", "含环境搭建 → 训练 → 评估全流程")
+    else:
+        for sid in ("s3.gate", "s3.windows", "s3.traj", "s3.dpo_review",
+                    "s3.split", "s3.manifest", "s3.handoff"):
+            put(sid, "todo", "等待 stage2 与人工复核", "")
+
+    return st
+
+
+@app.get("/api/runbook")
+def runbook() -> Dict[str, Any]:
+    cfg = load_config()
+    state = _runbook_state()
+    running = next((j for j in JOBS.values() if j.status == "running"), None)
+    steps_out = []
+    for s in stepcat.STEPS:
+        item = dict(s)
+        info = state.get(s["id"]) or {"status": "todo", "value": "", "hint": ""}
+        item.update(info)
+        if running:
+            prog = running.progress or {}
+            if prog.get("id") == s["id"]:
+                item["status"] = "running"
+                d, t = prog.get("done"), prog.get("total")
+                item["value"] = f"{d}/{t}" if (d is not None and t) else (prog.get("msg") or "运行中")
+                if prog.get("msg"):
+                    item["hint"] = prog["msg"]
+            elif s["id"] in running.done_steps:
+                item["done_this_run"] = True
+        steps_out.append(item)
+    phases = []
+    for ph in stepcat.PHASES:
+        ph_steps = [x for x in steps_out if x["phase"] == ph["id"]]
+        phases.append({**ph, "steps": ph_steps,
+                       "done": sum(1 for x in ph_steps if x["status"] == "done"),
+                       "total": len(ph_steps)})
+    total = len(steps_out)
+    done = sum(1 for x in steps_out if x["status"] == "done")
+    nxt = next((x for x in steps_out if x["status"] in ("running", "warn", "ready", "todo")), None)
+    return {
+        "phases": phases,
+        "total": total,
+        "done": done,
+        "job": running.as_dict(with_logs=False) if running else None,
+        "next": ({"id": nxt["id"], "label": nxt["label"], "phase": nxt["phase"],
+                  "owner": nxt["owner"], "status": nxt["status"]} if nxt else None),
+        "config_hash": config_hash(cfg),
+        "data_dir": str(cfg["paths"]["data_dir"]),
+        "handoff": str(stage_dirs(cfg)["train"] / "handoff.md"),
     }
 
 
@@ -945,6 +1169,16 @@ def _count_lines(path: Path) -> int:
                 n += 1
     _ROW_CACHE[key] = (ck, n)
     return n
+
+
+@app.get("/api/train/handoff")
+def train_handoff() -> Dict[str, Any]:
+    """返回 handoff.md 内容（不存在时给出提示）。"""
+    cfg = load_config()
+    p = stage_dirs(cfg)["train"] / "handoff.md"
+    if not p.exists():
+        raise HTTPException(404, "handoff.md 还没生成，跑一次 stage3 就会产出")
+    return {"path": str(p), "markdown": p.read_text(encoding="utf-8")}
 
 
 @app.get("/api/train/datasets")

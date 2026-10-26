@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import judge
+from . import steps as stepcat
 from .common import pilog
 from .common.config import load_config, section_hash, stage_dirs
 from .common.format import to_sharegpt
@@ -405,10 +406,12 @@ def purify_by_judge(
                 m["text"] = ""
                 m["flags"] = sorted(set(m.get("flags", []) + ["silent_executed"]))
                 silent_n += 1
+        stepcat.emit(log, "s2.normalize", silent_n, None, f"静默 {silent_n} 步")
         log(f"[judge] 机械静默执行 {silent_n} 步")
 
     jmeta: Dict[str, Any] = {}
     decisions = judge.decide_steps(flat, cfg=cfg, log=log, out_meta=jmeta)
+    stepcat.emit(log, "s2.judge_steps", len(decisions), None, f"{len(decisions)} 条决定")
     log(f"[judge] 步级决定 {len(decisions)} 条（模型）")
 
     asst_total = sum(1 for u in units if u["type"] == "assistant_turn")
@@ -501,6 +504,9 @@ def purify_by_judge(
         chosen = next(u["msg"] for (u, i) in kept if i == nxt)
         pd["chosen_msg"] = copy.deepcopy(chosen)
 
+    stepcat.emit(log, "s2.apply", pruned_n + folded, asst_total,
+                 f"剪除 {pruned_n} / 折叠 {folded} / 改写 {compressed + backfilled}")
+
     gold_messages: List[Dict[str, Any]] = []
     for u, _ in kept:
         gold_messages.append(u["msg"])
@@ -508,6 +514,7 @@ def purify_by_judge(
 
     # ---- 接缝审核（模型）----
     seams = judge.extract_seams(gold_messages, pruned, turn_marks, cfg=cfg)
+    stepcat.emit(log, "s2.seams_extract", len(seams), None, f"{len(seams)} 处接缝")
     audit = {"seams_total": len(seams), "seams_fixed": 0, "seam_issues": []}
     if seams:
         verdicts = judge.audit_seams(seams, cfg=cfg, log=log, out_meta=audit)
@@ -524,6 +531,8 @@ def purify_by_judge(
                 audit["seams_fixed"] += 1
             audit["seam_issues"].append({"seam_id": sid, "issue": v.get("issue") or "",
                                          "applied": bool(tgt is not None and patch)})
+        stepcat.emit(log, "s2.judge_seams", audit["seams_fixed"], len(seams),
+                     f"不平滑 {len(verdicts) - sum(1 for v in verdicts.values() if v.get('smooth', True))} 处，修 {audit['seams_fixed']}")
         log(f"[judge] 接缝 {len(seams)} 处，模型判定不平滑 {sum(1 for v in verdicts.values() if not v.get('smooth', True))} 处，已修 {audit['seams_fixed']} 处")
 
     stats = {
@@ -745,6 +754,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 quality_report.setdefault("problems", []).append(
                     f"judge 有 {_judge_failed} 个批次失败，判断不完整，需人工复核")
             if quality_report:
+                stepcat.emit(log, "s2.judge_quality", None, None,
+                             f"{sid[:8]} {quality_report['verdict']}")
                 log(
                     f"[judge] 质量报告 {sid[:8]}: {quality_report['verdict']}"
                     f"（高光 {len(quality_report.get('highlights') or [])} 步"
@@ -885,6 +896,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 for pd in pruned
             ],
         )
+        stepcat.emit(log, "s2.dpo_build", len(all_dpo), None, f"{len(all_dpo)} 对")
         all_dpo.extend(dpo_pairs)
 
         ann_path = annotations_out / f"{sid}.json"
@@ -1000,5 +1012,6 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         "diagnostics": len(all_diag),
         "gold_steps": sum(v["stats"]["gold_steps"] for v in sessions_index.values()),
     }
+    stepcat.emit(log, "s2.dpo_build", len(all_dpo), len(all_dpo), f"{len(all_dpo)} 对")
     log(f"[stage2] 完成：写入 {written} / 复用 {reused}，黄金步数 {summary['gold_steps']}，DPO 对 {len(all_dpo)}")
     return summary

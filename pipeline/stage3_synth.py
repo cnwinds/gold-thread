@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import curation, judge
+from . import steps as stepcat
+from .handoff import write_handoff
 from .common.config import config_hash, load_config, stage_dirs
 from .common.format import conversation, to_openai, to_sharegpt
 from .common.quality import compact_thinking, evaluate_effective_step
@@ -621,6 +623,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             "diagnostics": len(sess_diags),
         }
 
+        stepcat.emit(log, "s3.gate", None, None, f"{sid[:8]} {eval_res['effective_state']}")
         if not eval_res["full_sft_allowed"] and not eval_res["subsegment_only"]:
             if label in set(scfg.get("sft_labels", ["positive"])):
                 log(f"[stage3] {curation.EFFECTIVE_ZH.get(eff_state, eff_state)}，不进 SFT: {sid}")
@@ -635,7 +638,10 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             stage_counts[st_name] += 1
             project_counts[project] += 1
             step_pairs.append((w_sgpt, w_oai))
+            if len(step_pairs) % 100 == 0:
+                stepcat.emit(log, "s3.windows", len(step_pairs), None, f"{len(step_pairs)} 条窗口")
 
+        stepcat.emit(log, "s3.traj", len(gold_trajs), None, f"{len(gold_trajs)} 条轨迹")
         log(
             f"[stage3] {sid[:8]} ({label:<8} {project:<18}) -> "
             f"黄金 {eval_res['funnel']['gold_steps']} 步, 入选窗口 {eval_res['funnel']['admitted_steps']} "
@@ -662,7 +668,10 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 p.setdefault("metadata", {})["model_review"] = kind
                 p["metadata"]["model_review_reason"] = v.get("reason", "")
             kept_pairs.append(p)
+        # 关键：把过滤结果写回，否则 drop 的偏好对仍会进训练集
         dpo_pairs = kept_pairs
+        stepcat.emit(log, "s3.dpo_review", len(dpo_pairs), dpo_review_stats["checked"],
+                     f"调换 {dpo_review_stats['swapped']} / 丢弃 {dpo_review_stats['dropped']}")
         log(
             f"[judge] DPO 复核 {dpo_review_stats['checked']} 对：调换 {dpo_review_stats['swapped']}，"
             f"丢弃 {dpo_review_stats['dropped']}，保留 {len(dpo_pairs)}"
@@ -674,6 +683,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         rng.shuffle(gold_trajs)
         rng.shuffle(step_pairs)
 
+    stepcat.emit(log, "s3.split", len(split_map), len(split_map),
+                 " / ".join(f"{k}->{v}" for k, v in list(split_map.items())[:4]))
     sgpt = [p[0] for p in step_pairs] if fcfg.get("sharegpt", True) else []
     oai = [p[1] for p in step_pairs] if fcfg.get("openai", True) else []
 
@@ -785,6 +796,9 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             }
     write_json_atomic(train_root / "dataset_info.json", dataset_info)
 
+    stepcat.emit(log, "s3.manifest", len(dataset_info), len(dataset_info),
+                 f"{len(dataset_info)} 个数据集登记")
+
     stats = {
         "generated_at": now_iso(),
         "config_hash": config_hash(cfg),
@@ -806,6 +820,14 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         "dpo_review": dpo_review_stats,
     }
     write_json_atomic(train_root / "stats.json", stats)
+
+    # handoff：把"怎么拿这批数据训练"写成可照做的文档 + 可直接用的训练配置
+    try:
+        ho = write_handoff(train_root, counts, stats, dataset_info, split_map, cfg)
+        stepcat.emit(log, "s3.handoff", 3, 3, "handoff.md / train_sft.yaml / train_dpo.yaml")
+        log(f"[stage3] handoff 已生成: {', '.join(Path(p).name for p in ho.values())}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"[stage3] handoff 生成失败: {exc}")
 
     dump_index(
         train_root / "index.json",

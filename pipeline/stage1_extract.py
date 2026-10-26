@@ -27,6 +27,7 @@ from .common.store import (
     sha256_text,
     write_json_atomic,
 )
+from . import steps as stepcat
 from .turnclassify import classify_session
 
 STAGE = "stage1"
@@ -201,6 +202,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     rejected_samples: List[Dict[str, str]] = []
     replay_mode = False
 
+    dedupe_n = 0
     if sessions_dir.exists():
         for path in sorted(sessions_dir.rglob("*.jsonl")):
             rel = path.relative_to(sessions_dir).as_posix()
@@ -218,6 +220,10 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                     rejected_samples.append({"rel_path": rel, "folder": folder, "reason": reason_tag})
                 continue
             candidates.append({"path": path, "rel": rel})
+        stepcat.emit(log, "s1.scan", sum(folder_stats.values()), sum(folder_stats.values()),
+                     f"扫描 {sum(folder_stats.values())} 个文件")
+        stepcat.emit(log, "s1.admit", len(candidates), sum(folder_stats.values()),
+                     f"准入 {len(candidates)} 个")
         log(
             f"[stage1] 扫描 {sum(folder_stats.values())} 个会话文件，准入 {len(candidates)} 个"
             f"（忽略 {skipped['non_crack_folder']} 个非项目目录，排除 {skipped['excluded_folder']} 个根目录）"
@@ -269,6 +275,10 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 if dup["line_count"] < keeper["line_count"] * 0.5:
                     duplicate_of[dup["session_id"]] = keeper["session_id"]
 
+    if duplicate_of:
+        dedupe_n = len(duplicate_of)
+    stepcat.emit(log, "s1.dedupe", dedupe_n, dedupe_n, f"去重 {dedupe_n} 个副本")
+
     sessions_index: Dict[str, Any] = {}
     state_files: Dict[str, Any] = {}
     written = 0
@@ -276,7 +286,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     removed_stale = 0
     label_counts = Counter()
 
-    for s in parsed:
+    total_parsed = len(parsed)
+    for done_i, s in enumerate(parsed, 1):
         sid = s["session_id"]
         src = Path(s["source_path"])
         fp = fingerprint(src)
@@ -316,6 +327,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         existing_meta = read_json(existing_meta_path, default={}) if existing_meta_path and existing_meta_path.exists() else {}
         annotations = (existing_meta or {}).get("turn_annotations")
         if cfg.get("turns", {}).get("use_model", False) and (force or not annotations):
+            stepcat.emit(log, "s1.classify", done_i, total_parsed, f"分类 {sid[:8]}")
             try:
                 annotations = classify_session(s, cfg=cfg, log=log)
             except Exception as exc:  # noqa: BLE001
@@ -362,6 +374,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             "outputs": [str(raw_file), str(meta_path)],
         }
         written += 1
+        stepcat.emit(log, "s1.flow", done_i, total_parsed, f"成流 {sid[:8]}")
         st = meta["stats"]
         log(
             f"[stage1] {label:<8} {project:<22} {sid[:8]}  "
@@ -415,6 +428,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         "skipped": skipped,
         "duplicates": duplicate_of,
     }
+    stepcat.emit(log, "s1.flow", total_parsed, total_parsed, f"写入 {written} / 复用 {reused}")
     log(
         f"[stage1] 完成：写入 {written} / 复用 {reused} / 清理 {removed_stale}；"
         f"正例 {label_counts.get('positive', 0)}，反例 {label_counts.get('negative', 0)}，待定 {label_counts.get('pending', 0)}"
