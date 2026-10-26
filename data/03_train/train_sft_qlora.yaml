@@ -43,7 +43,6 @@ warmup_ratio: 0.05
 bf16: true
 gradient_checkpointing: true
 
-### eval
+### eval（训练中关掉：27B 显存紧，eval 会额外占激活；训完用 eval_sft.yaml 单独跑）
 per_device_eval_batch_size: 1
-eval_strategy: steps
-eval_steps: 100
+eval_strategy: "no"

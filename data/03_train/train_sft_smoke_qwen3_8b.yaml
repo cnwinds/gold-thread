@@ -44,7 +44,6 @@ warmup_ratio: 0.05
 bf16: true
 gradient_checkpointing: true
 
-### eval
-per_device_eval_batch_size: 2
-eval_strategy: steps
-eval_steps: 50
+### eval（训练中必须关：eval 不走 Liger 融合 CE，长样本会 OOM —— RESULT.md 实测）
+per_device_eval_batch_size: 1
+eval_strategy: "no"

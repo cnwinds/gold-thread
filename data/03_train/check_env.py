@@ -114,8 +114,12 @@ def main() -> int:
         if v.startswith("<"):
             if m == "flash_attn":
                 print(f"  [WARN] {m} 未安装 → 训练配置请把 flash_attn 改成 sdpa")
-            elif m in ("liger_kernel", "bitsandbytes"):
-                print(f"  [INFO] {m} 未安装（本方案默认不用，可忽略）")
+            elif m == "liger_kernel":
+                # 8B 配置 enable_liger_kernel: true 时是硬依赖，不装必 OOM
+                print(f"  [WARN] {m} 未安装 → 8B 配置要求 Liger 融合 CE，不装会 OOM；"
+                      f"装：pip install liger-kernel，或把 YAML 改 enable_liger_kernel: false（显存需更多）")
+            elif m == "bitsandbytes":
+                print(f"  [INFO] {m} 未安装（仅 QLoRA 4bit / DPO ref_model 8bit 量化需要）")
             else:
                 bad(f"{m} 未安装（LLaMA-Factory 必须）")
         else:
@@ -168,8 +172,10 @@ def main() -> int:
                     bad("tokenizer 无 chat_template")
                 # 用真实 tokenizer 渲染一条样本，检查 think 注入
                 if args.data:
-                    t = Path(args.data) / "sft_step_windows_sharegpt.train.jsonl"
-                    if t.exists():
+                    t = next((Path(args.data) / x for x in (
+                        "sft_step_windows_sharegpt.train.v2.jsonl",
+                        "sft_step_windows_sharegpt.train.jsonl") if (Path(args.data) / x).exists()), None)
+                    if t is not None and t.exists():
                         with t.open(encoding="utf-8") as f:
                             row = json.loads(f.readline())
                         conv = row["conversations"]
@@ -208,13 +214,25 @@ def main() -> int:
             for p in files:
                 n = sum(1 for line in p.open(encoding="utf-8") if line.strip())
                 print(f"  {p.name:<48} {n:>6} 条")
-            need = ["sft_step_windows_sharegpt.train.jsonl", "sft_step_windows_sharegpt.eval.jsonl",
-                    "dpo_preference_pairs.train.jsonl", "dataset_info.json"]
-            for f in need:
-                (ok if (d / f).exists() else bad)(f"存在 {f}")
-            # 长度分布（有 tokenizer 才有意义）
-            t = d / "sft_step_windows_sharegpt.train.jsonl"
-            if t.exists():
+            # 必需数据集：优先 v2（实际训练用），兼容 v1 旧版
+            pairs = [
+                ("sft_step_windows_sharegpt.train.v2.jsonl", "SFT 训练集"),
+                ("sft_step_windows_sharegpt.eval.v2.jsonl", "SFT 验证集"),
+            ]
+            for f, desc in pairs:
+                (ok if (d / f).exists() else bad)(f"存在 {f}（{desc}）")
+            # DPO 数据：v2w（窗口裁剪）优先，v2 兜底
+            dpo_hit = next((x for x in ("dpo_preference_pairs.train.v2w.jsonl",
+                                        "dpo_preference_pairs.train.v2.jsonl",
+                                        "dpo_preference_pairs.train.jsonl")
+                            if (d / x).exists()), None)
+            (ok if dpo_hit else bad)(f"存在 DPO 训练集（{dpo_hit or 'v2w / v2 / v1 均未找到'}）")
+            (ok if (d / "dataset_info.json").exists() else bad)("存在 dataset_info.json")
+            # 长度分布（有 tokenizer 才有意义）：优先 v2
+            t = next((d / x for x in ("sft_step_windows_sharegpt.train.v2.jsonl",
+                                      "sft_step_windows_sharegpt.train.jsonl")
+                      if (d / x).exists()), None)
+            if t is not None and t.exists():
                 lens = []
                 over = 0
                 tok = None

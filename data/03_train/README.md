@@ -13,8 +13,8 @@
 | SFT 验证 | `pi_sft_step_windows_eval_v2` | `sft_step_windows_sharegpt.eval.v2.jsonl` | **221** |
 | 完整轨迹训练（可选） | `pi_sft_gold_trajectories_train_v2` | `sft_gold_trajectories_sharegpt.train.v2.jsonl` | 2 |
 | 完整轨迹验证 | `pi_sft_gold_trajectories_eval_v2` | `sft_gold_trajectories_sharegpt.eval.v2.jsonl` | 1 |
-| **DPO 训练** | `pi_dpo_preference_pairs_train_v2w` | `dpo_preference_pairs.train.v2w.jsonl` | **87**（窗口裁剪后） |
-| DPO 验证 | `pi_dpo_preference_pairs_eval_v2w` | `dpo_preference_pairs.eval.v2w.jsonl` | 143 |
+| **DPO 训练** | `pi_dpo_preference_pairs_train_v2w` | `dpo_preference_pairs.train.v2w.jsonl` | **94**（窗口裁剪后；原 100 对） |
+| DPO 验证 | `pi_dpo_preference_pairs_eval_v2w` | `dpo_preference_pairs.eval.v2w.jsonl` | 126（原 143） |
 | 原始 DPO（全窗口） | `pi_dpo_preference_pairs_train_v2` | `dpo_preference_pairs.train.v2.jsonl` | 100 |
 | 病态诊断（**不进训练**） | – | `negative_diagnostics.jsonl` | 814 |
 

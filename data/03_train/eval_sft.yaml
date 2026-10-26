@@ -1,0 +1,38 @@
+### 27B 训后单独跑 eval（训练中关掉 eval 的原因见 train_sft.yaml / RESULT.md）
+### 用法：llamafactory-cli train eval_sft.yaml
+### 说明：bs=1；27B 必须 enable_liger_kernel: false（qwen3_5 不在 Liger 支持列表）
+###       若 OOM 依次降 cutoff_len → 16384 → 12288 → 8192
+### model
+model_name_or_path: /data/models/Qwen3.8-27B
+adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft
+trust_remote_code: true
+flash_attn: fa2                                  # 装不上改 sdpa
+enable_liger_kernel: false
+
+### method
+stage: sft
+do_train: false
+do_eval: true
+finetuning_type: lora
+lora_rank: 32
+lora_target: mlp
+# deepspeed:                                     # 单卡不要设
+
+### dataset
+dataset_dir: /data/goldthread/03_train
+eval_dataset: pi_sft_step_windows_eval_v2
+template: qwen3_8                                # 专用模板，勿用 qwen3
+cutoff_len: 16384
+packing: false
+mask_history: true
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /data/saves/qwen38-27b-goldthread-eval
+overwrite_output_dir: true
+
+### eval
+per_device_eval_batch_size: 1
+bf16: true
+gradient_checkpointing: true

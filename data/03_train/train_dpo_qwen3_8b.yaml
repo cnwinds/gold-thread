@@ -37,7 +37,7 @@ overwrite_output_dir: true
 ### train
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 4
-learning_rate: 1.0e-5           # 87 对样本、22 步，5e-5 直接把模型推崩
+learning_rate: 1.0e-5           # 94 对样本、23 步，5e-5 直接把模型推崩
 num_train_epochs: 1.0
 lr_scheduler_type: cosine
 warmup_ratio: 0.05

@@ -37,6 +37,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from queue import Queue
 
+# Windows/GBK 终端或重定向场景下，emoji/符号会触发 UnicodeEncodeError。
+# 在模块加载时统一把 stdout/stderr 切到 utf-8（失败则静默忽略）。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+
 # ── terminal colours ──────────────────────────────────────────────
 _C = {
     "red": "\x1b[31;1m", "green": "\x1b[32;1m", "yellow": "\x1b[33;1m",
@@ -151,9 +159,9 @@ class TrainMonitor:
         self._gpu_peak_mb = 0
         self._summary: dict = {}
 
-    # ── readers ──────────────────────────────────────────────────
+    # ---- readers --------------------------------------------------
     def _reader(self, pipe, q: Queue[str], label: str) -> None:
-        """持续从 pipe 读取行，push 到 queue。"""
+        """持续从 pipe 读取行，push 到 queue。日志由主循环统一写入（避免重复）。"""
         try:
             for line in iter(pipe.readline, ""):
                 if not line:
@@ -165,10 +173,6 @@ class TrainMonitor:
                     print(_c(f"[{label}] {text}", "red"), flush=True)
                 else:
                     print(text, flush=True)
-                # 写日志
-                if self.log_path:
-                    with open(self.log_path, "a", encoding="utf-8") as f:
-                        f.write(text + "\n")
         finally:
             pipe.close()
             q.put(None)  # sentinel
@@ -228,7 +232,12 @@ class TrainMonitor:
             print(_c(f"  日志写入: {self.log_path}", "dim"))
 
         self._start_time = datetime.now()
-        logfile = open(self.log_path, "w", encoding="utf-8") if self.log_path else None
+        self._logfile = None
+        if self.log_path:
+            # 自动创建父目录（否则 --log logs/xxx.log 在新机器上直接 FileNotFoundError）
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._logfile = open(self.log_path, "w", encoding="utf-8")
+        logfile = self._logfile
 
         try:
             self._proc = subprocess.Popen(
@@ -238,7 +247,7 @@ class TrainMonitor:
                 stdin=subprocess.DEVNULL,
                 text=True,
                 bufsize=1,
-                preexec_fn=os.setsid,  # 独立进程组，kill 时全组清理
+                **({"preexec_fn": os.setsid} if os.name == "posix" else {}),  # Unix: 独立进程组，便于全组清理
             )
         except FileNotFoundError:
             print(_c(f"[FATAL] 命令未找到: {self.cmd[0]}", "red"))
@@ -299,11 +308,11 @@ class TrainMonitor:
                 # 6) 超时检查
                 if self.timeout and datetime.now() - self._start_time > self.timeout:
                     print(_c(f"\n[TIMEOUT] 超过设定时间 {self.timeout}，发送 SIGTERM…", "yellow"))
-                    os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+                    self._terminate(signal.SIGTERM)
                     try:
                         self._proc.wait(timeout=30)
                     except subprocess.TimeoutExpired:
-                        os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+                        self._terminate(signal.SIGKILL)
                     break
 
                 # 7) 心跳打印（每 30 秒一行）
@@ -320,11 +329,11 @@ class TrainMonitor:
         except KeyboardInterrupt:
             print(_c("\n[INTERRUPT] 收到 Ctrl-C，发送 SIGTERM 给训练进程组…", "yellow"))
             if self._proc and self._proc.poll() is None:
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+                self._terminate(signal.SIGTERM)
                 try:
                     self._proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+                    self._terminate(signal.SIGKILL)
             return 130
 
         finally:
@@ -337,6 +346,27 @@ class TrainMonitor:
 
         rc = self._proc.returncode
         return self._report(rc)
+
+    # ── 跨平台终止 ──────────────────────────────────────────────
+    def _terminate(self, sig: int = signal.SIGTERM) -> None:
+        """向训练进程（Unix 下为整个进程组）发送信号。"""
+        proc = self._proc
+        if proc is None:
+            return
+        try:
+            if os.name == "posix":
+                try:
+                    os.killpg(os.getpgid(proc.pid), sig)
+                    return
+                except (ProcessLookupError, PermissionError):
+                    pass
+            # Windows / 兜底
+            if sig == 9:  # SIGKILL（Linux OOM Killer 的标志）
+                proc.kill()
+            else:
+                proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ── summary & diagnosis ──────────────────────────────────────
     def _report(self, rc: int | None) -> int:
@@ -351,8 +381,12 @@ class TrainMonitor:
         print("=" * 60)
 
         # 诊断
-        if rc == 0 and self._finished_detected:
-            print(_c("\n✅ 正常完成", "green"))
+        if rc == 0:
+            if self._finished_detected:
+                print(_c("\n✅ 正常完成", "green"))
+            else:
+                print(_c("\n✅ 进程正常退出（exit 0），但日志未匹配到完成标记", "green"))
+                print("   请确认产物已生成（/data/saves/... 下的 adapter，或日志末尾的 train_runtime）")
             return 0
 
         if self._oom_detected:
@@ -364,10 +398,10 @@ class TrainMonitor:
         if rc is not None and rc < 0:
             sig = -rc
             print(_c(f"\n⚠️ 进程被信号终止 ({SIG_NAME.get(sig, f'signal {sig}')})", "yellow"))
-            if sig == signal.SIGKILL:
+            if sig == 9:  # SIGKILL：Linux OOM Killer 的标志（跨平台用字面量 9）
                 print(_c("   极大概率是系统 OOM Killer（Linux kernel 在内存不足时发送 SIGKILL-9）", "red"))
                 _advise_oom(system=True)
-            elif sig == signal.SIGSEGV:
+            elif sig == getattr(signal, "SIGSEGV", 11):
                 print("   段错误，可能与 CUDA 驱动或 flash-attn kernel 有关")
             return 2
 
@@ -387,9 +421,10 @@ class TrainMonitor:
 def _advise_oom(system: bool = False) -> None:
     print(_c("\n建议（按优先级）：", "cyan"))
     if system:
-        print("  1) 这是系统级 OOM，主机内存不够，不是 GPU 显存不够")
-        print("     → 加大 swap；加 RAM；或换到更大内存的实例")
-        print("     → 合并大模型（27B bf16）时 CPU 峰值约 60GB，内存不足会直接 SIGKILL")
+        print("  [系统内存] 这是系统级 OOM（SIGKILL-9），主机 RAM 不够，不是 GPU 显存不够")
+        print("     → 加大 swap / 加 RAM / 换更大内存实例")
+        print("     → 合并 27B bf16 时 CPU 峰值约 60GB，内存不足会被直接 SIGKILL")
+        print("     → 也可先按下面的 GPU 显存手段排查：")
     print("  1) cutoff_len 降到 16384 → 12288 → 8192（步顺序，不是尾部丢）")
     print("  2) gradient_accumulation_steps 4 → 8（micro-batch 保持 1）")
     print("  3) 确认 enable_liger_kernel: true（省 fp32 logits）")

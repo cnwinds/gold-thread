@@ -55,10 +55,13 @@ def main() -> int:
         rows = list(load(p))
         bad = [r for r in rows if not r.get("conversations") and not r.get("messages")]
         print(f"  {p.name:<48} {len(rows):>6} 条  结构异常 {len(bad)}")
-    train = root / "sft_step_windows_sharegpt.train.jsonl"
-    if not train.exists():
-        print("[err] 找不到训练集", file=sys.stderr)
+    train = next((root / x for x in (
+        "sft_step_windows_sharegpt.train.v2.jsonl",
+        "sft_step_windows_sharegpt.train.jsonl") if (root / x).exists()), None)
+    if train is None:
+        print("[err] 找不到训练集（v2 / v1 均无）", file=sys.stderr)
         return 1
+    print(f"  目标数据集: {train.name}")
 
     # 2) 目标步检查
     rows = list(load(train))[: args.samples]

@@ -51,7 +51,7 @@
 | :--- | :--- | :--- |
 | ① 原 yaml | ref = **隐式 base**（LoRA 关 adapter）、lr 5e-5、cutoff 8192 | 训练能跑，但**模型崩了**：输出变成乱码，`think` 不闭合、无 tool_call |
 | ② 只改 ref | `ref_model: qwen3-8b-merged`，lr 1e-5 | 显存 OOM（policy 16G + ref 16G + 图） |
-| ③ 最终 | ref 量化 8bit + lr 1e-5 + 窗口数据 cutoff 4096 | 22 步 / 7:27，train_loss 0.704，acc 0.50→0.70，margin +0.50，**格式正常** |
+| ③ 最终 | ref 量化 8bit + lr 1e-5 + 窗口数据 cutoff 4096 | 23 步 / 7:27（94 对 ÷ bs1×ga4），train_loss 0.704，acc 0.50→0.70，margin +0.50，**格式正常** |
 
 **根因**：LoRA 做 DPO 时，参考模型默认是「关掉 adapter 的 base」，也就是 Qwen3-8B 本身，
 而不是我们 SFT 出来的模型。SFT 模型和 base 分布差得远，DPO 就把它往 base 上拽 → 退化。

@@ -246,6 +246,14 @@ pip install -e ".[metrics]" --no-deps   # 避免 pip 把 transformers 改回 4.x
 # 3) flash-attn（有轮子时十几秒；若开始源码编译 → Ctrl+C，改用 SDPA 兜底）
 pip install flash-attn --no-build-isolation
 
+# 3b) Liger Kernel —— 8B 冒烟阶段【必装】，27B（qwen3_5）【必关】不用装
+#     8B 的 train_sft_qwen3_8b.yaml 里 enable_liger_kernel: true 是硬依赖：
+#     不装，第一个 step 就在 cross_entropy OOM（8.7K token × bs2 的 fp32 logits 要 10.1GB）
+pip install "liger-kernel>=0.8,<0.9"
+
+# 3c) bitsandbytes —— 仅 QLoRA 4bit / DPO ref_model 8bit 量化需要
+pip install bitsandbytes
+
 # 4) 验证三件事
 python -c "import transformers;print('transformers', transformers.__version__)"   # 期望 5.8.0
 python -c "from transformers import AutoConfig;c=AutoConfig.from_pretrained('/data/models/Qwen3.8-27B');print(c.model_type, c.architectures)"
@@ -263,6 +271,9 @@ pip install "git+https://github.com/huggingface/transformers.git@v5.8.0"
 
 **flash-attn 装不上怎么办**（不影响开训）：把 YAML 里
 `flash_attn: fa2` 改成 `flash_attn: sdpa`，torch 原生实现，16K 峰值大约多 3~5 GB。
+
+**Liger 装不上的兜底**：把 8B YAML 里 `enable_liger_kernel: true` 改成 `false`
+（同时 `cutoff_len` 降到 16384），代价是峰值显存多 10GB 左右；27B 本来就是 false。
 
 ### 4.4 目录规范（统一按数据盘 /data 布局）
 
@@ -644,10 +655,16 @@ llamafactory-cli train data/03_train/train_dpo.yaml
 
 单卡注意：
 
-- `cutoff_len` 已降到 **8192**（DPO 同时跑 policy + reference 两路前向，激活约翻倍）
-- 从 SFT 适配器继续：`model_name_or_path` 指底座，加 `adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft`
-  （或先 `llamafactory-cli export` 合并，再指合并后的目录）
-- `pref_beta: 0.1`；数据只有 100 对，1 epoch 即可
+- **`ref_model` 必须显式指向 SFT 模型**（`/data/models/Qwen3.8-27B-merged`）。
+  LoRA 做 DPO 时默认的 reference 是「关掉 adapter 的 base」，分布与 SFT 差太远 → 会把模型推崩
+  （8B 实测：输出乱码、think 不闭合、无 tool_call）。8B 的 `train_dpo_qwen3_8b.yaml` 已内置此修正。
+- `cutoff_len` 已降到 **8192**（DPO 同时跑 policy + reference 两路前向，激活约翻倍）；
+  数据用 **v2w 窗口裁剪版**（`pi_dpo_preference_pairs_train_v2w`），避免 LLaMA-Factory
+  从 prompt **尾部**截断（那会丢掉最近的 observation）
+- **显存**：policy bf16 ≈54G + ref 8bit ≈27G ≈ 81G，80G 临界。
+  OOM 依次：`ref_model_quantization_bit: 8 → 4` → `cutoff_len 8192 → 4096` → 2 卡 TP
+- 从 SFT 适配器继续：`model_name_or_path` 指底座 + `adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft`
+- `pref_beta: 0.1`；lr 用 **1e-5**（5e-5 会把模型推崩）；数据约 94 对，1 epoch 即可
 
 ## 9. 训练产物与迁移到 48G 推理机
 
