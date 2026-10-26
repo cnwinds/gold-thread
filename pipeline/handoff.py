@@ -258,10 +258,10 @@ def write_handoff(
 
 ```bash
 # 一条命令跑完 A~E 五组检查（无卡会自动把 GPU 项标记为 SKIP）
-python check_env.py --model /root/models/Qwen3.8-27B --data /root/data/03_train
+python check_env.py --model /data/models/Qwen3.8-27B --data /data/goldthread/03_train
 
 # 单独验数据 + 模板（CPU 即可，最值得先跑）
-python check_data.py --model /root/models/Qwen3.8-27B --template qwen3_8
+python check_data.py --model /data/models/Qwen3.8-27B --template qwen3_8
 ```
 
 `check_env.py` 会输出 `[PASS] / [FAIL] / [SKIP]` 三类：
@@ -312,7 +312,7 @@ pip install flash-attn --no-build-isolation
 
 # 4) 验证三件事
 python -c "import transformers;print('transformers', transformers.__version__)"   # 期望 5.8.0
-python -c "from transformers import AutoConfig;c=AutoConfig.from_pretrained('/root/models/Qwen3.8-27B');print(c.model_type, c.architectures)"
+python -c "from transformers import AutoConfig;c=AutoConfig.from_pretrained('/data/models/Qwen3.8-27B');print(c.model_type, c.architectures)"
 llamafactory-cli env
 ```
 
@@ -328,18 +328,92 @@ pip install "git+https://github.com/huggingface/transformers.git@v5.8.0"
 **flash-attn 装不上怎么办**（不影响开训）：把 YAML 里
 `flash_attn: fa2` 改成 `flash_attn: sdpa`，torch 原生实现，16K 峰值大约多 3~5 GB。
 
-### 4.3 下载底座模型
+### 4.3 目录规范（统一按数据盘 /data 布局）
 
-> ⚠️ **先核对架构**：`Qwen3.8-27B` 不是公开已知的官方仓库名，请以实际拿到的仓库为准。
+**所有大文件都放数据盘**，这样换机器时只挂盘、不改路径。下文所有命令都按这套路径写：
+
+```
+/data                                ← 数据盘挂载点（你已确认 200GB）
+├── models/
+│   ├── Qwen3.8-27B/                 ← 底座，bf16，约 55 GB     【必留】
+│   ├── Qwen3-8B/                    ← 冒烟用小模型，约 16 GB   【可选，验完可删】
+│   ├── Qwen3.8-27B-merged/          ← LoRA 合并产物，约 55 GB  【48G 推理要用】
+│   ├── Qwen3.8-27B-w4a16/           ← 4bit 量化产物，约 15 GB  【24G 推理才需要】
+│   └── smoke-qwen3-8b-merged/       ← 小模型合并产物，约 16 GB  【验完可删】
+├── goldthread/
+│   ├── 03_train/                    ← 本数据集（从开发机拷来，约 60 MB）
+│   ├── handoff.md / train_*.yaml / *.py
+│   └── inference_report.md          ← 推理机验收报告（见 §10.8）
+├── saves/                           ← 训练输出（adapter 每个约 0.5~1.5 GB）
+│   ├── qwen38-27b-goldthread-sft/
+│   ├── qwen38-27b-goldthread-dpo/
+│   └── smoke-qwen3-8b-sft/
+└── logs/
+```
+
+**为什么必须用绝对路径**：`output_dir: saves/...` 是相对**当前工作目录**的，
+你若在 `LLaMA-Factory/` 里执行，产物会落到 `LLaMA-Factory/saves/`，
+换机器或换目录就找不到了。本 handoff 生成的 YAML 已全部用 `/data/saves/...` 绝对路径。
+
+**首次准备**：
 
 ```bash
-# 方式 A：HuggingFace
-pip install -U "huggingface_hub[cli]"
-huggingface-cli download <你的真实仓库ID> --local-dir /root/models/Qwen3.8-27B
+mkdir -p /data/{{models,goldthread,saves,logs}}
+cp -r <本目录>/* /data/goldthread/03_train/     # 把 03_train 拷到数据盘
+```
 
-# 方式 B：ModelScope（国内更快）
+体积核算（200GB 盘）：
+
+{_table([
+    ["Qwen3.8-27B 底座", "55 GB", "训练与合并都要它"],
+    ["Qwen3.8-27B-merged", "55 GB", "推理产物"],
+    ["Qwen3-8B（冒烟）", "16 GB", "验完流程可删"],
+    ["4bit 量化", "15 GB", "只有 24G 机器才需要"],
+    ["训练输出 + checkpoint", "3 ~ 6 GB", "save_total_limit=2"],
+    ["数据集 + 环境", "10 GB", "含 pip 包"],
+    ["**合计**", "**约 154 GB**", "200GB 够用；若只做 48G 推理可只留 底座+merged"],
+], ["项", "体积", "说明"])}
+
+> 磁盘紧张时的取舍：**48G 推理只需要 `models/Qwen3.8-27B-merged`（55G）+ 免底座**，
+> 因为合并版已含权重；但若还是要重训，就必须保留原始底座。
+
+### 4.4 下载底座模型
+
+> 仓库已核实：**`Qwen/Qwen3.8-27B`**（ModelScope），架构见 §3。
+> 下载前先确认磁盘：`df -h /data` 需要 **≥ 70 GB 可用**（权重 55G + 余量）。
+
+```bash
+# 推荐：ModelScope（国内快，支持断点续传）
 pip install -U modelscope
-modelscope download --model <你的真实仓库ID> --local_dir /root/models/Qwen3.8-27B
+modelscope download --model Qwen/Qwen3.8-27B --local_dir /data/models/Qwen3.8-27B
+
+# 备选：HuggingFace
+pip install -U "huggingface_hub[cli]"
+hf download Qwen/Qwen3.8-27B --local-dir /data/models/Qwen3.8-27B
+```
+
+**下载完必须校验体积与文件数**（中断会留下残缺权重，训练时报错很难定位）：
+
+```bash
+du -sh /data/models/Qwen3.8-27B                       # 期望 ≈ 55G
+ls /data/models/Qwen3.8-27B/*.safetensors | wc -l     # 应与 index.json 里的 shard 数一致
+python - <<'PY'
+import json, pathlib
+d = pathlib.Path("/data/models/Qwen3.8-27B")
+idx = d / "model.safetensors.index.json"
+if idx.exists():
+    want = set(json.load(open(idx))["weight_map"].values())
+    have = {{p.name for p in d.glob("*.safetensors")}}
+    print("缺失分片:", sorted(want - have) or "无（完整）")
+else:
+    print("单文件权重，跳过分片校验")
+PY
+```
+
+小模型（冒烟用，见 §6.0）：
+
+```bash
+modelscope download --model Qwen/Qwen3-8B --local_dir /data/models/Qwen3-8B   # ≈16G
 ```
 
 下载后**必须**确认三件事：
@@ -347,15 +421,16 @@ modelscope download --model <你的真实仓库ID> --local_dir /root/models/Qwen
 ```bash
 python - <<'PY'
 import json, pathlib
-cfg = json.load(open("/root/models/Qwen3.8-27B/config.json"))
+cfg = json.load(open("/data/models/Qwen3.8-27B/config.json"))
 print("architectures      :", cfg.get("architectures"))
 print("max_position_emb   :", cfg.get("max_position_embeddings"))
 print("model_type         :", cfg.get("model_type"))
 print("hidden/layers      :", cfg.get("hidden_size"), "/", cfg.get("num_hidden_layers"))
 print("rope_scaling       :", cfg.get("rope_scaling"))
-# 若出现 linear_attention / gated_deltanet 等字段，说明是混合线性注意力架构：
-#   -> flash-attn 只对其中标准 attention 层生效
-#   -> 序列并行（Ulysses）可能不支持，长序列训练方案需另行核实
+# 已核实的期望值（与 §3 一致，若不同则需重新调整训练配置）：
+#   architectures = Qwen3_5ForConditionalGeneration
+#   model_type    = qwen3_5
+#   max_position_embeddings = 262144   rope_scaling = None
 PY
 ```
 
@@ -391,7 +466,7 @@ python -c "from llamafactory.data.template import TEMPLATES;print([k for k in TE
 再跑数据自检：
 
 ```bash
-python check_data.py --model /root/models/Qwen3.8-27B --template qwen3_8
+python check_data.py --model /data/models/Qwen3.8-27B --template qwen3_8
 # 期望：每条样本 ` thinking` 与 `` 各出现 1 次；tool_call 数与目标步一致；
 #       渲染后 token 数与 §2 的估算吻合
 ```
@@ -459,19 +534,19 @@ train_on_prompt: false # 与 mask_history 互斥，保持 false
 
 ```bash
 # 1) 下载小模型
-modelscope download --model Qwen/Qwen3-8B --local_dir /root/models/Qwen3-8B
+modelscope download --model Qwen/Qwen3-8B --local_dir /data/models/Qwen3-8B
 
 # 2) 数据 + 模板自检（把 --model 换成小模型，template 换成 qwen3）
-python check_data.py --model /root/models/Qwen3-8B --template qwen3
+python check_data.py --model /data/models/Qwen3-8B --template qwen3
 
 # 3) 冒烟训练：只跑 200 条 × 1 epoch
 llamafactory-cli train {root.as_posix()}/train_sft_smoke_qwen3_8b.yaml
 #    看三件事：loss 从 2.x 降到 1.x；nvidia-smi 峰值（应 < 35G）；无 OOM
 
 # 4) 合并 + 起服务 + 验工具调用（走 §10.4 的三条冒烟）
-llamafactory-cli export --model_name_or_path /root/models/Qwen3-8B \
-  --adapter_name_or_path saves/smoke-qwen3-8b-sft --template qwen3 \
-  --finetuning_type lora --export_dir /root/models/smoke-qwen3-8b-merged
+llamafactory-cli export --model_name_or_path /data/models/Qwen3-8B \
+  --adapter_name_or_path /data/saves/smoke-qwen3-8b-sft --template qwen3 \
+  --finetuning_type lora --export_dir /data/models/smoke-qwen3-8b-merged
 
 # 5) DPO 冒烟（只用 50 对）
 llamafactory-cli train {root.as_posix()}/train_dpo_smoke_qwen3_8b.yaml
@@ -485,6 +560,91 @@ llamafactory-cli train {root.as_posix()}/train_dpo_smoke_qwen3_8b.yaml
 - [ ] vLLM `/v1/chat/completions` 能解析出结构化 `tool_calls`
 - [ ] DPO 冒烟能跑完 1 epoch 不报错
 - [ ] 合并后的模型能被 vLLM 正常加载
+
+### 6.0.1 当前阶段：Qwen3-8B 完整执行顺序（逐条照做）
+
+目标：用 8B 把「数据 → SFT → 合并 → vLLM 工具调用 → DPO」整条链路跑出**可用模型**，
+再换 27B。每步都有验收点，不过就停在那一步排查。
+
+**Step 0 · 装依赖（无卡阶段就能做，约 6 GB）**
+
+```bash
+python -V                                     # 期望 3.12
+pip install "transformers==5.8.0" "accelerate>=1.3.0,<=1.11.0" "trl>=0.18.0,<=0.24.0" --no-cache-dir
+git clone --depth 1 https://github.com/hiyouga/LLaMA-Factory.git /opt/LLaMA-Factory
+cd /opt/LLaMA-Factory && pip install -e ".[metrics]" --no-deps
+pip install flash-attn --no-build-isolation || echo "装不上就改用 sdpa（见下）"
+llamafactory-cli env
+```
+> `--no-cache-dir` 省磁盘；`--no-deps` 防止 pip 把 transformers 降回 4.x。
+> flash-attn 失败不影响开训：把 YAML 里 `flash_attn: fa2` 改成 `sdpa`。
+
+**Step 1 · 下载 8B（16 GB）**
+
+```bash
+pip install -U modelscope
+modelscope download --model Qwen/Qwen3-8B --local_dir /data/models/Qwen3-8B
+du -sh /data/models/Qwen3-8B                  # 期望 ≈16G
+```
+
+**Step 2 · 数据与模板自检（CPU 即可）**
+
+```bash
+cd /data/goldthread/03_train
+python check_env.py --model /data/models/Qwen3-8B --data .
+python check_data.py --model /data/models/Qwen3-8B --template qwen3
+```
+验收：`check_env` 无 FAIL；`check_data` 里模板渲染每条 ` thinking×1  ×1`。
+**若 think 不是 1 对 → 停，先解决模板问题**（换模板或去掉数据里的 thinking）。
+
+**Step 3 · 冒烟训练（200 条 × 1 epoch，约 20 分钟）**
+
+```bash
+llamafactory-cli train /data/goldthread/03_train/train_sft_smoke_qwen3_8b.yaml
+```
+验收：`loss` 从 2.x 降到 1.x；无 OOM；日志里没有 `mask_history` / `tools` 告警。
+
+**Step 4 · 全量训练（548 条 × 3 epoch）**
+
+```bash
+llamafactory-cli train /data/goldthread/03_train/train_sft_qwen3_8b.yaml
+```
+48G 卡上 8B 很宽松（16G 权重 + 32K 激活 ≈ 35G），也可在 80G 上跑。
+预期：3 epoch、bs2×ga4 → 每 epoch 约 69 步，总约 207 步。
+
+**Step 5 · 合并并做工具调用验收**
+
+```bash
+llamafactory-cli export --model_name_or_path /data/models/Qwen3-8B \
+  --adapter_name_or_path /data/saves/qwen3-8b-goldthread-sft \
+  --template qwen3 --finetuning_type lora \
+  --export_dir /data/models/qwen3-8b-merged
+
+vllm serve /data/models/qwen3-8b-merged --max-model-len 32768 \
+  --gpu-memory-utilization 0.85 --enable-auto-tool-choice --tool-call-parser hermes \
+  --port 8000
+```
+然后按 **§10.4** 跑三条冒烟（存活 / 生成 / **工具调用**）。
+
+**Step 6 · DPO（可选但建议，验数据格式）**
+
+```bash
+llamafactory-cli train /data/goldthread/03_train/train_dpo_qwen3_8b.yaml
+```
+
+**Step 7 · 记录基线（换 27B 前必做）**
+
+```bash
+nvidia-smi --query-gpu=name,memory.total --format=csv
+# 记录：峰值显存 / 每步耗时 / 2 个 epoch 时的 loss
+```
+这些数字是换 27B 后判断"是否正常"的唯一参照：27B 的显存约为 8B 的 3.4 倍、
+步时约为 3~4 倍，超出太多说明配置有问题。
+
+> **换 27B 只需改三处**：`model_name_or_path` → `/data/models/Qwen3.8-27B`；
+> `template` → `qwen3_8`；`output_dir` → `/data/saves/qwen38-27b-goldthread-sft`。
+> 其余（`mask_history` / `packing: false` / `lora_target: mlp` / 无 deepspeed）保持不变，
+> 另需按 §3.1 关掉 `enable_liger_kernel`。
 
 ### 6.1 启动
 
@@ -522,7 +682,7 @@ llamafactory-cli train {root.as_posix()}/train_sft.yaml
 **长上下文验收**（验证 §3 的结论，不达标就别宣称"保住 256K"）：
 
 ```bash
-python verify_longctx.py --model /root/models/Qwen3.8-27B-merged \\
+python verify_longctx.py --model /data/models/Qwen3.8-27B-merged \\
     --lengths 8192,32768,65536,131072,262144
 # 逐档构造"前文 + 尾部提问"，记录是否 OOM/报错、首 token 延迟、生成是否连贯
 ```
@@ -536,7 +696,7 @@ llamafactory-cli train {root.as_posix()}/train_dpo.yaml
 单卡注意：
 
 - `cutoff_len` 已降到 **8192**（DPO 同时跑 policy + reference 两路前向，激活约翻倍）
-- 从 SFT 适配器继续：`model_name_or_path` 指底座，加 `adapter_name_or_path: saves/.../sft`
+- 从 SFT 适配器继续：`model_name_or_path` 指底座，加 `adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft`
   （或先 `llamafactory-cli export` 合并，再指合并后的目录）
 - `pref_beta: 0.1`；数据只有 {_fmt(dpo_train)} 对，1 epoch 即可
 
@@ -545,9 +705,9 @@ llamafactory-cli train {root.as_posix()}/train_dpo.yaml
 ### 9.1 数据盘上应该留什么
 
 {_table([
-    ["LoRA 适配器", "`saves/qwen38-27b-goldthread-sft/`", "≈ 0.5 GB", "**必留**；但单独无法推理，必须配底座"],
-    ["原始底座", "`/root/models/Qwen3.8-27B`", "≈ 55 GB", "**必留**；适配器要挂在它上面"],
-    ["合并后 bf16", "`/root/models/Qwen3.8-27B-merged`", "≈ 55 GB", "交给 24G 机器前建议先在训练机量化，见 9.2"],
+    ["LoRA 适配器", "`/data/saves/qwen38-27b-goldthread-sft/`", "≈ 0.5 GB", "**必留**；但单独无法推理，必须配底座"],
+    ["原始底座", "`/data/models/Qwen3.8-27B`", "≈ 55 GB", "**必留**；适配器要挂在它上面"],
+    ["合并后 bf16", "`/data/models/Qwen3.8-27B-merged`", "≈ 55 GB", "交给 24G 机器前建议先在训练机量化，见 9.2"],
     ["量化产物", "`…-merged-4bit/` 或 `*.gguf`", "15 ~ 17 GB", "24G 机器的实际推理载体"],
 ], ["类型", "路径", "体积", "说明"])}
 
@@ -574,7 +734,7 @@ llamafactory-cli train {root.as_posix()}/train_dpo.yaml
 ```bash
 # 用 22GB 上限模拟 24G 卡（多卡卡也能跑，只限制显存预算）
 CUDA_VISIBLE_DEVICES=0 python probe_24g.py \
-    --model /root/models/Qwen3.8-27B-merged \
+    --model /data/models/Qwen3.8-27B-merged \
     --limit-gb 22
 ```
 
@@ -650,15 +810,15 @@ vllm serve /data/models/Qwen3.8-27B-merged-4bit   --tensor-parallel-size 2 --max
 ```bash
 # 1) 合并 LoRA（训练机上做，输出到数据盘）
 llamafactory-cli export \
-  --model_name_or_path /root/models/Qwen3.8-27B \
-  --adapter_name_or_path saves/qwen38-27b-goldthread-sft \
+  --model_name_or_path /data/models/Qwen3.8-27B \
+  --adapter_name_or_path /data/saves/qwen38-27b-goldthread-sft \
   --template qwen3_8 --finetuning_type lora \
-  --export_dir /root/models/Qwen3.8-27B-merged
+  --export_dir /data/models/Qwen3.8-27B-merged
 
 # 2a) 方案①：不转换，直接动态 4-bit（最省事，先试这个）
 python - <<'PY'
 from transformers import AutoModelForCausalLM, AutoTokenizer
-m = "/root/models/Qwen3.8-27B-merged"
+m = "/data/models/Qwen3.8-27B-merged"
 tok = AutoTokenizer.from_pretrained(m, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(
     m, load_in_4bit=True, device_map={{"": 0}},
@@ -669,14 +829,14 @@ PY
 # 2b) 方案②：GPTQ/AWQ 离线量化（需工具支持该架构）
 pip install llm-compressor
 python -m llmcompressor.transformers.entrypoints.oneshot \
-  --model /root/models/Qwen3.8-27B-merged --scheme W4A16 \
-  --output_dir /root/models/Qwen3.8-27B-w4a16
+  --model /data/models/Qwen3.8-27B-merged --scheme W4A16 \
+  --output_dir /data/models/Qwen3.8-27B-w4a16
 
 # 2c) 方案③：GGUF（llama.cpp）
 git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
 pip install -r requirements.txt
-python convert_hf_to_gguf.py /root/models/Qwen3.8-27B-merged \
-  --outfile /root/models/qwen38-27b-Q4_K_M.gguf --outtype q4_k_m
+python convert_hf_to_gguf.py /data/models/Qwen3.8-27B-merged \
+  --outfile /data/models/qwen38-27b-Q4_K_M.gguf --outtype q4_k_m
 # 若报 "unsupported model architecture: qwen3_5"，说明 llama.cpp 尚未支持，此路不通
 ```
 
@@ -892,7 +1052,7 @@ MD
     (root / "handoff.md").write_text(doc, encoding="utf-8")
 
     (root / "train_sft.yaml").write_text(f"""### model
-model_name_or_path: /root/models/Qwen3.8-27B          # 改成你的真实路径
+model_name_or_path: /data/models/Qwen3.8-27B          # 改成你的真实路径
 trust_remote_code: true
 flash_attn: fa2                                      # 仅对 full_attention 层生效；装不上改 sdpa
 enable_liger_kernel: false                           # qwen3_5 不在 Liger 支持列表，先关
@@ -917,7 +1077,7 @@ overwrite_cache: true
 preprocessing_num_workers: 8
 
 ### output
-output_dir: saves/qwen38-27b-goldthread-sft
+output_dir: /data/saves/qwen38-27b-goldthread-sft
 logging_steps: 5
 save_steps: 100
 save_total_limit: 2
@@ -940,11 +1100,110 @@ eval_strategy: steps
 eval_steps: 100
 """, encoding="utf-8")
 
+    (root / "train_sft_qwen3_8b.yaml").write_text(f"""### 当前阶段主配置：Qwen3-8B 全量训练（48G / 80G 都能跑）
+### 用途：先把「数据 → 训练 → 合并 → 推理」整条链路跑出可用模型
+### 换 27B 时只需改 model_name_or_path 与 template: qwen3_8
+### model
+model_name_or_path: /data/models/Qwen3-8B
+trust_remote_code: true
+flash_attn: fa2
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 32
+lora_target: all
+
+### dataset
+dataset_dir: {root.as_posix()}
+dataset: pi_sft_step_windows_train
+eval_dataset: pi_sft_step_windows_eval
+template: qwen3
+cutoff_len: 32768
+packing: false
+mask_history: true
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /data/saves/qwen3-8b-goldthread-sft
+logging_steps: 5
+save_steps: 100
+save_total_limit: 2
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 4
+learning_rate: 2.0e-4
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+
+### eval
+per_device_eval_batch_size: 2
+eval_strategy: steps
+eval_steps: 100
+""", encoding="utf-8")
+
+    (root / "train_dpo_qwen3_8b.yaml").write_text(f"""### Qwen3-8B 的 DPO（SFT 达标后跑，全量 100 对）
+### model
+model_name_or_path: /data/models/Qwen3-8B
+adapter_name_or_path: /data/saves/qwen3-8b-goldthread-sft
+trust_remote_code: true
+flash_attn: fa2
+
+### method
+stage: dpo
+do_train: true
+finetuning_type: lora
+lora_rank: 32
+lora_target: all
+pref_beta: 0.1
+pref_loss: sigmoid
+
+### dataset
+dataset_dir: {root.as_posix()}
+dataset: pi_dpo_preference_pairs_train
+eval_dataset: pi_dpo_preference_pairs_eval
+template: qwen3
+cutoff_len: 8192
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /data/saves/qwen3-8b-goldthread-dpo
+logging_steps: 5
+save_steps: 100
+save_total_limit: 2
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 5.0e-5
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+
+### eval
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 50
+""", encoding="utf-8")
+
     (root / "train_sft_smoke_qwen3_8b.yaml").write_text(f"""### 冒烟用：Qwen3-8B（标准注意力，48G 上很宽松）
 ### 目的：验证 模板 / mask_history / tools 列 / 窗口结构 / 合并 / vLLM 全链路
 ### 确认无误后再换回 27B 的 train_sft.yaml
 ### model
-model_name_or_path: /root/models/Qwen3-8B
+model_name_or_path: /data/models/Qwen3-8B
 trust_remote_code: true
 flash_attn: fa2
 
@@ -968,7 +1227,7 @@ preprocessing_num_workers: 8
 max_samples: 200                                     # 冒烟：只跑 200 条
 
 ### output
-output_dir: saves/smoke-qwen3-8b-sft
+output_dir: /data/saves/smoke-qwen3-8b-sft
 logging_steps: 5
 save_steps: 100
 save_total_limit: 1
@@ -993,8 +1252,8 @@ eval_steps: 50
 
     (root / "train_dpo_smoke_qwen3_8b.yaml").write_text(f"""### 冒烟用 DPO：Qwen3-8B，只跑 50 对
 ### model
-model_name_or_path: /root/models/Qwen3-8B
-adapter_name_or_path: saves/smoke-qwen3-8b-sft
+model_name_or_path: /data/models/Qwen3-8B
+adapter_name_or_path: /data/saves/smoke-qwen3-8b-sft
 trust_remote_code: true
 flash_attn: fa2
 
@@ -1019,7 +1278,7 @@ preprocessing_num_workers: 8
 max_samples: 50                                      # 冒烟：只跑 50 对
 
 ### output
-output_dir: saves/smoke-qwen3-8b-dpo
+output_dir: /data/saves/smoke-qwen3-8b-dpo
 logging_steps: 5
 save_steps: 50
 save_total_limit: 1
@@ -1035,7 +1294,7 @@ gradient_checkpointing: true
 """, encoding="utf-8")
 
     (root / "train_sft_qlora.yaml").write_text(f"""### model
-model_name_or_path: /root/models/Qwen3.8-27B
+model_name_or_path: /data/models/Qwen3.8-27B
 trust_remote_code: true
 flash_attn: fa2
 enable_liger_kernel: false
@@ -1063,7 +1322,7 @@ overwrite_cache: true
 preprocessing_num_workers: 8
 
 ### output
-output_dir: saves/qwen38-27b-goldthread-sft-qlora
+output_dir: /data/saves/qwen38-27b-goldthread-sft-qlora
 logging_steps: 5
 save_steps: 100
 save_total_limit: 2
@@ -1086,8 +1345,8 @@ eval_steps: 100
 """, encoding="utf-8")
 
     (root / "train_dpo.yaml").write_text(f"""### model
-model_name_or_path: /root/models/Qwen3.8-27B
-adapter_name_or_path: saves/qwen38-27b-goldthread-sft   # SFT 适配器；或改为合并后的目录
+model_name_or_path: /data/models/Qwen3.8-27B
+adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft   # SFT 适配器；或改为合并后的目录
 trust_remote_code: true
 flash_attn: fa2
 enable_liger_kernel: true
@@ -1113,7 +1372,7 @@ overwrite_cache: true
 preprocessing_num_workers: 8
 
 ### output
-output_dir: saves/qwen38-27b-goldthread-dpo
+output_dir: /data/saves/qwen38-27b-goldthread-dpo
 logging_steps: 5
 save_steps: 100
 save_total_limit: 2
@@ -1139,7 +1398,7 @@ eval_steps: 50
 """在训练机上模拟小显存推理：报告 bf16 / 4bit / 8bit 三种加载方式能否在限额内跑起来。
 
 用法：
-    python probe_24g.py --model /root/models/Qwen3.8-27B-merged --limit-gb 22
+    python probe_24g.py --model /data/models/Qwen3.8-27B-merged --limit-gb 22
 
 输出每种方式的：成功与否、峰值显存、首 token 延迟、报错摘要。
 据此决定 24G 推理机走哪条路（4bit 直载 / GPTQ / GGUF）。
@@ -1306,7 +1565,7 @@ if __name__ == "__main__":
 """环境自检：无 GPU 也能跑的检查 + 有 GPU 后才做的清单。
 
 用法：
-    python check_env.py --model /root/models/Qwen3.8-27B --data /root/data/03_train
+    python check_env.py --model /data/models/Qwen3.8-27B --data /data/goldthread/03_train
     python check_env.py                       # 只查软件栈与依赖版本
 
 设计：每项检查独立 try，输出 [PASS] / [FAIL] / [SKIP]（无 GPU 时跳过）。
@@ -1602,7 +1861,7 @@ if __name__ == "__main__":
 """训练前自检：数据结构 + 对话模板渲染（防 think 标签重复注入）。
 
 用法：
-    python check_data.py --model /root/models/Qwen3.8-27B --template qwen3
+    python check_data.py --model /data/models/Qwen3.8-27B --template qwen3
     python check_data.py --drop-tools          # 框架不支持 tools 列时先剥离
 """
 from __future__ import annotations
@@ -1723,7 +1982,7 @@ if __name__ == "__main__":
 """长上下文验收：确认 LoRA 合并后的模型在各档长度下仍能正常工作。
 
 用法：
-    python verify_longctx.py --model /root/models/Qwen3.8-27B-merged \\
+    python verify_longctx.py --model /data/models/Qwen3.8-27B-merged \\
         --lengths 8192,32768,65536,131072,262144
 
 判断标准：不报错、首 token 延迟合理、生成内容与前文相关（人工看前 200 字）。
@@ -1801,6 +2060,8 @@ if __name__ == "__main__":
         "train_dpo.yaml": str(root / "train_dpo.yaml"),
         "train_sft_smoke_qwen3_8b.yaml": str(root / "train_sft_smoke_qwen3_8b.yaml"),
         "train_dpo_smoke_qwen3_8b.yaml": str(root / "train_dpo_smoke_qwen3_8b.yaml"),
+        "train_sft_qwen3_8b.yaml": str(root / "train_sft_qwen3_8b.yaml"),
+        "train_dpo_qwen3_8b.yaml": str(root / "train_dpo_qwen3_8b.yaml"),
         "check_data.py": str(root / "check_data.py"),
         "verify_longctx.py": str(root / "verify_longctx.py"),
         "probe_24g.py": str(root / "probe_24g.py"),
