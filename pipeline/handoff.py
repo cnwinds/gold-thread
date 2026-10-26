@@ -466,29 +466,164 @@ llamafactory-cli train {root.as_posix()}/train_dpo.yaml
   （或先 `llamafactory-cli export` 合并，再指合并后的目录）
 - `pref_beta: 0.1`；数据只有 {_fmt(dpo_train)} 对，1 epoch 即可
 
-## 9. 合并与推理
+## 9. 训练产物与迁移到 24G 推理机
+
+### 9.1 数据盘上应该留什么
+
+{_table([
+    ["LoRA 适配器", "`saves/qwen38-27b-goldthread-sft/`", "≈ 0.5 GB", "**必留**；但单独无法推理，必须配底座"],
+    ["原始底座", "`/root/models/Qwen3.8-27B`", "≈ 55 GB", "**必留**；适配器要挂在它上面"],
+    ["合并后 bf16", "`/root/models/Qwen3.8-27B-merged`", "≈ 55 GB", "交给 24G 机器前建议先在训练机量化，见 9.2"],
+    ["量化产物", "`…-merged-4bit/` 或 `*.gguf`", "15 ~ 17 GB", "24G 机器的实际推理载体"],
+], ["类型", "路径", "体积", "说明"])}
+
+⚠️ **只拷适配器（0.5G）到新机器是跑不起来的**——必须先有底座，或者先在训练机合并/量化。
+
+### 9.2 24GB 显卡能不能推理？—— 分三种情况
+
+**结论：bf16 直接加载不可能（54G > 24G），必须量化。**
+而这个模型是 `Qwen3_5ForConditionalGeneration`（混合线性注意力 + 多模态），
+量化工具对它的支持需要实测，不能假设。
+
+按顺序尝试，前一个不通再走下一个：
+
+{_table([
+    ["① bnb 4-bit 动态量化", "transformers + bitsandbytes，加载时量化，无需转换", "15G 权重 + KV", "**最快验证**；但对 linear_attention 层的支持未知"],
+    ["② GPTQ / AWQ 离线量化", "llm-compressor / autoawq 先转 4bit 权重再加载", "14~15G", "质量/速度更好；需工具支持该 arch"],
+    ["③ GGUF（llama.cpp）", "convert_hf_to_gguf.py → Q4_K_M，llama.cpp 推理", "16~17G", "最省显存、可 CPU/GPU 混合；需 llama.cpp 支持 qwen3next 系架构"],
+], ["方案", "做法", "显存", "说明"])}
+
+### 9.3 先探测，再决定买/换卡（在训练机上跑，不用等换机）
+
+数据盘挂到新机器前，**先在 80G 训练机上把 24G 场景模拟一遍**：
 
 ```bash
-# 合并 LoRA
-llamafactory-cli export \\
-  --model_name_or_path /root/models/Qwen3.8-27B \\
-  --adapter_name_or_path saves/qwen38-27b-goldthread-sft \\
-  --template qwen3 --finetuning_type lora \\
+# 用 22GB 上限模拟 24G 卡（多卡卡也能跑，只限制显存预算）
+CUDA_VISIBLE_DEVICES=0 python probe_24g.py \
+    --model /root/models/Qwen3.8-27B-merged \
+    --limit-gb 22
+```
+
+脚本会依次尝试：bf16 / 4-bit(bnb) / 8-bit，报告每种的**是否成功、峰值显存、首token延迟**。
+根据结果：
+
+- **4-bit 成功** → 24G 机器可直接 `load_in_4bit` 推理（注意 KV 预算，见 9.4）
+- **只有 8-bit 成功** → 8bit 约 28G，24G 仍不够 → 需要 GGUF 路线
+- **全部失败** → 走 GGUF（`llama.cpp`）；若 llama.cpp 也不支持该架构 →
+  24G 只能用 CPU offload（约 1~3 tok/s）或换 48G/80G
+
+### 9.4 如果要 256K 上下文推理：显存精算
+
+基于实测架构（16 个 full_attention 层 × 4 KV heads × head_dim 256）：
+
+```
+KV / token  = 2(K,V) × 4 heads × 256 dim × bytes × 16 层
+            = 64 KB (bf16)   /   32 KB (fp8)
+256K KV     = 16 GB (bf16)    /    8 GB (fp8)
+```
+线性注意力那 48 层状态是固定大小，不随序列增长 —— 这是这个架构唯一的便宜处。
+
+{_table([
+    ["bf16 权重 55G", "16 G", "**74 G**", "8 G", "66 G", "80G（0.9 利用率，紧）"],
+    ["8bit 权重 28G", "16 G", "47 G", "8 G", "**39 G**", "48G"],
+    ["4bit 权重 15G", "16 G", "34 G", "8 G", "**26 G**", "48G"],
+], ["权重档", "KV(bf16)", "合计+3G", "KV(fp8)", "合计+3G", "最小显卡"])}
+
+**结论**：
+
+- **24G 单卡做不了 256K**：最省的组合（4bit + fp8 KV）也要 15 + 8 + 3 = **26 G > 24 G**
+- **2 × 24G + TP=2 理论可行**（每卡约 15G），但依赖 vLLM 对混合线性注意力的张量并行支持，
+  且 prefill 256K 的 TTFT 会到分钟级 → 只适合离线批处理，不适合交互
+- **务实推荐**：**1 × 48G（L40S / A6000 / A100-40 勉强）** 跑 `4bit + bf16 KV`，
+  或 **1 × 80G（A800）** 跑 `bf16 权重 + fp8 KV`（66G），后者质量与速度都最好
+
+### 9.4.1 24G 实际能跑多长
+
+```
+4-bit 权重 15 GB → 剩余约 7 GB
+   bf16 KV：7G / 64KB ≈ 110K tokens（理论），实际建议 16K~32K（要给激活留余量）
+   fp8 KV ：7G / 32KB ≈ 220K tokens（理论），实际建议 32K~64K
+```
+即 **24G 的舒适区间是 4K~16K，开 fp8 KV 可到 32K**，够跑单步窗口式的 agent 调用。
+
+### 9.4.2 vLLM 启动参数（按卡型选）
+
+```bash
+# 48G：4bit + bf16 KV，256K 可行
+vllm serve /data/models/Qwen3.8-27B-merged-4bit   --max-model-len 262144   --gpu-memory-utilization 0.92   --kv-cache-dtype auto   --max-num-seqs 1   --enable-chunked-prefill   --max-num-batched-tokens 8192   --enable-auto-tool-choice --tool-call-parser hermes
+
+# 80G：bf16 权重 + fp8 KV，质量最好
+vllm serve /data/models/Qwen3.8-27B-merged   --max-model-len 262144   --kv-cache-dtype fp8   --gpu-memory-utilization 0.92 --max-num-seqs 1   --enable-chunked-prefill --max-num-batched-tokens 8192   --enable-auto-tool-choice --tool-call-parser hermes
+
+# 2×24G：4bit + fp8 KV + TP=2（先确认 vLLM 支持该架构的 TP）
+vllm serve /data/models/Qwen3.8-27B-merged-4bit   --tensor-parallel-size 2 --max-model-len 262144   --kv-cache-dtype fp8 --gpu-memory-utilization 0.95   --max-num-seqs 1 --enable-chunked-prefill --max-num-batched-tokens 4096
+```
+
+**必须加 `--max-num-seqs 1`**：256K 下一个请求就能吃满 KV，并发会直接 OOM。
+**必须开 `--enable-chunked-prefill`**：否则 256K prefill 的瞬时激活会炸。
+
+### 9.4.3 关于"256K 质量"的现实提醒
+
+我们的 LoRA 只在 ≤16K 上训练过。因此：
+
+- 接口上能喂 256K（`max_position_embeddings=262144`，`rope_scaling=None`）
+- 但 100K+ 的实际表现**未被训练强化**，可能不如原始底座
+- 换机前务必用 `verify_longctx.py` 在 8K/32K/64K/131K/256K 逐档跑一遍，
+  确认不是"能加载但答非所问"
+
+### 9.5 合并与量化命令
+
+```bash
+# 1) 合并 LoRA（训练机上做，输出到数据盘）
+llamafactory-cli export \
+  --model_name_or_path /root/models/Qwen3.8-27B \
+  --adapter_name_or_path saves/qwen38-27b-goldthread-sft \
+  --template qwen3_8 --finetuning_type lora \
   --export_dir /root/models/Qwen3.8-27B-merged
+
+# 2a) 方案①：不转换，直接动态 4-bit（最省事，先试这个）
+python - <<'PY'
+from transformers import AutoModelForCausalLM, AutoTokenizer
+m = "/root/models/Qwen3.8-27B-merged"
+tok = AutoTokenizer.from_pretrained(m, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained(
+    m, load_in_4bit=True, device_map={{"": 0}},
+    max_memory={{0: "20GiB"}}, trust_remote_code=True)
+print("loaded, 4bit OK")
+PY
+
+# 2b) 方案②：GPTQ/AWQ 离线量化（需工具支持该架构）
+pip install llm-compressor
+python -m llmcompressor.transformers.entrypoints.oneshot \
+  --model /root/models/Qwen3.8-27B-merged --scheme W4A16 \
+  --output_dir /root/models/Qwen3.8-27B-w4a16
+
+# 2c) 方案③：GGUF（llama.cpp）
+git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
+pip install -r requirements.txt
+python convert_hf_to_gguf.py /root/models/Qwen3.8-27B-merged \
+  --outfile /root/models/qwen38-27b-Q4_K_M.gguf --outtype q4_k_m
+# 若报 "unsupported model architecture: qwen3_5"，说明 llama.cpp 尚未支持，此路不通
 ```
+
+### 9.6 新机器（24G）上的最小推理验证
 
 ```bash
-# vLLM 起 256K 上下文服务（合并后在独立环境/实例里装 vllm，避免和训练栈冲突）
-pip install vllm
-vllm serve /root/models/Qwen3.8-27B-merged \\
-  --max-model-len 262144 \\
-  --gpu-memory-utilization 0.90 \\
-  --enable-auto-tool-choice --tool-call-parser hermes
+# 4-bit 加载 + 一次生成
+python - <<'PY'
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+m = "/data/models/Qwen3.8-27B-merged"   # 数据盘挂载点
+tok = AutoTokenizer.from_pretrained(m, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained(m, load_in_4bit=True,
+        device_map={{"": 0}}, max_memory={{0: "21GiB"}}, trust_remote_code=True)
+msgs = [{{"role": "user", "content": "帮我破解 xxx.xapk，先告诉我第一步做什么"}}]
+ids = tok.apply_chat_template(msgs, add_generation_prompt=True, return_tensors="pt").to(model.device)
+print(tok.decode(model.generate(ids, max_new_tokens=128)[0], skip_special_tokens=True))
+PY
 ```
 
-> **为什么不能直接 `--max-model-len 262144`**：KV cache 每 token 64 KB（4KB × 16 个 full 层），
-> 256K 上下文需要约 **16 GB**，加权重 55G 已接近 80G 上限，实际会 OOM。
-> 务实做法（按顺序）：`32768` → `65536` → 加 `--kv-cache-dtype fp8`（KV 减半）→ 2 卡 `--tensor-parallel-size 2`。
+**验收三条**：能加载、能生成 `thinking + <tool_call>`、`nvidia-smi` 峰值 < 23GB。
 
 ## 10. 排障表
 
@@ -668,6 +803,102 @@ per_device_eval_batch_size: 1
 eval_strategy: steps
 eval_steps: 50
 """, encoding="utf-8")
+
+    (root / "probe_24g.py").write_text('''#!/usr/bin/env python3
+"""在训练机上模拟小显存推理：报告 bf16 / 4bit / 8bit 三种加载方式能否在限额内跑起来。
+
+用法：
+    python probe_24g.py --model /root/models/Qwen3.8-27B-merged --limit-gb 22
+
+输出每种方式的：成功与否、峰值显存、首 token 延迟、报错摘要。
+据此决定 24G 推理机走哪条路（4bit 直载 / GPTQ / GGUF）。
+"""
+from __future__ import annotations
+
+import argparse
+import gc
+import sys
+import time
+
+
+def try_load(path: str, mode: str, limit_gb: float):
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    kw = {"trust_remote_code": True, "device_map": {"": 0},
+          "max_memory": {0: f"{limit_gb:.0f}GiB"}}
+    if mode == "bf16":
+        kw["torch_dtype"] = torch.bfloat16
+    elif mode == "8bit":
+        kw["load_in_8bit"] = True
+    elif mode == "4bit":
+        kw["load_in_4bit"] = True
+
+    t0 = time.time()
+    tok = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(path, **kw)
+    load_s = time.time() - t0
+
+    msgs = [{"role": "user", "content": "用一句话说明你会怎么开始分析一个 xapk 包。"}]
+    try:
+        ids = tok.apply_chat_template(msgs, add_generation_prompt=True, return_tensors="pt")
+    except Exception:
+        ids = tok("用一句话说明你会怎么开始分析一个 xapk 包。", return_tensors="pt").input_ids
+    ids = ids.to(model.device)
+
+    torch.cuda.reset_peak_memory_stats()
+    t1 = time.time()
+    with torch.no_grad():
+        out = model.generate(ids, max_new_tokens=32, do_sample=False)
+    gen_s = time.time() - t1
+    peak = torch.cuda.max_memory_allocated() / 1024**3
+    text = tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True)[:120].replace("\\n", " ")
+    del model, tok
+    gc.collect()
+    torch.cuda.empty_cache()
+    return True, load_s, gen_s, peak, text
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--limit-gb", type=float, default=22.0)
+    ap.add_argument("--modes", default="4bit,8bit,bf16")
+    args = ap.parse_args()
+    try:
+        import torch
+    except ImportError:
+        print("[err] 需要 torch", file=sys.stderr)
+        return 1
+    print(f"GPU: {torch.cuda.get_device_name(0)} | 模拟限额 {args.limit_gb:.0f} GB")
+    print(f"模型: {args.model}\\n")
+    for mode in [m.strip() for m in args.modes.split(",") if m.strip()]:
+        print(f"--- 尝试 {mode} ---")
+        try:
+            ok, load_s, gen_s, peak, text = try_load(args.model, mode, args.limit_gb)
+            verdict = "可用" if peak <= args.limit_gb else "超限"
+            print(f"  [{verdict}] 加载 {load_s:.0f}s 生成 {gen_s:.1f}s 峰值 {peak:.1f}GB")
+            print(f"  输出: {text}")
+        except torch.cuda.OutOfMemoryError:
+            print("  [OOM] 显存不足")
+            torch.cuda.empty_cache()
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [失败] {type(exc).__name__}: {str(exc)[:200]}")
+            try:
+                torch.cuda.empty_cache()
+            except Exception:  # noqa: BLE001
+                pass
+        print()
+    print("判定建议：")
+    print("  · 4bit 可用 -> 24G 机器直接 load_in_4bit，上下文 4K~16K")
+    print("  · 仅 8bit 可用 -> 24G 不够，走 GGUF（llama.cpp）")
+    print("  · 全部失败 -> 换 48G/80G，或 CPU offload（1~3 tok/s）")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+''', encoding="utf-8")
 
     (root / "check_data.py").write_text('''#!/usr/bin/env python3
 """训练前自检：数据结构 + 对话模板渲染（防 think 标签重复注入）。
@@ -872,4 +1103,5 @@ if __name__ == "__main__":
         "train_dpo.yaml": str(root / "train_dpo.yaml"),
         "check_data.py": str(root / "check_data.py"),
         "verify_longctx.py": str(root / "verify_longctx.py"),
+        "probe_24g.py": str(root / "probe_24g.py"),
     }
