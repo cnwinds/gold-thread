@@ -28,6 +28,7 @@ ENV = {
     "python": "3.12",
     "disk": "200 GB",
     "ram": ">100 GB",
+    "infer_gpu": "1 × 48GB（L40S / RTX A6000 Ada / A100-40）",
     "repo": "Qwen/Qwen3.8-27B（ModelScope）",
 }
 
@@ -466,7 +467,7 @@ llamafactory-cli train {root.as_posix()}/train_dpo.yaml
   （或先 `llamafactory-cli export` 合并，再指合并后的目录）
 - `pref_beta: 0.1`；数据只有 {_fmt(dpo_train)} 对，1 epoch 即可
 
-## 9. 训练产物与迁移到 24G 推理机
+## 9. 训练产物与迁移到 48G 推理机
 
 ### 9.1 数据盘上应该留什么
 
@@ -534,8 +535,8 @@ KV / token  = 2(K,V) × 4 heads × 256 dim × bytes × 16 层
 - **24G 单卡做不了 256K**：最省的组合（4bit + fp8 KV）也要 15 + 8 + 3 = **26 G > 24 G**
 - **2 × 24G + TP=2 理论可行**（每卡约 15G），但依赖 vLLM 对混合线性注意力的张量并行支持，
   且 prefill 256K 的 TTFT 会到分钟级 → 只适合离线批处理，不适合交互
-- **务实推荐**：**1 × 48G（L40S / A6000 / A100-40 勉强）** 跑 `4bit + bf16 KV`，
-  或 **1 × 80G（A800）** 跑 `bf16 权重 + fp8 KV`（66G），后者质量与速度都最好
+- **已定方案：1 × 48G** 跑 `4bit + bf16 KV`（31G），256K 可行且留 2 并发余量；
+  具体执行步骤见 **§10**（AI 可直接照做）
 
 ### 9.4.1 24G 实际能跑多长
 
@@ -625,7 +626,170 @@ PY
 
 **验收三条**：能加载、能生成 `thinking + <tool_call>`、`nvidia-smi` 峰值 < 23GB。
 
-## 10. 排障表
+## 10. 48G 推理机交接清单（AI Agent 可直接照做）
+
+> **目标**：在 {ENV["infer_gpu"]} 上，以 **4-bit 权重 + 256K 上下文**提供推理服务。
+> 环境与训练机一致：{ENV["os"]} / CUDA {ENV["cuda"]} / torch {ENV["torch"]} / py{ENV["python"]}，数据盘整盘挂载。
+
+### 10.0 决策表：先看数据盘上有什么
+
+{_table([
+    ["`*-merged/`（bf16, 55G）+ adapter", "→ 10.2 装依赖 → 10.3-A 在线 4bit 启动"],
+    ["只有 adapter（0.5G）", "→ **无法推理**，回训练机执行 §9.5 合并"],
+    ["`*-4bit/` 或 `*gptq*`", "→ 10.3-B 直接加载量化产物（更快）"],
+    ["只有 `*.gguf`", "→ 10.5 走 llama.cpp"],
+], ["数据盘产物", "下一步"])}
+
+### 10.1 硬件与环境确认（30 秒，不通过先别往下走）
+
+```bash
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
+python -V
+python -c "import torch;print(torch.__version__, torch.version.cuda, torch.cuda.is_bf16_supported())"
+df -h /data ; free -g | head -2
+```
+
+通过标准：显存 **≥ 44 GB**；`torch {ENV["torch"]}` / cuda `{ENV["cuda"]}` / bf16 `True`；`/data` 可用 ≥ 40 GB。
+
+### 10.2 安装推理依赖
+
+```bash
+pip install "vllm>=0.11"                    # 需含 Qwen3_5 支持
+pip install "transformers==5.8.0" "accelerate<=1.11.0"
+
+# 关键：确认 vLLM 认识这个架构（False 就别往下走，见 10.6）
+python -c "from vllm.model_executor.models.registry import ModelRegistry as R; \
+print('Qwen3_5ForConditionalGeneration' in R.get_supported_archs())"
+```
+
+### 10.3 启动服务（48G 推荐参数）
+
+**A. 在线 4-bit（最省事，先用这个）**
+
+```bash
+vllm serve /data/models/Qwen3.8-27B-merged \
+  --quantization bitsandbytes --load-format bitsandbytes \
+  --max-model-len 262144 \
+  --kv-cache-dtype bf16 \
+  --gpu-memory-utilization 0.90 \
+  --max-num-seqs 2 \
+  --enable-chunked-prefill --max-num-batched-tokens 8192 \
+  --enable-auto-tool-choice --tool-call-parser hermes \
+  --port 8000
+```
+
+显存账：4-bit 权重 ≈15G + KV(bf16) ≈16G = **31G**，48G 有余量 → 可留 2 并发。
+**若 OOM，按这个顺序降**：`--max-model-len 131072` → `--kv-cache-dtype fp8` → `--max-num-seqs 1`。
+
+**B. 离线量化（A 能跑但嫌加载慢/吞吐低时）**
+
+```bash
+pip install llm-compressor
+python -m llmcompressor.transformers.entrypoints.oneshot \
+  --model /data/models/Qwen3.8-27B-merged --scheme W4A16 \
+  --output_dir /data/models/Qwen3.8-27B-w4a16
+
+vllm serve /data/models/Qwen3.8-27B-w4a16 \
+  --quantization compressed-tensors \
+  --max-model-len 262144 --kv-cache-dtype bf16 \
+  --gpu-memory-utilization 0.90 --max-num-seqs 2 \
+  --enable-chunked-prefill --max-num-batched-tokens 8192 \
+  --enable-auto-tool-choice --tool-call-parser hermes --port 8000
+```
+
+### 10.4 冒烟测试（3 条，必须全过才算部署成功）
+
+```bash
+# ① 服务存活
+curl -s localhost:8000/v1/models | head -c 300
+
+# ② 普通生成（检查是否仍带 thinking）
+curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' \
+ -d '{{"model":"Qwen3.8-27B-merged","messages":[{{"role":"user","content":"用一句话说明你会怎么开始分析一个 xapk 包"}}],"max_tokens":128}}' \
+ | python -c "import json,sys;d=json.load(sys.stdin);print(d['choices'][0]['message']['content'][:400])"
+```
+
+**③ 工具调用**（本数据集的核心能力，必须单独验证）：
+
+```bash
+cat > /tmp/tools.json <<'JSON'
+{{"model":"Qwen3.8-27B-merged",
+ "messages":[{{"role":"user","content":"列出当前目录下的文件"}}],
+ "tools":[{{"type":"function","function":{{"name":"bash","description":"run shell",
+   "parameters":{{"type":"object","properties":{{"command":{{"type":"string"}}}},"required":["command"]}}}}}}],
+ "tool_choice":"auto","max_tokens":256}}
+JSON
+curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d @/tmp/tools.json \
+ | python -c "import json,sys;d=json.load(sys.stdin);m=d['choices'][0]['message'];print('tool_calls:',m.get('tool_calls'));print('content:',(m.get('content') or '')[:200])"
+```
+
+期望：`tool_calls` 非空且 `function.name == "bash"`。若只有纯文本 → `--tool-call-parser` 不匹配，
+查模型文档换 parser（如 `qwen3_coder` / `hermes`）。
+
+### 10.5 256K 长上下文验收
+
+```bash
+python /data/tools/verify_longctx_api.py \
+  --base-url http://localhost:8000/v1 --model Qwen3.8-27B-merged \
+  --lengths 8192,32768,65536,131072,262144
+```
+
+通过标准：五档都不报错；每档 TTFT 可接受（chunked prefill 下 256K 首次可能 60~180s）；
+回答与前文相关（脚本会打印摘要，人工看一眼）。
+
+**若 256K 档 OOM**：说明 KV 预算不足 → 加 `--kv-cache-dtype fp8`，或把 `--max-model-len` 降到 131072
+并把实测上限写进交付报告（不要让下游以为能跑 256K）。
+
+### 10.6 失败回退路径（按顺序试，别在死路上耗时间）
+
+{_table([
+    ["`bitsandbytes` 4bit 加载报错（不支持该 arch）", "走 10.3-B 离线 W4A16；再不行走 10.7 GGUF"],
+    ["vLLM 不认识 `Qwen3_5ForConditionalGeneration`", "升级 vLLM；或用 HF `transformers` + `load_in_4bit`（慢但能跑）；或 10.7"],
+    ["256K OOM", "`--kv-cache-dtype fp8` → `--max-model-len 131072` → 记录实际上限"],
+    ["工具调用解析失败", "换 `--tool-call-parser`；或退化为让模型在 content 里输出 `<tool_call>` JSON 自行解析"],
+    ["生成质量明显下降", "4bit 量化损伤；改 8bit（28G+16G=44G，48G 勉强）或换 80G 跑 bf16+fp8 KV"],
+], ["失败点", "退路"])}
+
+### 10.7 最后一条退路：llama.cpp + GGUF
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
+pip install -r requirements.txt
+python convert_hf_to_gguf.py /data/models/Qwen3.8-27B-merged \
+  --outfile /data/models/qwen38-27b-Q4_K_M.gguf --outtype q4_k_m
+# 报 "unsupported model architecture: qwen3_5" 则此路不通
+
+llama-server -m /data/models/qwen38-27b-Q4_K_M.gguf \
+  -c 262144 -ngl 99 --host 0.0.0.0 --port 8000
+```
+GGUF Q4 约 17G，KV 可用 `-ctk q8_0 -ctv q8_0` 压到 8G → 48G 上 256K 也能塞下，缺点是不支持 tools 自动解析。
+
+### 10.8 交付验收清单（逐项打勾）
+
+- [ ] `nvidia-smi` 峰值显存 **< 46 GB**
+- [ ] `/v1/models` 能列出模型
+- [ ] 普通生成正常，且输出仍包含 `thinking` 与 `<tool_call>`
+- [ ] 工具调用能被解析成结构化 `tool_calls`
+- [ ] 256K 档不崩（或已记录实际可用上限）
+- [ ] 把**实际命令、包版本、峰值显存、256K 实测 TTFT** 写进 `inference_report.md`
+
+```bash
+# inference_report.md 建议模板
+cat > /data/inference_report.md <<'MD'
+# 推理机验收报告
+- GPU: <nvidia-smi 输出>
+- torch / cuda / transformers / vllm: <版本>
+- 权重: <路径>  量化: <bnb-4bit | w4a16 | gguf>
+- 启动参数: <完整命令>
+- 峰值显存: <GB>
+- 256K TTFT: <秒>   256K 是否通过: <是/否>
+- 工具调用: <通过/失败 + parser>
+MD
+```
+
+---
+
+## 11. 排障表
 
 | 现象 | 原因 / 处置 |
 | :--- | :--- |
@@ -638,14 +802,14 @@ PY
 | eval_loss 居高不下 | 正常（整项目留出）；看人工抽检而非只看 loss |
 | DPO 训练发散 | `pref_beta 0.1 → 0.05`；`learning_rate 5e-5 → 2e-5` |
 
-## 11. 可复现性
+## 12. 可复现性
 
 - 生成配置：`config/pipeline.yaml`（`config_hash` 见 `stats.json`）
 - 每条样本带 `metadata.sample_id / session_id / project_group / stage / split / sample_weight`
 - 血缘可回溯：`data/02_gold/sessions/<项目>/<会话>.gold.jsonl`（含 `raw_thinking`、`pruned_details`、`model_report`）
 - 重跑：`python -m pipeline.run all`（增量，模型调用命中缓存）
 
-## 12. 使用边界
+## 13. 使用边界
 
 - eval 项目（{", ".join(f"`{p}`" for p in eval_projects) or "—"}）**不要再拿去训练**，否则评估失真
 - `negative_diagnostics.jsonl` 仅用于分析（无标准答案），不要喂进 SFT/DPO
@@ -900,6 +1064,77 @@ if __name__ == "__main__":
     sys.exit(main())
 ''', encoding="utf-8")
 
+    (root / "verify_longctx_api.py").write_text('''#!/usr/bin/env python3
+"""通过 OpenAI 兼容 API 验收长上下文（适配 vLLM / llama-server）。
+
+用法：
+    python verify_longctx_api.py --base-url http://localhost:8000/v1 \
+        --model Qwen3.8-27B-merged --lengths 8192,32768,65536,131072,262144
+
+每档构造"长前文 + 尾部提问"，记录 HTTP 状态、TTFT、总耗时与回答摘要。
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+
+
+def post(url: str, body: dict, timeout: float = 900.0):
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8", "replace")
+        return r.status, raw, time.time() - t0
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", "replace"), time.time() - t0
+    except Exception as exc:  # noqa: BLE001
+        return -1, f"{type(exc).__name__}: {exc}", time.time() - t0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base-url", default="http://localhost:8000/v1")
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--lengths", default="8192,32768,65536")
+    ap.add_argument("--chars-per-token", type=float, default=2.2)
+    args = ap.parse_args()
+    url = args.base_url.rstrip("/") + "/chat/completions"
+    filler = "以下是逆向分析记录，包含工具输出与偏移量说明。\\n"
+    for L in [int(x) for x in args.lengths.split(",") if x.strip()]:
+        repeat = max(1, int((L - 300) * args.chars_per_token / len(filler)))
+        prompt = filler * repeat + "\\n问题：上文反复出现的字段名是什么？只回一个词。"
+        body = {
+            "model": args.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 32,
+            "temperature": 0,
+            "stream": False,
+        }
+        code, raw, dt = post(url, body)
+        if code == 200:
+            try:
+                d = json.loads(raw)
+                msg = (d["choices"][0]["message"].get("content") or "").strip()[:80]
+                usage = d.get("usage") or {}
+                print(f"  [ok] {L:>7} tok 目标 | {dt:>7.1f}s | prompt_tokens={usage.get('prompt_tokens')} | {msg}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [warn] {L:>7} | 解析失败 {exc} | {raw[:120]}")
+        else:
+            print(f"  [fail] {L:>7} | HTTP {code} | {raw[:160]}")
+    print("\\n判定：五档全部 ok 才算通过；OOM 时降 --max-model-len 或加 --kv-cache-dtype fp8")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+''', encoding="utf-8")
+
     (root / "check_data.py").write_text('''#!/usr/bin/env python3
 """训练前自检：数据结构 + 对话模板渲染（防 think 标签重复注入）。
 
@@ -1104,4 +1339,5 @@ if __name__ == "__main__":
         "check_data.py": str(root / "check_data.py"),
         "verify_longctx.py": str(root / "verify_longctx.py"),
         "probe_24g.py": str(root / "probe_24g.py"),
+        "verify_longctx_api.py": str(root / "verify_longctx_api.py"),
     }
