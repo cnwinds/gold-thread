@@ -436,6 +436,56 @@ train_on_prompt: false # 与 mask_history 互斥，保持 false
     ["`deepspeed`", "（不设）", "单卡无收益，且会强制走 torchrun"],
 ], ["参数", "值", "原因"])}
 
+### 6.0 先用小模型跑通流程（48G 卡，强烈建议）
+
+27B 这个底座有两个"非常规"之处（`qwen3_5` 混合线性注意力 + 多模态），
+一旦训练脚本出问题，很难分清是**数据/模板**还是**架构**的问题。
+所以建议先用一个"同族、标准架构"的小模型把全链路跑一遍：
+
+{_table([
+    ["**Qwen3-8B**（推荐）", "16.4 GB（bf16）", "16K 约 28G / 32K 约 35G", "与 27B 同族：`template: qwen3`、`<tool_call>` JSON 格式一致"],
+    ["Qwen3-4B", "8 GB", "16K 约 18G", "最快迭代，适合反复调数据"],
+    ["Qwen3-14B", "28 GB", "16K 约 40G", "更接近大模型行为，但 48G 上余量小"],
+], ["模型", "bf16 权重", "48G 上可用上下文", "为什么选它"])}
+
+**它能验证什么**（覆盖 90% 的踩坑点）：
+模板渲染是否正确、`mask_history` 是否生效、`tools` 列能否被读取、
+单步窗口结构是否被正确解析、DPO 数据格式、LoRA 合并、vLLM 起服务与工具调用解析。
+
+**它不能证明什么**：不能证明 `qwen3_5` 架构在 LLaMA-Factory 下也没问题
+（那是模型适配问题，与数据无关）；显存与吞吐数字也不能外推到 27B。
+
+开机后先跑这套（约 20 分钟）：
+
+```bash
+# 1) 下载小模型
+modelscope download --model Qwen/Qwen3-8B --local_dir /root/models/Qwen3-8B
+
+# 2) 数据 + 模板自检（把 --model 换成小模型，template 换成 qwen3）
+python check_data.py --model /root/models/Qwen3-8B --template qwen3
+
+# 3) 冒烟训练：只跑 200 条 × 1 epoch
+llamafactory-cli train {root.as_posix()}/train_sft_smoke_qwen3_8b.yaml
+#    看三件事：loss 从 2.x 降到 1.x；nvidia-smi 峰值（应 < 35G）；无 OOM
+
+# 4) 合并 + 起服务 + 验工具调用（走 §10.4 的三条冒烟）
+llamafactory-cli export --model_name_or_path /root/models/Qwen3-8B \
+  --adapter_name_or_path saves/smoke-qwen3-8b-sft --template qwen3 \
+  --finetuning_type lora --export_dir /root/models/smoke-qwen3-8b-merged
+
+# 5) DPO 冒烟（只用 50 对）
+llamafactory-cli train {root.as_posix()}/train_dpo_smoke_qwen3_8b.yaml
+```
+
+**验收清单**（全过再上 27B）：
+
+- [ ] 训练日志里没有 `mask_history` / `tools` 相关的告警
+- [ ] `loss` 明显下降（2.0+ → 1.2 以下）
+- [ ] 生成结果里同时出现 `thinking` 与 `<tool_call>`
+- [ ] vLLM `/v1/chat/completions` 能解析出结构化 `tool_calls`
+- [ ] DPO 冒烟能跑完 1 epoch 不报错
+- [ ] 合并后的模型能被 vLLM 正常加载
+
 ### 6.1 启动
 
 ```bash
@@ -888,6 +938,100 @@ gradient_checkpointing: true
 per_device_eval_batch_size: 1
 eval_strategy: steps
 eval_steps: 100
+""", encoding="utf-8")
+
+    (root / "train_sft_smoke_qwen3_8b.yaml").write_text(f"""### 冒烟用：Qwen3-8B（标准注意力，48G 上很宽松）
+### 目的：验证 模板 / mask_history / tools 列 / 窗口结构 / 合并 / vLLM 全链路
+### 确认无误后再换回 27B 的 train_sft.yaml
+### model
+model_name_or_path: /root/models/Qwen3-8B
+trust_remote_code: true
+flash_attn: fa2
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 16
+lora_target: all
+
+### dataset
+dataset_dir: {root.as_posix()}
+dataset: pi_sft_step_windows_train
+eval_dataset: pi_sft_step_windows_eval
+template: qwen3                                      # 小模型用 qwen3，不是 qwen3_8
+cutoff_len: 32768                                    # 48G 上可以开更大
+packing: false
+mask_history: true                                   # 只训练最后一轮
+overwrite_cache: true
+preprocessing_num_workers: 8
+max_samples: 200                                     # 冒烟：只跑 200 条
+
+### output
+output_dir: saves/smoke-qwen3-8b-sft
+logging_steps: 5
+save_steps: 100
+save_total_limit: 1
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 4
+learning_rate: 2.0e-4
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+
+### eval
+per_device_eval_batch_size: 2
+eval_strategy: steps
+eval_steps: 50
+""", encoding="utf-8")
+
+    (root / "train_dpo_smoke_qwen3_8b.yaml").write_text(f"""### 冒烟用 DPO：Qwen3-8B，只跑 50 对
+### model
+model_name_or_path: /root/models/Qwen3-8B
+adapter_name_or_path: saves/smoke-qwen3-8b-sft
+trust_remote_code: true
+flash_attn: fa2
+
+### method
+stage: dpo
+do_train: true
+finetuning_type: lora
+lora_rank: 16
+lora_target: all
+pref_beta: 0.1
+pref_loss: sigmoid
+
+### dataset
+dataset_dir: {root.as_posix()}
+dataset: pi_dpo_preference_pairs_train
+eval_dataset: pi_dpo_preference_pairs_eval
+template: qwen3
+cutoff_len: 8192
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 8
+max_samples: 50                                      # 冒烟：只跑 50 对
+
+### output
+output_dir: saves/smoke-qwen3-8b-dpo
+logging_steps: 5
+save_steps: 50
+save_total_limit: 1
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 5.0e-5
+num_train_epochs: 1.0
+bf16: true
+gradient_checkpointing: true
 """, encoding="utf-8")
 
     (root / "train_sft_qlora.yaml").write_text(f"""### model
@@ -1655,6 +1799,8 @@ if __name__ == "__main__":
         "train_sft.yaml": str(root / "train_sft.yaml"),
         "train_sft_qlora.yaml": str(root / "train_sft_qlora.yaml"),
         "train_dpo.yaml": str(root / "train_dpo.yaml"),
+        "train_sft_smoke_qwen3_8b.yaml": str(root / "train_sft_smoke_qwen3_8b.yaml"),
+        "train_dpo_smoke_qwen3_8b.yaml": str(root / "train_dpo_smoke_qwen3_8b.yaml"),
         "check_data.py": str(root / "check_data.py"),
         "verify_longctx.py": str(root / "verify_longctx.py"),
         "probe_24g.py": str(root / "probe_24g.py"),
