@@ -292,7 +292,77 @@ python -c "import flash_attn;print('fa2', flash_attn.__version__)" 2>/dev/null |
 df -h /    # 期望可用 ≥100GB
 ```
 
-### 4.2 安装训练栈（版本是硬约束，别跳步）
+### 4.2 网络加速（国内机器必做）
+
+这台机器访问 GitHub / PyPI 会超时，**先把加速配好再装依赖**，否则后面每步都会卡。
+
+> 下面用 `GH_PROXY` 变量统一表示你的代理地址。把它换成你实际在用的（常见形式：
+> `https://ghfast.top`、`https://gh-proxy.com`、`https://ghproxy.net`，
+> 规则都是 `<代理>/https://github.com/...`）。**先跑一次连通性检查再批量配置。**
+
+```bash
+# 0) 选出能用的代理（把三个候选依次试一遍，取第一个返回 200 的）
+export GH_PROXY=https://ghfast.top
+for p in https://ghfast.top https://gh-proxy.com https://ghproxy.net; do
+  code=$(curl -s -o /dev/null -w '%{{http_code}}' -m 8 "$p/https://raw.githubusercontent.com/hiyouga/LLaMA-Factory/main/README.md")
+  echo "$p -> $code"
+  [ "$code" = "200" ] && export GH_PROXY=$p && break
+done
+echo "使用代理: $GH_PROXY"
+
+# 1) git 全局改写：之后所有 https://github.com/... 自动走代理
+git config --global url."$GH_PROXY/https://github.com/".insteadOf "https://github.com/"
+git config --global --get-regexp 'url\..*insteadof'   # 确认写入
+
+# 2) PyPI 镜像（清华，国内稳定）
+mkdir -p ~/.pip
+cat > ~/.pip/pip.conf <<'INI'
+[global]
+index-url = https://pypi.tuna.tsinghua.edu.cn/simple
+trusted-host = pypi.tuna.tsinghua.edu.cn
+timeout = 120
+INI
+
+# 3) HuggingFace 镜像（本方案主用 ModelScope，这里只是备选）
+echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.bashrc && source ~/.bashrc
+```
+
+**哪些需要代理、哪些不需要**：
+
+{_table([
+    ["`git clone github.com/...`", "需要", "已由 1) 的 insteadOf 自动处理"],
+    ["`raw.githubusercontent.com/...`", "需要", "手动加前缀：`$GH_PROXY/https://raw.githubusercontent.com/...`"],
+    ["GitHub **Releases** 下载（如 flash-attn wheel）", "需要", "同上，加前缀"],
+    ["PyPI（pip install）", "不需要", "走 2) 的清华镜像"],
+    ["ModelScope 模型下载", "不需要", "国内直连，比 HF 快"],
+    ["HuggingFace 模型", "需要", "走 3) 的 hf-mirror"],
+], ["场景", "是否走代理", "做法"])}
+
+**flash-attn 装不上时的代理装法**（用预编译 wheel 比源码编译省 20 分钟）：
+
+```bash
+# 先看你的组合该用哪个 wheel：cp312 + torch2.7 + cu12
+python - <<'PY'
+import torch, sys
+print(f"py3{{sys.version_info.minor}} torch{{torch.__version__.split('+')[0]}} cu{{torch.version.cuda}}")
+PY
+
+# 从 Releases 走代理下载（版本号按上面的输出选，示例为 cp312-torch2.7-cu12）
+pip install "$GH_PROXY/https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4/flash_attn-2.7.4+cu12torch2.7cxx11abiFALSE-cp312-cp312-linux_x86_64.whl" \
+  --no-build-isolation --no-cache-dir
+```
+
+**代理失效时的回退**（别卡在网络上）：
+
+```bash
+# 临时禁用 insteadOf
+git config --global --unset url."$GH_PROXY/https://github.com/".insteadOf
+# 或换候选代理后重新配置
+# 或用 gitee 镜像的 LLaMA-Factory（更新略滞后）
+git clone --depth 1 https://gitee.com/mirrors/LLaMA-Factory.git /opt/LLaMA-Factory
+```
+
+### 4.3 安装训练栈（版本是硬约束，别跳步）
 
 模型的 `config.json` 声明 `transformers_version=5.8.0.dev0`，
 而 LLaMA-Factory（main 分支）约束是 `transformers>=4.55.0,<=5.8.0`。
@@ -328,7 +398,7 @@ pip install "git+https://github.com/huggingface/transformers.git@v5.8.0"
 **flash-attn 装不上怎么办**（不影响开训）：把 YAML 里
 `flash_attn: fa2` 改成 `flash_attn: sdpa`，torch 原生实现，16K 峰值大约多 3~5 GB。
 
-### 4.3 目录规范（统一按数据盘 /data 布局）
+### 4.4 目录规范（统一按数据盘 /data 布局）
 
 **所有大文件都放数据盘**，这样换机器时只挂盘、不改路径。下文所有命令都按这套路径写：
 
@@ -377,7 +447,7 @@ cp -r <本目录>/* /data/goldthread/03_train/     # 把 03_train 拷到数据�
 > 磁盘紧张时的取舍：**48G 推理只需要 `models/Qwen3.8-27B-merged`（55G）+ 免底座**，
 > 因为合并版已含权重；但若还是要重训，就必须保留原始底座。
 
-### 4.4 下载底座模型
+### 4.5 下载底座模型
 
 > 仓库已核实：**`Qwen/Qwen3.8-27B`**（ModelScope），架构见 §3。
 > 下载前先确认磁盘：`df -h /data` 需要 **≥ 70 GB 可用**（权重 55G + 余量）。
@@ -523,6 +593,20 @@ train_on_prompt: false # 与 mask_history 互斥，保持 false
     ["Qwen3-14B", "28 GB", "16K 约 40G", "更接近大模型行为，但 48G 上余量小"],
 ], ["模型", "bf16 权重", "48G 上可用上下文", "为什么选它"])}
 
+> ⚠️ **8B 不能用来验 256K**（这点必须先说清）
+>
+> {_table([
+    ["Qwen3-8B", "**40,960（40K）**", "144 KB", "36 层全是 full attention", "36 G / 18 G", "需 YaRN 外推，质量不可用"],
+    ["Qwen3.8-27B（目标）", "**262,144（256K）**", "64 KB", "仅 16/64 层 full attention", "16 G / 8 G", "**原生支持**"],
+], ["模型", "原生上下文", "KV/token", "原因", "256K KV（bf16/fp8）", "256K 可用性"])}
+>
+> 两个结论：
+> 1. **8B 的 256K 要 YaRN 外推**（官方推荐只在 131K 内用 YaRN），256K 远超训练分布，质量会崩，
+>    即使跑通也不代表 27B 的行为；
+> 2. **8B 的 KV cache 比 27B 贵 2.25 倍**（144 KB vs 64 KB/token），
+>    因为 8B 36 层全是全注意力，而 27B 只有 16/64 层是全注意力。
+>    → 在 48G 上，27B 的 256K 反而比 8B 的 256K 更容易跑。**别用 8B 排练长上下文**。
+
 **它能验证什么**（覆盖 90% 的踩坑点）：
 模板渲染是否正确、`mask_history` 是否生效、`tools` 列能否被读取、
 单步窗口结构是否被正确解析、DPO 数据格式、LoRA 合并、vLLM 起服务与工具调用解析。
@@ -571,6 +655,7 @@ llamafactory-cli train {root.as_posix()}/train_dpo_smoke_qwen3_8b.yaml
 ```bash
 python -V                                     # 期望 3.12
 pip install "transformers==5.8.0" "accelerate>=1.3.0,<=1.11.0" "trl>=0.18.0,<=0.24.0" --no-cache-dir
+# 先按 §4.2 配好 GH_PROXY 与 git insteadOf，再执行下面这条
 git clone --depth 1 https://github.com/hiyouga/LLaMA-Factory.git /opt/LLaMA-Factory
 cd /opt/LLaMA-Factory && pip install -e ".[metrics]" --no-deps
 pip install flash-attn --no-build-isolation || echo "装不上就改用 sdpa（见下）"
@@ -972,6 +1057,13 @@ python /data/tools/verify_longctx_api.py \
 
 **若 256K 档 OOM**：说明 KV 预算不足 → 加 `--kv-cache-dtype fp8`，或把 `--max-model-len` 降到 131072
 并把实测上限写进交付报告（不要让下游以为能跑 256K）。
+
+> **若这次验的是 Qwen3-8B（冒烟模型）**：它原生只有 40,960，跑 256K 必须加 YaRN，
+> 且 KV 需 36G（bf16）/18G（fp8），48G 上只能开 fp8 KV 勉强跑：
+> ```bash
+> vllm serve /data/models/qwen3-8b-merged >   --max-model-len 262144 --kv-cache-dtype fp8 >   --rope-scaling '{{"type":"yarn","factor":6.4,"original_max_position_embeddings":40960}}' >   --enable-chunked-prefill --max-num-batched-tokens 8192 --max-num-seqs 1
+> ```
+> 这样跑通只证明"机制能跑"，**不能作为 27B 的 256K 结论**。
 
 ### 10.6 失败回退路径（按顺序试，别在死路上耗时间）
 
