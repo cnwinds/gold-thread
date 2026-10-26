@@ -147,6 +147,28 @@ gold-thread/
 | `dataset_info.json` | LLaMA-Factory 数据集注册 |
 | `stats.json` / `index.json` | 统计与切分信息 |
 
+**训练版本（`<file>.v2.jsonl`）**
+：经过二次修复后的最终裁剪版，是实际上机训练的数据集：
+- `sft_step_windows_sharegpt.train.v2.jsonl`（548 条）/ `.eval.v2.jsonl`（221 条）—— SFT 主数据集
+- `dpo_preference_pairs.train.v2.jsonl`（100 对）/ `.eval.v2.jsonl`（143 对）—— DPO 原始对
+- `dpo_preference_pairs.train.v2w.jsonl`（窗口裁剪版）/ `.eval.v2w.jsonl`—— 48G 显存 DPO 专用
+- `sft_gold_trajectories_sharegpt.*.v2.jsonl` —— 完整长轨迹（可选混训）
+
+**训练配置与脚本**
+：
+- `train_sft_qwen3_8b.yaml` / `train_dpo_qwen3_8b.yaml` —— 8B 正式训练配置（含完整调试注释）
+- `train_sft_smoke_qwen3_8b.yaml` / `train_dpo_smoke_qwen3_8b.yaml` —— 冒烟测试（200 条 SFT + 50 对 DPO）
+- `train_sft.yaml` / `train_dpo.yaml` / `train_sft_qlora.yaml` —— 27B 配置与 QLoRA 备选
+- `eval_sft_qwen3_8b.yaml` —— 单独 eval（训练时关掉 eval，训完用此跑）
+- `check_env.py` / `check_data.py` —— 上机前自检（含 tokenizer 渲染验证）
+- `smoke_infer_merged.py` —— 合并后推理冒烟（验证 `thinking` + `tool_call`）
+- `verify_longctx.py` / `verify_longctx_api.py` —— 长上下文档级验收
+- `probe_24g.py` —— 模拟小显存加载（bf16 / 8bit / 4bit 可行性探测）
+- `prep_dpo_window.py` —— DPO 窗口裁剪（从头部丢旧步，保留 system + 根任务 + 最近步）
+
+> 训练实跑记录与踩坑经验见 `data/03_train/RESULT.md`（含 Liger 必开原因、DPO ref_model 修正、
+> eval OOM 绕过、脚本 bug 修复等硬经验）完整交接说明见 `data/03_train/handoff.md`。
+
 切分按 `project_group` 整包留出（默认 `eval_ratio` 取项目数比例），
 避免同一游戏的相邻步泄漏到验证集。
 

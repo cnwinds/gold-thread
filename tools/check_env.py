@@ -2,7 +2,7 @@
 """环境自检：无 GPU 也能跑的检查 + 有 GPU 后才做的清单。
 
 用法：
-    python check_env.py --model /root/models/Qwen3.8-27B --data /root/data/03_train
+    python check_env.py --model /data/models/Qwen3.8-27B --data /data/goldthread/03_train
     python check_env.py                       # 只查软件栈与依赖版本
 
 设计：每项检查独立 try，输出 [PASS] / [FAIL] / [SKIP]（无 GPU 时跳过）。
@@ -178,7 +178,7 @@ def main() -> int:
                         msgs = [{"role": role_map.get(c["from"], "user"), "content": c["value"]} for c in conv]
                         try:
                             text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
-                            o, c2 = text.count(" thinking"), text.count("")
+                            o, c2 = text.count(" thinking"), text.count("<" + "/think>")
                             tcalls = text.count("<tool_call>")
                             ids = tok(text, add_special_tokens=False)["input_ids"]
                             msg = f"模板渲染：tokens={len(ids)}  thinking×{o} ×{c2} <tool_call>×{tcalls}"
@@ -252,51 +252,23 @@ def main() -> int:
 
     # ---------- E. 磁盘与内存 ----------
     section("E. 磁盘与内存")
-    has_gpu = False
-    try:
-        import torch as _t
-        has_gpu = bool(_t.cuda.is_available())
-    except Exception:  # noqa: BLE001
-        pass
     du = shutil.disk_usage("/")
     free_gb = du.free / 1024 ** 3
-    ram = 0.0
+    (ok if free_gb >= 100 else bad)(f"/ 可用 {free_gb:.0f} GB（27B 训练建议 ≥100GB）")
     try:
         import psutil  # type: ignore
         ram = psutil.virtual_memory().total / 1024 ** 3
+        (ok if ram >= 64 else bad)(f"主存 {ram:.0f} GB（建议 ≥64GB）")
     except ImportError:
         try:
             with open("/proc/meminfo") as f:
                 for line in f:
                     if line.startswith("MemTotal"):
                         ram = int(line.split()[1]) / 1024 ** 2
+                        (ok if ram >= 64 else bad)(f"主存 {ram:.0f} GB（建议 ≥64GB）")
                         break
         except OSError:
-            ram = 0.0
-
-    # 无卡/CPU 实例通常规格远小于训练机，这里只报告不判失败
-    def _spec(msg: str, good: bool) -> None:
-        if good:
-            ok(msg)
-        elif has_gpu:
-            bad(msg)
-        else:
-            print(f"  [INFO] {msg}  ← 无卡/CPU 实例规格通常更小，正式训练机需达标")
-
-    _spec(f"/ 可用 {free_gb:.0f} GB（27B bf16 权重 54GB，训练建议 ≥100GB）", free_gb >= 100)
-    _spec(f"主存 {ram:.0f} GB（27B 合并导出峰值约 60GB，建议 ≥64GB）", ram >= 64)
-
-    if not has_gpu:
-        print()
-        print("  【本机定位判断】无 GPU + 上述规格 → 这台只适合：")
-        print("    · pip 安装依赖（约 5~8GB）")
-        print("    · 下载并验证 小模型（Qwen3-8B 约 16GB）与数据集")
-        print("    · 跑 check_data.py / check_env.py 做模板与数据校验")
-        if free_gb < 70:
-            print(f"    ✗ 不要在这里下载 27B（需 54GB，当前仅 {free_gb:.0f}GB 可用）")
-        if ram < 32:
-            print(f"    ✗ 不要在这里合并 27B（需 ~60GB 内存，当前 {ram:.0f}GB）")
-        print("    → 27B 的下载/训练/合并，等切到 GPU 实例（磁盘 200GB、内存 100GB+）再做")
+            skip("无法读取主存信息")
 
     # ---------- F. 结论 ----------
     section("结论")
