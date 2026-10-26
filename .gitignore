@@ -22,3 +22,5 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+# 分发包（可重新生成，不入库）
+dist/
