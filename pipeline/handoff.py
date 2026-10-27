@@ -13,10 +13,16 @@
 
 所有数据统计（条数、长度分布、切分、DPO 复核结果）都从本次真实产物计算，
 不做硬编码假设。
+
+覆盖策略：以上文件只在不存在时生成。data/03_train 下的版本已纳入 git 并人工维护
+（train_lowmem.py 低显存启动、DPO 以 merged 为底座去掉独立 ref 等），以它们为准；
+确需按模板重建时设 HANDOFF_FORCE=1（会覆盖人工修改，重建后用 git diff 核对）。
+实时数据统计以 stats.json 为准。
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -99,8 +105,22 @@ def write_handoff(
     dataset_info: Dict[str, Any],
     split_map: Dict[str, str],
     cfg: Dict[str, Any],
+    force: bool = False,
 ) -> Dict[str, str]:
     root = Path(train_root)
+    force = force or os.environ.get("HANDOFF_FORCE") == "1"
+    written: Dict[str, str] = {}
+    kept: List[str] = []
+
+    # data/03_train 下的配置/脚本/文档已纳入 git 并人工维护（低显存启动、DPO 去 ref 等），
+    # 内嵌模板只用于首次生成；已存在的文件默认不覆盖。
+    def _emit(path: Path, text: str, encoding: str = "utf-8") -> None:
+        if path.exists() and not force:
+            kept.append(path.name)
+            return
+        path.write_text(text, encoding=encoding)
+        written[path.name] = str(path)
+
     split = stats.get("split") or split_map or {}
     by_project = stats.get("by_project") or {}
     by_model = stats.get("by_model") or {}
@@ -1287,9 +1307,9 @@ python verify_longctx_api.py \
 - 数据来自自有/已授权应用的逆向分析，使用范围请遵守你的授权约定
 """
 
-    (root / "handoff.md").write_text(doc, encoding="utf-8")
+    _emit(root / "handoff.md", doc, encoding="utf-8")
 
-    (root / "train_sft.yaml").write_text(f"""### model
+    _emit(root / "train_sft.yaml", f"""### model
 model_name_or_path: /data/models/Qwen3.8-27B          # 改成你的真实路径
 trust_remote_code: true
 flash_attn: fa2                                      # 仅对 full_attention 层生效；装不上改 sdpa
@@ -1338,7 +1358,7 @@ eval_strategy: steps
 eval_steps: 100
 """, encoding="utf-8")
 
-    (root / "train_sft_qwen3_8b.yaml").write_text(f"""### 当前阶段主配置：Qwen3-8B 全量训练（48G / 80G 都能跑）
+    _emit(root / "train_sft_qwen3_8b.yaml", f"""### 当前阶段主配置：Qwen3-8B 全量训练（48G / 80G 都能跑）
 ### 用途：先把「数据 → 训练 → 合并 → 推理」整条链路跑出可用模型
 ### 换 27B 时只需改 model_name_or_path 与 template: qwen3_8
 ### model
@@ -1388,7 +1408,7 @@ eval_strategy: steps
 eval_steps: 100
 """, encoding="utf-8")
 
-    (root / "train_dpo_qwen3_8b.yaml").write_text(f"""### Qwen3-8B 的 DPO（SFT 达标后跑，全量 100 对）
+    _emit(root / "train_dpo_qwen3_8b.yaml", f"""### Qwen3-8B 的 DPO（SFT 达标后跑，全量 100 对）
 ### model
 model_name_or_path: /data/models/Qwen3-8B
 adapter_name_or_path: /data/saves/qwen3-8b-goldthread-sft
@@ -1437,7 +1457,7 @@ eval_strategy: steps
 eval_steps: 50
 """, encoding="utf-8")
 
-    (root / "train_sft_smoke_qwen3_8b.yaml").write_text(f"""### 冒烟用：Qwen3-8B（标准注意力，48G 上很宽松）
+    _emit(root / "train_sft_smoke_qwen3_8b.yaml", f"""### 冒烟用：Qwen3-8B（标准注意力，48G 上很宽松）
 ### 目的：验证 模板 / mask_history / tools 列 / 窗口结构 / 合并 / vLLM 全链路
 ### 确认无误后再换回 27B 的 train_sft.yaml
 ### model
@@ -1488,7 +1508,7 @@ eval_strategy: steps
 eval_steps: 50
 """, encoding="utf-8")
 
-    (root / "train_dpo_smoke_qwen3_8b.yaml").write_text(f"""### 冒烟用 DPO：Qwen3-8B，只跑 50 对
+    _emit(root / "train_dpo_smoke_qwen3_8b.yaml", f"""### 冒烟用 DPO：Qwen3-8B，只跑 50 对
 ### model
 model_name_or_path: /data/models/Qwen3-8B
 adapter_name_or_path: /data/saves/smoke-qwen3-8b-sft
@@ -1531,7 +1551,7 @@ bf16: true
 gradient_checkpointing: true
 """, encoding="utf-8")
 
-    (root / "train_sft_qlora.yaml").write_text(f"""### model
+    _emit(root / "train_sft_qlora.yaml", f"""### model
 model_name_or_path: /data/models/Qwen3.8-27B
 trust_remote_code: true
 flash_attn: fa2
@@ -1582,27 +1602,33 @@ eval_strategy: steps
 eval_steps: 100
 """, encoding="utf-8")
 
-    (root / "train_dpo.yaml").write_text(f"""### model
-model_name_or_path: /data/models/Qwen3.8-27B
-adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft   # SFT 适配器；或改为合并后的目录
+    _emit(root / "train_dpo.yaml", f"""### model
+# 关键：ref 必须是 SFT 模型，拿 base 当 ref → 把模型推崩（见 RESULT.md）
+# 做法：以 SFT 合并后的目录（llamafactory-cli export 产物）为 base，在上面训一个新的 DPO LoRA，
+# 不设 ref_model。LLaMA-Factory 对「LoRA + 无 ref_model」会让 ref_model=None，
+# ref 前向走 policy 的 disable_adapter() = 纯 SFT 模型，不再额外加载任何权重。
+model_name_or_path: /data/models/Qwen3.8-27B-merged
+# 27B 单卡 80G：bf16 权重 ≈ 54G + LoRA/优化器 < 1G + 激活（gradient_checkpointing）
+# logits 由 train_lowmem.py（lowmem_dpo.py）只在 response 位置计算并分块升 fp32，
+# 必须用 `python train_lowmem.py train_dpo.yaml` 启动；直接 llamafactory-cli 会对 2×8192×248320 全量 logits 升 fp32 → OOM
 trust_remote_code: true
 flash_attn: fa2
-enable_liger_kernel: true
+enable_liger_kernel: false                            # qwen3_5 不在 Liger 支持列表，必须先关
 
 ### method
 stage: dpo
 do_train: true
-finetuning_type: lora
+finetuning_type: lora                                 # 新的 DPO LoRA（叠在 SFT 合并模型上）
 lora_rank: 32
 lora_target: mlp
 pref_beta: 0.1
-pref_loss: sigmoid
+pref_loss: sigmoid                                    # sigmoid 需要 ref（use_ref_model=true），由 disable_adapter 提供
 # deepspeed:                                            # 单卡不要设
 
 ### dataset
 dataset_dir: {root.as_posix()}
-dataset: pi_dpo_preference_pairs_train
-eval_dataset: pi_dpo_preference_pairs_eval
+dataset: pi_dpo_preference_pairs_train_v2w       # 窗口裁剪版（保住最近上下文，显存友好）
+eval_dataset: pi_dpo_preference_pairs_eval_v2w
 template: qwen3_8
 cutoff_len: 8192                                       # DPO 双前向，激活翻倍
 packing: false
@@ -1610,6 +1636,7 @@ overwrite_cache: true
 preprocessing_num_workers: 8
 
 ### output
+# 产物是叠在 Qwen3.8-27B-merged 上的 DPO 适配器；导出时 model_name_or_path 要填 merged 目录，不是原始 base
 output_dir: /data/saves/qwen38-27b-goldthread-dpo
 logging_steps: 5
 save_steps: 100
@@ -1619,7 +1646,7 @@ overwrite_output_dir: true
 ### train
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 4
-learning_rate: 5.0e-5
+learning_rate: 1.0e-5           # 8B 实测 5e-5 会把模型推崩；27B 同样用小 lr
 num_train_epochs: 1.0
 lr_scheduler_type: cosine
 warmup_ratio: 0.05
@@ -1627,12 +1654,13 @@ bf16: true
 gradient_checkpointing: true
 
 ### eval
+# 评测同样走 lowmem 路径（policy + disable_adapter ref 两次 no_grad 前向），显存低于训练步
 per_device_eval_batch_size: 1
 eval_strategy: steps
 eval_steps: 50
 """, encoding="utf-8")
 
-    (root / "probe_24g.py").write_text('''#!/usr/bin/env python3
+    _emit(root / "probe_24g.py", '''#!/usr/bin/env python3
 """在训练机上模拟小显存推理：报告 bf16 / 4bit / 8bit 三种加载方式能否在限额内跑起来。
 
 用法：
@@ -1728,7 +1756,7 @@ if __name__ == "__main__":
     sys.exit(main())
 ''', encoding="utf-8")
 
-    (root / "verify_longctx_api.py").write_text('''#!/usr/bin/env python3
+    _emit(root / "verify_longctx_api.py", '''#!/usr/bin/env python3
 """通过 OpenAI 兼容 API 验收长上下文（适配 vLLM / llama-server）。
 
 用法：
@@ -1799,7 +1827,7 @@ if __name__ == "__main__":
     sys.exit(main())
 ''', encoding="utf-8")
 
-    (root / "check_env.py").write_text(r'''#!/usr/bin/env python3
+    _emit(root / "check_env.py", r'''#!/usr/bin/env python3
 """环境自检：无 GPU 也能跑的检查 + 有 GPU 后才做的清单。
 
 用法：
@@ -2095,7 +2123,7 @@ def main() -> int:
 if __name__ == "__main__":
     sys.exit(main())''', encoding="utf-8")
 
-    (root / "check_data.py").write_text('''#!/usr/bin/env python3
+    _emit(root / "check_data.py", '''#!/usr/bin/env python3
 """训练前自检：数据结构 + 对话模板渲染（防 think 标签重复注入）。
 
 用法：
@@ -2216,7 +2244,7 @@ if __name__ == "__main__":
     sys.exit(main())
 ''', encoding="utf-8")
 
-    (root / "verify_longctx.py").write_text('''#!/usr/bin/env python3
+    _emit(root / "verify_longctx.py", '''#!/usr/bin/env python3
 """长上下文验收：确认 LoRA 合并后的模型在各档长度下仍能正常工作。
 
 用法：
@@ -2291,18 +2319,6 @@ if __name__ == "__main__":
         except OSError:
             pass
 
-    return {
-        "handoff.md": str(root / "handoff.md"),
-        "train_sft.yaml": str(root / "train_sft.yaml"),
-        "train_sft_qlora.yaml": str(root / "train_sft_qlora.yaml"),
-        "train_dpo.yaml": str(root / "train_dpo.yaml"),
-        "train_sft_smoke_qwen3_8b.yaml": str(root / "train_sft_smoke_qwen3_8b.yaml"),
-        "train_dpo_smoke_qwen3_8b.yaml": str(root / "train_dpo_smoke_qwen3_8b.yaml"),
-        "train_sft_qwen3_8b.yaml": str(root / "train_sft_qwen3_8b.yaml"),
-        "train_dpo_qwen3_8b.yaml": str(root / "train_dpo_qwen3_8b.yaml"),
-        "check_data.py": str(root / "check_data.py"),
-        "verify_longctx.py": str(root / "verify_longctx.py"),
-        "probe_24g.py": str(root / "probe_24g.py"),
-        "verify_longctx_api.py": str(root / "verify_longctx_api.py"),
-        "check_env.py": str(root / "check_env.py"),
-    }
+    if kept:
+        written["_kept"] = ", ".join(kept)
+    return written

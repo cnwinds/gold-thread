@@ -824,8 +824,11 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     # handoff：把"怎么拿这批数据训练"写成可照做的文档 + 可直接用的训练配置
     try:
         ho = write_handoff(train_root, counts, stats, dataset_info, split_map, cfg)
+        kept = ho.pop("_kept", "")
         stepcat.emit(log, "s3.handoff", 3, 3, "handoff.md / train_sft.yaml / train_dpo.yaml")
-        log(f"[stage3] handoff 已生成: {', '.join(Path(p).name for p in ho.values())}")
+        log(f"[stage3] handoff 已生成: {', '.join(Path(p).name for p in ho.values()) or '无（均已存在）'}")
+        if kept:
+            log(f"[stage3] handoff 保留已有文件（未覆盖，HANDOFF_FORCE=1 可强制重建）: {kept}")
     except Exception as exc:  # noqa: BLE001
         log(f"[stage3] handoff 生成失败: {exc}")
 
