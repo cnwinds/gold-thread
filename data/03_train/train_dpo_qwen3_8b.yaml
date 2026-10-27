@@ -1,9 +1,9 @@
 ### Qwen3-8B 的 DPO（SFT 达标后跑，全量 100 对）
 ### model
-model_name_or_path: /data/models/Qwen3-8B
-adapter_name_or_path: /data/saves/qwen3-8b-goldthread-sft
-ref_model: /data/models/qwen3-8b-merged        # 关键：参考模型必须是 SFT 模型（默认会拿 base 当 ref，见 RESULT.md）
-ref_model_quantization_bit: 8                  # 48G 卡上同时放 policy+ref 只能量化 ref
+# 关键：参考模型必须是 SFT 模型（拿 base 当 ref 会推崩，见 RESULT.md）
+# 与 27B 同方案：以 SFT 合并模型为 base 训新的 DPO LoRA、不设 ref_model，
+# ref 前向走 disable_adapter() = SFT 模型，不再额外加载 8bit ref
+model_name_or_path: /data/models/qwen3-8b-merged
 trust_remote_code: true
 flash_attn: fa2
 
@@ -28,6 +28,7 @@ overwrite_cache: true
 preprocessing_num_workers: 8
 
 ### output
+# 导出时 model_name_or_path 填 /data/models/qwen3-8b-merged（DPO 适配器叠在 SFT 合并模型上）
 output_dir: /data/saves/qwen3-8b-goldthread-dpo
 logging_steps: 5
 save_steps: 100

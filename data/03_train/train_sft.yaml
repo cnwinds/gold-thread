@@ -1,3 +1,6 @@
+### 启动：python train_lowmem.py train_sft.yaml（不要用 llamafactory-cli train）
+###       原生路径对 16K 全部位置算 fp32 logits（词表 248320，≈40GB），单卡 80G 必 OOM；
+###       train_lowmem.py 只算监督位置的 logits，loss 数学等价
 ### model
 model_name_or_path: /data/models/Qwen3.8-27B          # 改成你的真实路径
 trust_remote_code: true

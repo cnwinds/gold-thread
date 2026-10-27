@@ -1,6 +1,6 @@
 ### 冒烟用 DPO：Qwen3-8B，只跑 50 对
 ### 用途：只验证「数据格式 + 流程」能跑通，不追求质量
-### 注意：正式 DPO 必须用 train_dpo_qwen3_8b.yaml（内置了必需的 ref_model，否则模型会被推崩）
+### 注意：正式 DPO 必须用 train_dpo_qwen3_8b.yaml（以 SFT 合并模型为 base，ref = SFT 模型，否则模型会被推崩）
 ### model
 model_name_or_path: /data/models/Qwen3-8B
 adapter_name_or_path: /data/saves/smoke-qwen3-8b-sft

@@ -42,6 +42,7 @@ cd /data/goldthread/03_train
 │
 ├── 【脚本】
 │   ├── check_env.py / check_data.py               ← 上机自检
+│   ├── train_lowmem.py                            ← 27B SFT/eval 启动器（替代 llamafactory-cli train）
 │   ├── train_monitor.py                           ← 训练监控（OOM 秒级诊断）
 │   ├── smoke_infer_merged.py                      ← 合并后推理冒烟
 │   ├── verify_longctx.py / verify_longctx_api.py  ← 长上下文验收
@@ -99,7 +100,11 @@ pip install flash-attn --no-build-isolation || echo "[warn] flash-attn 失败 �
 # 2.5 bitsandbytes（仅 QLoRA 4bit / DPO ref_model 8bit 量化需要，8B 纯 SFT 可不装）
 pip install bitsandbytes
 
-# 2.6 验收
+# 2.6 线性注意力 kernel —— 27B【必装】：48 层 linear_attention 没有它会退回 PyTorch 实现
+#     （日志出现 "fast path is not available ... Falling back to torch implementation"）
+pip install flash-linear-attention causal-conv1d --no-build-isolation
+
+# 2.7 验收
 llamafactory-cli env
 python -c "import transformers;print('transformers',transformers.__version__)"      # 期望 5.8.x
 python -c "import liger_kernel;print('liger',liger_kernel.__version__)"   || echo "[8B 必装 / 27B 可忽略] liger_kernel 未安装"
@@ -211,7 +216,7 @@ python smoke_infer_merged.py --model /data/models/qwen3-8b-merged \
 # 注意：必须开采样（temp .6 / top_p .95 / top_k 20），greedy 会陷长思考不收敛
 ```
 
-**5.6 DPO**（`train_dpo_qwen3_8b.yaml` 已配好 `ref_model: .../qwen3-8b-merged`，依赖 5.4 产物）
+**5.6 DPO**（`train_dpo_qwen3_8b.yaml` 以 `.../qwen3-8b-merged` 为 base 训新 LoRA，ref = 关掉 adapter 的 SFT 模型，依赖 5.4 产物）
 
 ```bash
 python train_monitor.py --timeout-hours 1 --log logs/dpo.log -- \
@@ -252,18 +257,26 @@ print('tool_calls:',m.get('tool_calls'))"
 
 > 27B 有现成配置 **`train_sft.yaml` / `train_dpo.yaml`**，不用改 8B 的 YAML。
 > 关键差异（已预置好）：`template: qwen3_8`、`enable_liger_kernel: false`、`lora_target: mlp`、`cutoff_len: 16384`。
+>
+> **27B 的 SFT / eval 必须用 `python train_lowmem.py <yaml>` 启动，不要用 `llamafactory-cli train`。**
+> 原因：词表 248320 且拿不到 Liger 融合 CE，原生路径对 16K 全部位置算 fp32 logits ≈ 40GB，
+> 加 54G 权重在单卡 80G 上必 OOM（实测 16K 样本即炸）。`train_lowmem.py` 只对 `mask_history`
+> 留下的监督位置算 logits，loss/梯度与原生数学等价，YAML 与命令行参数完全不变。
+> 启动后日志前 3 步会打印 `[lowmem] seq_len=… 监督位置=… 峰值显存=…`，用来确认补丁生效。
 
 ```bash
 cd /data/goldthread/03_train
 
-# 6.1 SFT（548 条 × 3 epoch，峰值显存约 64~72GB）
+# 6.1 SFT（548 条 × 3 epoch）
 #     训练中 eval_strategy 已设 "no"（27B 显存紧，eval 会额外占激活）
-python train_monitor.py --timeout-hours 5 --log logs/27b_sft.log -- \
-  llamafactory-cli train train_sft.yaml
+#     机器上有多张卡时务必限定单卡，否则 HF 会退化成 DataParallel（脚本会直接拒绝启动）
+CUDA_VISIBLE_DEVICES=0 python train_monitor.py --timeout-hours 5 --log logs/27b_sft.log -- \
+  python train_lowmem.py train_sft.yaml
+#     多卡 DDP：python train_monitor.py ... -- torchrun --nproc_per_node 2 train_lowmem.py train_sft.yaml
 
 # 6.1b 训完单独跑 eval（bs=1，拿到 eval_loss）
-python train_monitor.py --timeout-hours 1 --log logs/27b_eval.log -- \
-  llamafactory-cli train eval_sft.yaml
+CUDA_VISIBLE_DEVICES=0 python train_monitor.py --timeout-hours 1 --log logs/27b_eval.log -- \
+  python train_lowmem.py eval_sft.yaml
 
 # 6.2 合并（CPU 内存峰值约 60GB）
 llamafactory-cli export \
@@ -280,15 +293,30 @@ python smoke_infer_merged.py --model /data/models/Qwen3.8-27B-merged \
 python verify_longctx.py --model /data/models/Qwen3.8-27B-merged \
   --lengths 8192,32768,65536
 
-# 6.5 DPO（可选；27B 双前向显存很紧，见下）
-python train_monitor.py --timeout-hours 3 --log logs/27b_dpo.log -- \
-  llamafactory-cli train train_dpo.yaml
+# 6.5 DPO（可选；依赖 6.2 的 merged 产物；同样必须走 train_lowmem.py）
+#     先冒烟：命令行追加 max_samples=20（覆盖 YAML），看到 [lowmem-dpo] 日志与峰值显存再跑全量
+CUDA_VISIBLE_DEVICES=0 python train_monitor.py --timeout-hours 1 --log logs/27b_dpo_smoke.log -- \
+  python train_lowmem.py train_dpo.yaml max_samples=20 output_dir=/data/saves/qwen38-27b-dpo-smoke
+CUDA_VISIBLE_DEVICES=0 python train_monitor.py --timeout-hours 3 --log logs/27b_dpo.log -- \
+  python train_lowmem.py train_dpo.yaml
+
+# 6.6 合并 DPO 适配器：base 是 SFT 合并模型（不是原始 Qwen3.8-27B）
+llamafactory-cli export \
+  --model_name_or_path /data/models/Qwen3.8-27B-merged \
+  --adapter_name_or_path /data/saves/qwen38-27b-goldthread-dpo \
+  --template qwen3_8 --finetuning_type lora \
+  --export_dir /data/models/Qwen3.8-27B-dpo-merged
 ```
 
-**27B DPO 显存提醒**：policy bf16 ≈54G + ref 8bit ≈27G ≈ **81G**，80G 卡会临界。
-OOM 时按顺序：`ref_model_quantization_bit: 8 → 4` → `cutoff_len 8192 → 4096` → 改两卡 TP。
+**27B DPO 显存方案**：`train_dpo.yaml` 以 `Qwen3.8-27B-merged`（SFT 合并模型）为 base 训新的 DPO LoRA，
+不设 `ref_model`——LLaMA-Factory 对「LoRA + 无 ref_model」用同一模型 `disable_adapter()` 做 ref 前向，
+ref 就是 SFT 模型，不再额外加载 8bit ref。显存 ≈ bf16 权重 54G + 激活；`train_lowmem.py` 自动加载
+`lowmem_dpo.py`，policy / ref 都只对 response 位置算 logits 并分块升 fp32（原生全量 logits ≈ 40G 是 OOM 主因）。
+日志前 3 步打印 `[lowmem-dpo] … 监督位置=… 峰值显存=…` 确认补丁生效。
+OOM 时按顺序：`LOWMEM_DPO_CHUNK=512` → `cutoff_len 8192 → 6144 → 4096` → `eval_strategy: "no"`。
 
-**27B 训练首步必看**：`nvidia-smi` 峰值 >78GB 就把 `cutoff_len` 降到 12288（仍覆盖 p99）。
+**27B 训练首步必看**：`[lowmem]` 日志的峰值显存 / `nvidia-smi` 峰值 >78GB，先确认 2.6 的线性注意力 kernel 已装，
+再把 `cutoff_len` 降到 12288（仍覆盖 p99）。
 
 ---
 
@@ -296,12 +324,13 @@ OOM 时按顺序：`ref_model_quantization_bit: 8 → 4` → `cutoff_len 8192 �
 
 | 现象 | 处置 |
 | :--- | :--- |
-| 首步就 OOM | 确认装了 `liger-kernel`；`enable_liger_kernel: true`；`cutoff_len` 降档 |
+| 首步就 OOM（8B） | 确认装了 `liger-kernel`；`enable_liger_kernel: true`；`cutoff_len` 降档 |
+| 首步就 OOM（27B） | 确认用的是 `python train_lowmem.py` 而不是 `llamafactory-cli train`；装 `flash-linear-attention` / `causal-conv1d`；`cutoff_len` 降档 |
 | 训练中 eval 阶段 OOM | 正常 —— eval 不吃 Liger 融合 CE。设 `eval_strategy: "no"`，训完单独跑 `eval_*.yaml` |
 | 进程突然消失、日志无 traceback | 大概率系统 OOM Killer（SIGKILL-9）。`train_monitor.py` 会直接告诉你；处置：加内存/swap |
 | loss 前 100 步不降 | 模板错（think 重复注入）→ 重跑 `check_data.py`，8B 用 `qwen3`、27B 用 `qwen3_8` |
 | 输出只有 tool_call 没有 think | 历史步参与了 loss → 确认 `mask_history: true` |
-| DPO 后模型崩（乱码/think 不闭合） | `ref_model` 没指向 SFT 模型 → 见 RESULT.md 的 DPO 根因 |
+| DPO 后模型崩（乱码/think 不闭合） | ref 不是 SFT 模型：DPO 的 `model_name_or_path` 必须是 SFT 合并目录（ref = 关 adapter 后的它）→ 见 RESULT.md 的 DPO 根因 |
 | 客户端看到 `&lt;think&gt;` 原文 | 服务层缺 reasoning parser → 用 `serve_vllm.sh`（含 `--reasoning-parser`） |
 | flash-attn 编译失败 | 改 `flash_attn: sdpa`，别在编译上耗时间 |
 

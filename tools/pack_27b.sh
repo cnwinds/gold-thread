@@ -56,6 +56,8 @@ done
 SCRIPTS=(
   check_env.py
   check_data.py
+  train_lowmem.py
+  lowmem_dpo.py
   train_monitor.py
   smoke_infer_merged.py
   verify_longctx.py

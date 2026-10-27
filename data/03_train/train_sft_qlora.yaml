@@ -1,3 +1,4 @@
+### 启动：python train_lowmem.py train_sft_qlora.yaml（原因见 train_sft.yaml 顶部）
 ### model
 model_name_or_path: /data/models/Qwen3.8-27B
 trust_remote_code: true

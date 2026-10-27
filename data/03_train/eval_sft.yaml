@@ -1,7 +1,7 @@
 ### 27B 训后单独跑 eval（训练中关掉 eval 的原因见 train_sft.yaml / RESULT.md）
-### 用法：llamafactory-cli train eval_sft.yaml
+### 用法：python train_lowmem.py eval_sft.yaml（只算监督位置 logits，16K 不再 OOM）
 ### 说明：bs=1；27B 必须 enable_liger_kernel: false（qwen3_5 不在 Liger 支持列表）
-###       若 OOM 依次降 cutoff_len → 16384 → 12288 → 8192
+###       若仍 OOM 依次降 cutoff_len → 12288 → 8192
 ### model
 model_name_or_path: /data/models/Qwen3.8-27B
 adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft

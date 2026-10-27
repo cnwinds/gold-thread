@@ -609,10 +609,17 @@ nvidia-smi --query-gpu=name,memory.total --format=csv
 ### 6.1 启动
 
 ```bash
-cd LLaMA-Factory
-llamafactory-cli train data/03_train/train_sft.yaml
-# 单卡不需要 torchrun；若脚本强制，设 FORCE_TORCHRUN=0
+cd /data/goldthread/03_train
+CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_sft.yaml
+# 多卡 DDP：torchrun --nproc_per_node 2 train_lowmem.py train_sft.yaml
 ```
+
+**27B 不要用 `llamafactory-cli train`**：词表 248320、qwen3_5 拿不到 Liger 融合 CE，
+原生路径对 16K 全部位置算 logits 并升 fp32（bf16 8G + fp32 16G + 反向梯度 16G ≈ 40GB），
+加 54G 权重与 11G 检查点激活 ≈ 105GB，单卡 80G 在 16K 样本上必 OOM。
+`train_lowmem.py` 接管 `Trainer.compute_loss`，只对 `labels != -100` 的位置过 `lm_head`
+（`mask_history` 下通常 < 2K token），CE 分块 + checkpoint；loss/梯度与原生数学等价，
+归一化与梯度累积缩放沿用 Trainer 原约定。日志前 3 步打印 `[lowmem] seq_len / 监督位置 / 峰值显存`。
 
 ### 6.2 训练中要盯的三件事
 
@@ -622,7 +629,8 @@ llamafactory-cli train data/03_train/train_sft.yaml
 
 ### 6.3 OOM 处置阶梯（按顺序试）
 
-`cutoff_len 16384 → 12288` → 开 `enable_liger_kernel: true` → `flash_attn: sdpa` 换回 `fa2`
+确认用 `train_lowmem.py` 启动 → 装 `flash-linear-attention` / `causal-conv1d`（日志无 "Falling back to torch implementation"）
+→ `cutoff_len 16384 → 12288` → `flash_attn: sdpa` 换回 `fa2`
 → `gradient_accumulation_steps 4 → 8`（不等于降显存，但可把 micro-batch 保持 1）
 → 仍未解决才考虑 `train_sft_qlora.yaml`（4-bit，质量略降）
 
@@ -650,20 +658,25 @@ python verify_longctx.py --model /data/models/Qwen3.8-27B-merged \
 ## 8. DPO 偏好对齐（SFT 达标后再做）
 
 ```bash
-llamafactory-cli train data/03_train/train_dpo.yaml
+cd data/03_train
+CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_dpo.yaml   # 不要用 llamafactory-cli train（全量 logits 会 OOM）
 ```
 
 单卡注意：
 
-- **`ref_model` 必须显式指向 SFT 模型**（`/data/models/Qwen3.8-27B-merged`）。
-  LoRA 做 DPO 时默认的 reference 是「关掉 adapter 的 base」，分布与 SFT 差太远 → 会把模型推崩
-  （8B 实测：输出乱码、think 不闭合、无 tool_call）。8B 的 `train_dpo_qwen3_8b.yaml` 已内置此修正。
+- **reference 必须是 SFT 模型**。LoRA 做 DPO 且不设 `ref_model` 时，LLaMA-Factory 的 reference 是
+  「关掉 adapter 的 `model_name_or_path`」；若那是原始 base，分布与 SFT 差太远 → 会把模型推崩
+  （8B 实测：输出乱码、think 不闭合、无 tool_call）。
+  现方案：`model_name_or_path: /data/models/Qwen3.8-27B-merged`（SFT 合并产物）+ 新 DPO LoRA、不设 `ref_model`，
+  reference = 关 adapter 的 merged = SFT 模型，且不额外加载权重。8B 的 `train_dpo_qwen3_8b.yaml` 同方案。
 - `cutoff_len` 已降到 **8192**（DPO 同时跑 policy + reference 两路前向，激活约翻倍）；
   数据用 **v2w 窗口裁剪版**（`pi_dpo_preference_pairs_train_v2w`），避免 LLaMA-Factory
   从 prompt **尾部**截断（那会丢掉最近的 observation）
-- **显存**：policy bf16 ≈54G + ref 8bit ≈27G ≈ 81G，80G 临界。
-  OOM 依次：`ref_model_quantization_bit: 8 → 4` → `cutoff_len 8192 → 4096` → 2 卡 TP
-- 从 SFT 适配器继续：`model_name_or_path` 指底座 + `adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft`
+- **显存**：bf16 权重 ≈54G + 激活；`train_lowmem.py` 加载 `lowmem_dpo.py`，policy / ref 只对 response 位置算 logits、
+  分块升 fp32（原生 2×8192×248320 全量 fp32 logits ≈ 40G 是 OOM 主因）。
+  OOM 依次：`LOWMEM_DPO_CHUNK=512` → `cutoff_len 8192 → 6144 → 4096` → `eval_strategy: "no"`
+- 导出：DPO 适配器叠在 merged 上，`llamafactory-cli export --model_name_or_path /data/models/Qwen3.8-27B-merged
+  --adapter_name_or_path /data/saves/qwen38-27b-goldthread-dpo ...`（不是原始 base）
 - `pref_beta: 0.1`；lr 用 **1e-5**（5e-5 会把模型推崩）；数据约 94 对，1 epoch 即可
 
 ## 9. 训练产物与迁移到 48G 推理机

@@ -109,11 +109,15 @@ def main() -> int:
             good = True
         (ok if good else bad)(f"{m} {v}（期望 {desc}）")
 
-    for m in ("flash_attn", "liger_kernel", "bitsandbytes", "llamafactory"):
+    for m in ("flash_attn", "fla", "causal_conv1d", "liger_kernel", "bitsandbytes", "llamafactory"):
         v = ver(m)
         if v.startswith("<"):
             if m == "flash_attn":
                 print(f"  [WARN] {m} 未安装 → 训练配置请把 flash_attn 改成 sdpa")
+            elif m in ("fla", "causal_conv1d"):
+                pkg = "flash-linear-attention" if m == "fla" else "causal-conv1d"
+                print(f"  [WARN] {m} 未安装 → 27B 的 48 层 linear_attention 退回 PyTorch 实现（更占显存、更慢）；"
+                      f"装：pip install {pkg} --no-build-isolation")
             elif m == "liger_kernel":
                 # 8B 配置 enable_liger_kernel: true 时是硬依赖，不装必 OOM
                 print(f"  [WARN] {m} 未安装 → 8B 配置要求 Liger 融合 CE，不装会 OOM；"
@@ -304,7 +308,7 @@ def main() -> int:
         print("    1) nvidia-smi 确认卡型与显存")
         print("    2) python -c \"import torch;print(torch.cuda.is_bf16_supported())\"  期望 True")
         print("    3) python -c \"import flash_attn\"                                确认 kernel 可加载")
-        print("    4) 用 train_sft.yaml 跑 20 步冒烟，盯 nvidia-smi 峰值 < 78GB")
+        print("    4) 用 python train_lowmem.py train_sft.yaml 跑 20 步冒烟，盯 nvidia-smi 峰值 < 78GB")
         print("    5) 抽 5 条 eval 样本续写，确认输出 thinking + <tool_call>")
     return 0 if not RESULT["fail_items"] else 1
 

@@ -93,7 +93,8 @@ llamafactory-cli train train_sft_qwen3_8b.yaml
 - lora_target: all
 + lora_target: mlp                      # 不动注意力投影层，保住长上下文
 ```
-另需：不设 deepspeed、单卡直接跑。
+另需：不设 deepspeed、单卡直接跑，并且**改用 `python train_lowmem.py train_sft.yaml` 启动**
+（27B 拿不到 Liger 融合 CE，原生路径 16K 样本的 fp32 logits ≈ 40GB 会 OOM；该脚本只算监督位置的 logits）。
 
 ## API 服务部署（合并后）
 

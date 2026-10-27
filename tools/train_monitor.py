@@ -425,9 +425,11 @@ def _advise_oom(system: bool = False) -> None:
         print("     → 加大 swap / 加 RAM / 换更大内存实例")
         print("     → 合并 27B bf16 时 CPU 峰值约 60GB，内存不足会被直接 SIGKILL")
         print("     → 也可先按下面的 GPU 显存手段排查：")
+    print("  0) 27B：确认用 python train_lowmem.py <yaml> 启动（只算监督位置 logits，省 ~40GB），"
+          "并装 flash-linear-attention / causal-conv1d")
     print("  1) cutoff_len 降到 16384 → 12288 → 8192（步顺序，不是尾部丢）")
     print("  2) gradient_accumulation_steps 4 → 8（micro-batch 保持 1）")
-    print("  3) 确认 enable_liger_kernel: true（省 fp32 logits）")
+    print("  3) 8B：确认 enable_liger_kernel: true（省 fp32 logits）")
     print("  4) flash_attn: fa2 → sdpa（若 flash-attn 未装）")
     print("  5) 仍未解决：换 train_sft_qlora.yaml（4-bit，质量略降）")
     print("  6) 最终手段：换 80G 显卡（A800）或双 48G TP")
