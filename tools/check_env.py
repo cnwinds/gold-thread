@@ -2,7 +2,7 @@
 """环境自检：无 GPU 也能跑的检查 + 有 GPU 后才做的清单。
 
 用法：
-    python check_env.py --model /data/models/Qwen3.8-27B --data /data/goldthread/03_train
+    python check_env.py --model /root/models/Qwen3.8-27B --data /root/data/03_train
     python check_env.py                       # 只查软件栈与依赖版本
 
 设计：每项检查独立 try，输出 [PASS] / [FAIL] / [SKIP]（无 GPU 时跳过）。
@@ -48,6 +48,48 @@ def ver(mod: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return f"<import 失败: {type(exc).__name__}>"
     return str(getattr(m, "__version__", "?"))
+
+
+
+_SFT_TRAIN_NAMES = (
+    "sft.train.lf.jsonl",
+    "sft.train.jsonl",
+    "sft_step_windows_sharegpt.train.v2.jsonl",
+    "sft_step_windows_sharegpt.train.jsonl",
+)
+_SFT_EVAL_NAMES = (
+    "sft.eval.lf.jsonl",
+    "sft.eval.jsonl",
+    "sft_step_windows_sharegpt.eval.v2.jsonl",
+    "sft_step_windows_sharegpt.eval.jsonl",
+)
+_DPO_TRAIN_NAMES = (
+    "dpo.train.lf.jsonl",
+    "dpo.train.jsonl",
+    "dpo_w.train.jsonl",
+    "dpo_preference_pairs.train.v2.jsonl",
+    "dpo_preference_pairs.train.v2w.jsonl",
+    "dpo_preference_pairs.train.jsonl",
+)
+
+
+def _resolve_data_dir(path: Path) -> Path:
+    """交付 zip 的 jsonl 在 ./data；直接把解压目录传进来时自动进这一层。"""
+    path = Path(path)
+    nested = path / "data"
+    if (nested / "dataset_info.json").is_file() and not (path / "dataset_info.json").is_file():
+        return nested
+    if (nested / "dataset_info.json").is_file() and not any(path.glob("*.jsonl")):
+        return nested
+    return path
+
+
+def _first_existing(directory: Path, names):
+    for name in names:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def main() -> int:
@@ -116,14 +158,14 @@ def main() -> int:
                 print(f"  [WARN] {m} 未安装 → 训练配置请把 flash_attn 改成 sdpa")
             elif m in ("fla", "causal_conv1d"):
                 pkg = "flash-linear-attention" if m == "fla" else "causal-conv1d"
-                print(f"  [WARN] {m} 未安装 → 27B 的 48 层 linear_attention 退回 PyTorch 实现（更占显存、更慢）；"
-                      f"装：pip install {pkg} --no-build-isolation")
+                print(
+                    f"  [WARN] {m} 未安装 → 27B 的 48 层 linear_attention 会退回 PyTorch 实现；"
+                    f"pip install {pkg} --no-build-isolation"
+                )
             elif m == "liger_kernel":
-                # 8B 配置 enable_liger_kernel: true 时是硬依赖，不装必 OOM
-                print(f"  [WARN] {m} 未安装 → 8B 配置要求 Liger 融合 CE，不装会 OOM；"
-                      f"装：pip install liger-kernel，或把 YAML 改 enable_liger_kernel: false（显存需更多）")
+                print("  [WARN] liger_kernel 未安装 → 8B 配置需要它；只跑 27B 可忽略")
             elif m == "bitsandbytes":
-                print(f"  [INFO] {m} 未安装（仅 QLoRA 4bit / DPO ref_model 8bit 量化需要）")
+                print(f"  [INFO] {m} 未安装（仅 QLoRA / 8bit ref 需要）")
             else:
                 bad(f"{m} 未安装（LLaMA-Factory 必须）")
         else:
@@ -176,9 +218,7 @@ def main() -> int:
                     bad("tokenizer 无 chat_template")
                 # 用真实 tokenizer 渲染一条样本，检查 think 注入
                 if args.data:
-                    t = next((Path(args.data) / x for x in (
-                        "sft_step_windows_sharegpt.train.v2.jsonl",
-                        "sft_step_windows_sharegpt.train.jsonl") if (Path(args.data) / x).exists()), None)
+                    t = _first_existing(_resolve_data_dir(Path(args.data)), _SFT_TRAIN_NAMES)
                     if t is not None and t.exists():
                         with t.open(encoding="utf-8") as f:
                             row = json.loads(f.readline())
@@ -188,7 +228,7 @@ def main() -> int:
                         msgs = [{"role": role_map.get(c["from"], "user"), "content": c["value"]} for c in conv]
                         try:
                             text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
-                            o, c2 = text.count(" thinking"), text.count("<" + "/think>")
+                            o, c2 = text.count("<" + "think>"), text.count("<" + "/think>")
                             tcalls = text.count("<tool_call>")
                             ids = tok(text, add_special_tokens=False)["input_ids"]
                             msg = f"模板渲染：tokens={len(ids)}  thinking×{o} ×{c2} <tool_call>×{tcalls}"
@@ -208,7 +248,7 @@ def main() -> int:
     # ---------- D. 数据集 ----------
     section("D. 数据集")
     if args.data:
-        d = Path(args.data)
+        d = _resolve_data_dir(Path(args.data))
         if not d.exists():
             bad(f"数据目录不存在：{d}")
         else:
@@ -218,24 +258,20 @@ def main() -> int:
             for p in files:
                 n = sum(1 for line in p.open(encoding="utf-8") if line.strip())
                 print(f"  {p.name:<48} {n:>6} 条")
-            # 必需数据集：优先 v2（实际训练用），兼容 v1 旧版
-            pairs = [
-                ("sft_step_windows_sharegpt.train.v2.jsonl", "SFT 训练集"),
-                ("sft_step_windows_sharegpt.eval.v2.jsonl", "SFT 验证集"),
-            ]
-            for f, desc in pairs:
-                (ok if (d / f).exists() else bad)(f"存在 {f}（{desc}）")
-            # DPO 数据：v2w（窗口裁剪）优先，v2 兜底
-            dpo_hit = next((x for x in ("dpo_preference_pairs.train.v2w.jsonl",
-                                        "dpo_preference_pairs.train.v2.jsonl",
-                                        "dpo_preference_pairs.train.jsonl")
-                            if (d / x).exists()), None)
-            (ok if dpo_hit else bad)(f"存在 DPO 训练集（{dpo_hit or 'v2w / v2 / v1 均未找到'}）")
+            for names, desc in (
+                (_SFT_TRAIN_NAMES, "SFT 训练集"),
+                (_SFT_EVAL_NAMES, "SFT 验证集"),
+            ):
+                hit = _first_existing(d, names)
+                (ok if hit else bad)(f"存在 {hit.name if hit else names[0]}（{desc}）")
+            dpo_hit = _first_existing(d, _DPO_TRAIN_NAMES)
+            if dpo_hit:
+                ok(f"存在 {dpo_hit.name}（DPO 训练集）")
+            else:
+                print("  [INFO] 未找到 DPO 训练集（只做 SFT 时可以没有）")
             (ok if (d / "dataset_info.json").exists() else bad)("存在 dataset_info.json")
-            # 长度分布（有 tokenizer 才有意义）：优先 v2
-            t = next((d / x for x in ("sft_step_windows_sharegpt.train.v2.jsonl",
-                                      "sft_step_windows_sharegpt.train.jsonl")
-                      if (d / x).exists()), None)
+            # 长度分布（有 tokenizer 才有意义）
+            t = _first_existing(d, _SFT_TRAIN_NAMES)
             if t is not None and t.exists():
                 lens = []
                 over = 0
@@ -274,23 +310,51 @@ def main() -> int:
 
     # ---------- E. 磁盘与内存 ----------
     section("E. 磁盘与内存")
+    has_gpu = False
+    try:
+        import torch as _t
+        has_gpu = bool(_t.cuda.is_available())
+    except Exception:  # noqa: BLE001
+        pass
     du = shutil.disk_usage("/")
     free_gb = du.free / 1024 ** 3
-    (ok if free_gb >= 100 else bad)(f"/ 可用 {free_gb:.0f} GB（27B 训练建议 ≥100GB）")
+    ram = 0.0
     try:
         import psutil  # type: ignore
         ram = psutil.virtual_memory().total / 1024 ** 3
-        (ok if ram >= 64 else bad)(f"主存 {ram:.0f} GB（建议 ≥64GB）")
     except ImportError:
         try:
             with open("/proc/meminfo") as f:
                 for line in f:
                     if line.startswith("MemTotal"):
                         ram = int(line.split()[1]) / 1024 ** 2
-                        (ok if ram >= 64 else bad)(f"主存 {ram:.0f} GB（建议 ≥64GB）")
                         break
         except OSError:
-            skip("无法读取主存信息")
+            ram = 0.0
+
+    # 无卡/CPU 实例通常规格远小于训练机，这里只报告不判失败
+    def _spec(msg: str, good: bool) -> None:
+        if good:
+            ok(msg)
+        elif has_gpu:
+            bad(msg)
+        else:
+            print(f"  [INFO] {msg}  ← 无卡/CPU 实例规格通常更小，正式训练机需达标")
+
+    _spec(f"/ 可用 {free_gb:.0f} GB（27B bf16 权重 54GB，训练建议 ≥100GB）", free_gb >= 100)
+    _spec(f"主存 {ram:.0f} GB（27B 合并导出峰值约 60GB，建议 ≥64GB）", ram >= 64)
+
+    if not has_gpu:
+        print()
+        print("  【本机定位判断】无 GPU + 上述规格 → 这台只适合：")
+        print("    · pip 安装依赖（约 5~8GB）")
+        print("    · 下载并验证 小模型（Qwen3-8B 约 16GB）与数据集")
+        print("    · 跑 check_data.py / check_env.py 做模板与数据校验")
+        if free_gb < 70:
+            print(f"    ✗ 不要在这里下载 27B（需 54GB，当前仅 {free_gb:.0f}GB 可用）")
+        if ram < 32:
+            print(f"    ✗ 不要在这里合并 27B（需 ~60GB 内存，当前 {ram:.0f}GB）")
+        print("    → 27B 的下载/训练/合并，等切到 GPU 实例（磁盘 200GB、内存 100GB+）再做")
 
     # ---------- F. 结论 ----------
     section("结论")
@@ -308,7 +372,7 @@ def main() -> int:
         print("    1) nvidia-smi 确认卡型与显存")
         print("    2) python -c \"import torch;print(torch.cuda.is_bf16_supported())\"  期望 True")
         print("    3) python -c \"import flash_attn\"                                确认 kernel 可加载")
-        print("    4) 用 python train_lowmem.py train_sft.yaml 跑 20 步冒烟，盯 nvidia-smi 峰值 < 78GB")
+        print("    4) 用 train_sft.yaml 跑 20 步冒烟，盯 nvidia-smi 峰值 < 78GB")
         print("    5) 抽 5 条 eval 样本续写，确认输出 thinking + <tool_call>")
     return 0 if not RESULT["fail_items"] else 1
 

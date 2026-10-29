@@ -2843,7 +2843,7 @@ function rwRenderDeliveryDetail(rb) {
           ${del.zip_path ? "交付包已就绪，可随时下载" : del.handoff_exists ? "handoff.md 已生成，点击「生成交付 zip」即可打包" : "等待 Stage 3 完成后自动生成"}
         </div>
         <div class="muted" style="font-size:12.5px;line-height:1.65">
-          把解压后的目录交给另一个 AI，让它阅读 <span class="mono">handoff.md</span> 第 11 节「AI Agent 接手清单」，即可自动完成环境安装、SFT 微调、DPO 对齐与 LoRA 合并导出。
+          把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。
         </div>
       </div>
       <div class="rw-pack-grid">
@@ -2854,11 +2854,11 @@ function rwRenderDeliveryDetail(rb) {
       <div class="rw-pack-card">
         <div style="font-size:12.5px;font-weight:600;margin-bottom:8px">包内清单（针对 Qwen3.8-27B Dense 稠密模型，下游 AI 直接消费）</div>
         <div class="mono muted" style="font-size:12px;line-height:1.8">
-          handoff.md · 27B 硬件显存核算 → 环境搭建 → SFT/QLoRA → DPO → 合并导出 → 验收清单<br>
-          train_sft.yaml · 27B BF16 LoRA 主配置（含 FlashAttention-2 + DeepSpeed ZeRO-2）<br>
-          train_sft_qlora.yaml · 27B 4-bit QLoRA 备选配置（48G 单卡 / 2×24G 可跑）<br>
-          train_dpo.yaml + ds_z2/z3_config.json · DPO 偏好对齐与 DeepSpeed 配置文件<br>
-          dataset_info.json / data/*.jsonl · 全部 SFT 单步窗口、完整轨迹、DPO 偏好对
+          START_HERE.md · 解压后先跑 check_data.py，再按里面的命令开训<br>
+          train_lowmem.py + lowmem_dpo.py · 27B 低显存启动器（不要直接 llamafactory-cli train）<br>
+          train_sft.yaml · dataset: gt_sft_train_lf，dataset_dir: ./data<br>
+          train_dpo.yaml · dataset: gt_dpo_train_lf<br>
+          data/dataset_info.json + data/*.lf.jsonl · 键、文件、YAML 已对齐，无需改名或再规整
         </div>
       </div>
     </div>
