@@ -94,7 +94,7 @@ STEPS: List[Dict[str, Any]] = [
      "detail": "输出 handoff.md + train_sft.yaml / train_dpo.yaml：从环境搭建到训练的全流程",
      "output": "03_train/handoff.md"},
     {"id": "s3.package", "phase": "stage3", "owner": "程序", "label": "打包交付 zip",
-     "detail": "把 handoff + 数据集 + 训练配置打成 goldthread-delivery-*.zip，可直接交给下游 AI",
+     "detail": "规整成 sft/dpo 的 *.lf.jsonl，dataset_info 与 YAML 的 gt_*_lf 对齐，打成可直接训练的 zip",
      "output": "03_train/delivery/*.zip"},
 ]
 

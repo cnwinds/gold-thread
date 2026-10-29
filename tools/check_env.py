@@ -50,6 +50,48 @@ def ver(mod: str) -> str:
     return str(getattr(m, "__version__", "?"))
 
 
+
+_SFT_TRAIN_NAMES = (
+    "sft.train.lf.jsonl",
+    "sft.train.jsonl",
+    "sft_step_windows_sharegpt.train.v2.jsonl",
+    "sft_step_windows_sharegpt.train.jsonl",
+)
+_SFT_EVAL_NAMES = (
+    "sft.eval.lf.jsonl",
+    "sft.eval.jsonl",
+    "sft_step_windows_sharegpt.eval.v2.jsonl",
+    "sft_step_windows_sharegpt.eval.jsonl",
+)
+_DPO_TRAIN_NAMES = (
+    "dpo.train.lf.jsonl",
+    "dpo.train.jsonl",
+    "dpo_w.train.jsonl",
+    "dpo_preference_pairs.train.v2.jsonl",
+    "dpo_preference_pairs.train.v2w.jsonl",
+    "dpo_preference_pairs.train.jsonl",
+)
+
+
+def _resolve_data_dir(path: Path) -> Path:
+    """交付 zip 的 jsonl 在 ./data；直接把解压目录传进来时自动进这一层。"""
+    path = Path(path)
+    nested = path / "data"
+    if (nested / "dataset_info.json").is_file() and not (path / "dataset_info.json").is_file():
+        return nested
+    if (nested / "dataset_info.json").is_file() and not any(path.glob("*.jsonl")):
+        return nested
+    return path
+
+
+def _first_existing(directory: Path, names):
+    for name in names:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="")
@@ -109,13 +151,21 @@ def main() -> int:
             good = True
         (ok if good else bad)(f"{m} {v}（期望 {desc}）")
 
-    for m in ("flash_attn", "liger_kernel", "bitsandbytes", "llamafactory"):
+    for m in ("flash_attn", "fla", "causal_conv1d", "liger_kernel", "bitsandbytes", "llamafactory"):
         v = ver(m)
         if v.startswith("<"):
             if m == "flash_attn":
                 print(f"  [WARN] {m} 未安装 → 训练配置请把 flash_attn 改成 sdpa")
-            elif m in ("liger_kernel", "bitsandbytes"):
-                print(f"  [INFO] {m} 未安装（本方案默认不用，可忽略）")
+            elif m in ("fla", "causal_conv1d"):
+                pkg = "flash-linear-attention" if m == "fla" else "causal-conv1d"
+                print(
+                    f"  [WARN] {m} 未安装 → 27B 的 48 层 linear_attention 会退回 PyTorch 实现；"
+                    f"pip install {pkg} --no-build-isolation"
+                )
+            elif m == "liger_kernel":
+                print("  [WARN] liger_kernel 未安装 → 8B 配置需要它；只跑 27B 可忽略")
+            elif m == "bitsandbytes":
+                print(f"  [INFO] {m} 未安装（仅 QLoRA / 8bit ref 需要）")
             else:
                 bad(f"{m} 未安装（LLaMA-Factory 必须）")
         else:
@@ -168,8 +218,8 @@ def main() -> int:
                     bad("tokenizer 无 chat_template")
                 # 用真实 tokenizer 渲染一条样本，检查 think 注入
                 if args.data:
-                    t = Path(args.data) / "sft_step_windows_sharegpt.train.jsonl"
-                    if t.exists():
+                    t = _first_existing(_resolve_data_dir(Path(args.data)), _SFT_TRAIN_NAMES)
+                    if t is not None and t.exists():
                         with t.open(encoding="utf-8") as f:
                             row = json.loads(f.readline())
                         conv = row["conversations"]
@@ -178,7 +228,7 @@ def main() -> int:
                         msgs = [{"role": role_map.get(c["from"], "user"), "content": c["value"]} for c in conv]
                         try:
                             text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
-                            o, c2 = text.count(" thinking"), text.count("")
+                            o, c2 = text.count("<" + "think>"), text.count("<" + "/think>")
                             tcalls = text.count("<tool_call>")
                             ids = tok(text, add_special_tokens=False)["input_ids"]
                             msg = f"模板渲染：tokens={len(ids)}  thinking×{o} ×{c2} <tool_call>×{tcalls}"
@@ -198,7 +248,7 @@ def main() -> int:
     # ---------- D. 数据集 ----------
     section("D. 数据集")
     if args.data:
-        d = Path(args.data)
+        d = _resolve_data_dir(Path(args.data))
         if not d.exists():
             bad(f"数据目录不存在：{d}")
         else:
@@ -208,13 +258,21 @@ def main() -> int:
             for p in files:
                 n = sum(1 for line in p.open(encoding="utf-8") if line.strip())
                 print(f"  {p.name:<48} {n:>6} 条")
-            need = ["sft_step_windows_sharegpt.train.jsonl", "sft_step_windows_sharegpt.eval.jsonl",
-                    "dpo_preference_pairs.train.jsonl", "dataset_info.json"]
-            for f in need:
-                (ok if (d / f).exists() else bad)(f"存在 {f}")
+            for names, desc in (
+                (_SFT_TRAIN_NAMES, "SFT 训练集"),
+                (_SFT_EVAL_NAMES, "SFT 验证集"),
+            ):
+                hit = _first_existing(d, names)
+                (ok if hit else bad)(f"存在 {hit.name if hit else names[0]}（{desc}）")
+            dpo_hit = _first_existing(d, _DPO_TRAIN_NAMES)
+            if dpo_hit:
+                ok(f"存在 {dpo_hit.name}（DPO 训练集）")
+            else:
+                print("  [INFO] 未找到 DPO 训练集（只做 SFT 时可以没有）")
+            (ok if (d / "dataset_info.json").exists() else bad)("存在 dataset_info.json")
             # 长度分布（有 tokenizer 才有意义）
-            t = d / "sft_step_windows_sharegpt.train.jsonl"
-            if t.exists():
+            t = _first_existing(d, _SFT_TRAIN_NAMES)
+            if t is not None and t.exists():
                 lens = []
                 over = 0
                 tok = None
