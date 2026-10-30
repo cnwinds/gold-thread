@@ -195,6 +195,38 @@
   .sub-h{font-size:12.5px;color:var(--text-3);margin:18px 0 8px}
   .sub-h:first-child{margin-top:0}
 
+
+  /* ---------- 审核专页 ---------- */
+  .rv-hero{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:22px 24px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(135deg,rgba(217,180,103,.09),rgba(95,185,196,.04));margin-bottom:16px}
+  .rv-hero .n{font-family:var(--f-num);font-size:42px;font-weight:600;color:var(--gold);line-height:1;min-width:56px}
+  .rv-hero .copy{flex:1;min-width:200px}
+  .rv-hero .copy h2{margin:0 0 4px;font-size:18px}
+  .rv-hero .copy p{margin:0;color:var(--text-2);font-size:13.5px;line-height:1.5}
+  .rv-queue{display:flex;flex-direction:column;gap:8px}
+  .rv-card{display:block;padding:14px 16px;border:1px solid var(--line-soft);border-radius:10px;background:var(--ink-1);cursor:pointer;text-align:left;width:100%;color:inherit;font:inherit}
+  .rv-card:hover{border-color:var(--line);background:var(--ink-2)}
+  .rv-card.cur{border-color:rgba(217,180,103,.5);box-shadow:inset 3px 0 0 var(--gold)}
+  .rv-card .meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+  .rv-card .why{display:flex;flex-wrap:wrap;gap:5px}
+  .rv-card .sid{font-family:var(--f-mono);font-size:13px}
+  .rv-card .hint-line{font-size:12.5px;color:var(--text-3);margin-top:6px}
+  .rv-empty{padding:48px 24px;text-align:center;border:1px dashed var(--line);border-radius:12px;background:var(--ink-1)}
+  .rv-empty h2{margin:0 0 8px;font-size:18px}
+  .rv-empty p{margin:0 0 6px;color:var(--text-2);line-height:1.55}
+  .rv-empty .path{font-family:var(--f-mono);font-size:12px;color:var(--text-3);margin:12px 0 18px}
+  .rv-mission{padding:12px 14px;border-radius:8px;background:rgba(217,180,103,.08);border:1px solid rgba(217,180,103,.22);margin-bottom:14px;font-size:14px;line-height:1.5}
+  .rv-mission b{color:var(--gold)}
+  .rv-todos{margin-bottom:14px}
+  .rv-todo{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:8px;margin-bottom:6px;background:var(--ink-0);width:100%;text-align:left;color:inherit;font:inherit;cursor:pointer}
+  .rv-todo:hover{border-color:var(--line)}
+  .rv-todo.done{opacity:.5}
+  .ov-review-card{display:flex;align-items:center;gap:16px;padding:16px 18px;border:1px solid var(--line);border-radius:10px;background:var(--ink-1);cursor:pointer;margin-bottom:16px;width:100%;text-align:left;color:inherit;font:inherit}
+  .ov-review-card:hover{border-color:rgba(217,180,103,.45);background:var(--ink-2)}
+  .ov-review-card .n{font-family:var(--f-num);font-size:28px;font-weight:600;color:var(--gold);min-width:40px}
+  .ov-review-card .t{font-size:15px;font-weight:600;margin-bottom:2px}
+  .ov-review-card .s{font-size:12.5px;color:var(--text-3)}
+  #tabs button em.badge-on{color:var(--gold);font-weight:600}
+
   /* ---------- 抽屉 ---------- */
   .scrim{position:fixed;inset:0;background:rgba(8,10,14,.55);opacity:0;pointer-events:none;transition:opacity .2s;z-index:39}
   .scrim.open{opacity:1;pointer-events:auto}
@@ -480,6 +512,8 @@
   .rb-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--mint),var(--pos));transition:width .3s}
   .rb-live{width:7px;height:7px;border-radius:50%;background:var(--mint);animation:rbpulse 1.1s infinite;flex:none}
   @keyframes rbpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
+  .rw-spin{width:16px;height:16px;border:2px solid rgba(217,180,103,.25);border-top-color:var(--gold);border-radius:50%;animation:rwspin .8s linear infinite;flex:none;margin-top:2px}
+  @keyframes rwspin{to{transform:rotate(360deg)}}
   .rb-owner{font-size:10.5px;padding:1px 6px;border-radius:4px;background:var(--ink-3);color:var(--text-3)}
   .rb-owner.o-m{background:rgba(217,180,103,.14);color:#e0c88f}
   .rb-owner.o-h{background:rgba(169,178,220,.16);color:var(--pend)}
@@ -781,6 +815,7 @@
         <button data-tab="raw" class="s-raw"><span class="node"></span>原始数据<em id="navRaw"></em></button>
         <button data-tab="gold" class="s-gold"><span class="node"></span>黄金数据<em id="navGold"></em></button>
         <button data-tab="train" class="s-train"><span class="node"></span>训练数据<em id="navTrain"></em></button>
+        <button data-tab="review" class="s-gold"><span class="node"></span>审核<em id="navReview"></em></button>
       </div>
       <div class="nav-cap">操作</div>
       <button data-tab="runs">
@@ -804,6 +839,7 @@
       <section id="view-overview"></section>
       <section id="view-raw" class="hidden"></section>
       <section id="view-gold" class="hidden"></section>
+      <section id="view-review" class="hidden"></section>
       <section id="view-train" class="hidden"></section>
       <section id="view-config" class="hidden"></section>
       <section id="view-runs" class="hidden"></section>
@@ -845,12 +881,15 @@ const PAGES = {
   overview: ["数据精炼工作台", "从源会话准入、回合清洗、黄金提纯到 SFT / DPO 生成：看清每一层的输入、损耗、人工门控与最终产出。"],
   raw:      ["Stage 1 · 采集与清洗", "审计会话准入、标签与逐回合分类；可直接修正根任务、噪音、续接和纠偏判定。"],
   gold:     ["Stage 2 · 黄金提纯与复核", "对照原始思考、脚本清洗和模型改写；逐步采纳、手改、排除后即时预览训练集去向。"],
+  review:   ["审核", "队列优先：看清待办数量，点「开始审核」逐条处置改写/问题步，再通过或驳回。"],
   train:    ["Stage 3 · 训练样本", "按 SFT 窗口、完整轨迹、DPO 与病态诊断分别检视，追踪每条样本的项目、切分和生成原因。"],
   runs:     ["数据梳理 · 运行与交付", "自顶向下：先看四阶段全局，再聚焦当前步骤；按需展开详情，完成后下载交付 zip。"],
   config:   ["配置", "直接编辑 pipeline.yaml，保存后重跑管线生效。"],
 };
 
-let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:"", eff:""}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:"", project:"", stage:"", split:""}, job: null, drawerData: null, poured: false };
+let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:"", project:"", stage:"", split:""}, job: null, drawerData: null, poured: false };
+/** 交付打包作业 UI 状态（独立于 pipeline stage jobs） */
+let PACK = { running: false, jobId: null, startedAt: null, elapsed: 0, phase: "", error: null, result: null, timer: null };
 const REV = {active:false, sid:null, items:{}, note:"", originals:{}, scripts:{}, modelRw:{}, bad:new Set(), rewritten:new Set(), pairs:{}, timer:null, dirty:false, hasReview:false, roundsStale:false, finalized:false};
 const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模型通过", auto_reject:"模型剔除", held:"待人工复核", stale:"过期待确认", unreviewed:"未评审", finalized:"定稿"};
 const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold"||s==="finalized", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
@@ -908,7 +947,7 @@ function setTab(tab) {
   $("#pageDesc").textContent = PAGES[tab][1];
   document.title = PAGES[tab][0] + " · GoldThread";
   for (const t of Object.keys(PAGES)) $("#view-"+t).classList.toggle("hidden", t !== tab);
-  const loaders = {overview: loadOverview, raw: loadRaw, gold: loadGold, train: loadTrain, config: loadConfig, runs: loadRuns};
+  const loaders = {overview: loadOverview, raw: loadRaw, gold: loadGold, review: loadReview, train: loadTrain, config: loadConfig, runs: loadRuns};
   const view = $("#view-"+tab);
   if (!view.innerHTML.trim()) view.innerHTML = `<div class="loading">加载中…</div>`;
   loaders[tab]().catch(e => {
@@ -930,6 +969,10 @@ async function refreshMeta() {
   $("#navRaw").textContent = fmt(d.stages?.stage1?.sessions);
   $("#navGold").textContent = fmt(d.stages?.stage2?.sessions);
   $("#navTrain").textContent = fmt(d.train?.counts?.["sft_step_windows_sharegpt.jsonl"]);
+  const rs = d.stages?.review?.states || {};
+  const approx = (rs.held||0) + (rs.stale||0) + (rs.unreviewed||0);
+  setReviewBadge(approx, true);
+  updateReviewBadge().catch(() => {});
   return d;
 }
 
@@ -986,8 +1029,17 @@ async function loadOverview() {
     ["review", "模型评审", d.stages.review?.last_run, COLORS.pend],
   ];
 
+  const heldN = (d.stages.review?.states?.held||0)+(d.stages.review?.states?.stale||0);
+  const unrevN = d.stages.review?.states?.unreviewed||0;
+  const reviewTodoN = heldN + unrevN;
   $("#view-overview").innerHTML = `
     ${d.sync_dirty ? `<div class="sync-banner"><span class="tag t-failed">存在未同步变更</span><span class="grow">人工标注或上游数据晚于训练集。运行全流程后，Stage 3 才会反映最新结果。</span><button onclick="runStage('all',false)">立即同步</button></div>` : ""}
+    ${reviewTodoN ? `<button class="ov-review-card" onclick="jumpToReview()">
+      <span class="n">${fmt(reviewTodoN)}</span>
+      <span class="grow"><div class="t">审核待办 ${fmt(reviewTodoN)}</div>
+        <div class="s">待人工复核 ${fmt(heldN)} · 未评审 ${fmt(unrevN)} · 点此进入审核队列</div></span>
+      <span class="faint">去审核 →</span>
+    </button>` : ""}
     <div class="workflow-head">
       <div class="wf-stage" style="--c:${COLORS.ore}">
         <div class="wf-top"><span class="wf-no">1</span><span class="mono">COLLECT & CLEAN</span><span class="grow"></span><span>${ago(d.stages.stage1.last_run)}</span></div>
@@ -1483,11 +1535,32 @@ async function revDecide(decision) {
     toast(decision === "approved" ? "已通过，Stage 3 训练集已自动同步" : decision === "rejected" ? "已驳回并同步，不会进入训练集" : "已撤销结论", "ok");
     const sid = REV.sid;
     if (STATE.tab === "gold") loadGold().catch(() => {});
+    if (STATE.tab === "review" && (decision === "approved" || decision === "rejected") && STATE.review.autoAdvance) {
+      const ids = STATE.review.ids || [];
+      const i = ids.indexOf(sid);
+      const next = i >= 0 ? ids[i + 1] : ids[0];
+      STATE.review.ids = ids.filter(x => x !== sid);
+      STATE.review.items = (STATE.review.items || []).filter(x => x.session_id !== sid);
+      setReviewBadge(STATE.review.ids.length);
+      if (next && next !== sid) {
+        STATE.review.cursor = next;
+        openGold(next);
+      } else {
+        STATE.review.cursor = null;
+        closeDrawer();
+        toast("本轮待审已处理完", "ok");
+        loadReview().catch(() => {});
+      }
+      updateReviewBadge().catch(() => {});
+      return;
+    }
+    if (STATE.tab === "review") loadReview().catch(() => {});
     openGold(sid);
   } catch (e) { toast(e.message, "err"); }
 }
 function revMove(dir) {
-  const ids = STATE.gold.ids || [], i = ids.indexOf(REV.sid);
+  const ids = STATE.tab === "review" ? (STATE.review.ids || []) : (STATE.gold.ids || []);
+  const i = ids.indexOf(REV.sid);
   if (i < 0) { toast("当前列表里没有这条会话"); return; }
   const n = ids[i + dir];
   if (!n) { toast(dir > 0 ? "已经是最后一条" : "已经是第一条"); return; }
@@ -1544,6 +1617,240 @@ function renderRounds(rounds) {
       </div></details>`;
     }).join("")}
   </div></div>`;
+}
+
+
+/* ------------------------------ 审核专页（队列优先） ------------------------------ */
+function reviewProgressOf(s) {
+  return s.review_progress || s.progress || {};
+}
+function reviewIncomplete(s) {
+  const p = reviewProgressOf(s);
+  return ((p.rewrites || 0) > (p.rewrites_done || 0)) || ((p.bad_steps || 0) > (p.bad_done || 0));
+}
+function isReviewActionable(s) {
+  const e = s.effective || "unreviewed";
+  if (EFF_GROUP.queue(e) || EFF_GROUP.unreviewed(e)) return true;
+  if (EFF_GROUP.block(e) || e === "finalized") return false;
+  return reviewIncomplete(s);
+}
+function reviewWhyChips(s) {
+  const e = s.effective || "unreviewed";
+  const p = reviewProgressOf(s);
+  const chips = [];
+  if (e === "held") chips.push(`<span class="chip">待人工复核</span>`);
+  else if (e === "stale") chips.push(`<span class="chip">过期待确认</span>`);
+  else if (e === "unreviewed") chips.push(`<span class="chip">未评审</span>`);
+  else chips.push(`<span class="chip">${esc(EFF_ZH[e] || e)}</span>`);
+  const rwLeft = Math.max(0, (p.rewrites || 0) - (p.rewrites_done || 0));
+  const badLeft = Math.max(0, (p.bad_steps || 0) - (p.bad_done || 0));
+  if (rwLeft) chips.push(`<span class="chip">改写未处置 <b>${rwLeft}</b>/${fmt(p.rewrites)}</span>`);
+  if (badLeft) chips.push(`<span class="chip">问题步未处置 <b>${badLeft}</b>/${fmt(p.bad_steps)}</span>`);
+  if (s.review_status) chips.push(`<span class="chip model">模型：${esc(VERDICT_ZH[s.review_status] || s.review_status)}</span>`);
+  return chips.join("");
+}
+function reviewMission(prog, roundsLen, stale) {
+  const rwLeft = Math.max(0, (prog.rewrites || 0) - (prog.rewrites_done || 0));
+  const badLeft = Math.max(0, (prog.bad_steps || 0) - (prog.bad_done || 0));
+  if (stale) return `内容已过期：请重新评审，或直接驳回。`;
+  if (!roundsLen) return `还没有模型评审。可以先让模型审，或直接人工通过 / 驳回。`;
+  if (rwLeft && badLeft) return `先处理 <b>${rwLeft}</b> 条改写和 <b>${badLeft}</b> 个问题步，再决定通过或驳回。`;
+  if (rwLeft) return `先处理 <b>${rwLeft}</b> 条改写，再决定通过或驳回。`;
+  if (badLeft) return `先处理 <b>${badLeft}</b> 个问题步，再决定通过或驳回。`;
+  return `改写与问题步已处置完毕，决定通过或驳回。`;
+}
+function setReviewBadge(n, approx=false) {
+  const el = $("#navReview");
+  if (!el) return;
+  if (!n) { el.textContent = ""; el.classList.remove("badge-on"); return; }
+  el.textContent = approx ? `~${fmt(n)}` : fmt(n);
+  el.classList.add("badge-on");
+}
+async function fetchReviewBacklog() {
+  const d = await api("/api/gold/sessions?label=&project=&q=");
+  const items = (d.sessions || []).filter(isReviewActionable);
+  const rank = s => {
+    const e = s.effective || "unreviewed";
+    if (e === "stale") return 0;
+    if (e === "held") return 1;
+    if (e === "unreviewed") return 2;
+    return 3;
+  };
+  items.sort((a, b) => rank(a) - rank(b) || String(a.project_group||"").localeCompare(String(b.project_group||"")) || String(a.session_id).localeCompare(String(b.session_id)));
+  return items;
+}
+async function updateReviewBadge() {
+  try {
+    const items = await fetchReviewBacklog();
+    STATE.review.items = items;
+    STATE.review.ids = items.map(s => s.session_id);
+    setReviewBadge(items.length);
+    return items.length;
+  } catch (_) { return null; }
+}
+function jumpToReview() { setTab("review"); }
+function hasReviewBacklog() {
+  const ids = STATE.review && STATE.review.ids;
+  return !!(ids && ids.length);
+}
+function paintReviewQueue(items, focusSid) {
+  const n = items.length;
+  const startLabel = focusSid && items.some(s => s.session_id === focusSid) ? "继续下一条" : "开始审核";
+  if (!n) {
+    $("#view-review").innerHTML = `
+      <div class="rv-empty">
+        <h2>没有待审</h2>
+        <p>队列已清空。下一步：去发布，或回黄金数据核对已通过的会话。</p>
+        <div class="path">发布目录提示：data/04_release</div>
+        <div class="row" style="justify-content:center;gap:8px">
+          <button class="primary" onclick="setTab('runs')">去梳理与交付</button>
+          <button onclick="jumpToGold('')">查看黄金数据</button>
+        </div>
+      </div>`;
+    return;
+  }
+  $("#view-review").innerHTML = `
+    <div class="rv-hero">
+      <div class="n">${fmt(n)}</div>
+      <div class="copy"><h2>待你处理 ${fmt(n)} 条</h2>
+        <p>只显示需要你动手的会话：待复核、未评审，以及改写/问题步尚未处置完的。</p></div>
+      <button class="primary" id="rvStartBtn">${startLabel}</button>
+    </div>
+    <div class="panel"><div class="panel-h"><h3>审核队列</h3>
+      <span class="hint">点一条进入专注工作台 · 通过/驳回后自动下一条</span>
+      <span class="grow"></span>
+      <button class="ghost" id="rvReload">刷新</button></div>
+      <div class="panel-b"><div class="rv-queue">
+        ${items.map(s => {
+          const p = reviewProgressOf(s);
+          const progBits = [];
+          if (p.rewrites) progBits.push(`改写 ${fmt(p.rewrites_done)}/${fmt(p.rewrites)}`);
+          if (p.bad_steps) progBits.push(`问题步 ${fmt(p.bad_done)}/${fmt(p.bad_steps)}`);
+          return `<button class="rv-card ${focusSid===s.session_id?"cur":""}" data-sid="${esc(s.session_id)}">
+            <div class="meta">${effTag(s.effective)} ${labelBadge(s.label)}
+              <span class="sid">${esc(s.session_id.slice(0,8))}</span>
+              <span class="muted">${esc(s.project_group||"")}</span>
+              <span class="grow"></span>
+              ${s.review_confidence!=null?`<span class="faint">置信度 ${fmt(s.review_confidence)}</span>`:""}
+            </div>
+            <div class="why">${reviewWhyChips(s)}</div>
+            ${progBits.length || s.review_status ? `<div class="hint-line">${esc(progBits.join(" · "))}${s.review_status?`${progBits.length?" · ":""}模型建议 ${esc(VERDICT_ZH[s.review_status]||s.review_status)}`:""}</div>` : ""}
+          </button>`;
+        }).join("")}
+      </div></div>
+    </div>`;
+  $("#rvStartBtn").onclick = () => {
+    const sid = (focusSid && items.some(s => s.session_id === focusSid))
+      ? focusSid
+      : (STATE.review.cursor && items.some(s => s.session_id === STATE.review.cursor) ? STATE.review.cursor : items[0].session_id);
+    openGold(sid);
+  };
+  $("#rvReload").onclick = () => loadReview();
+  $$("#view-review .rv-card").forEach(b => b.onclick = () => openGold(b.dataset.sid));
+}
+async function loadReview() {
+  $("#view-review").innerHTML = `<div class="loading">加载待审队列…</div>`;
+  const items = await fetchReviewBacklog();
+  STATE.review.items = items;
+  STATE.review.ids = items.map(s => s.session_id);
+  setReviewBadge(items.length);
+  paintReviewQueue(items, STATE.review.cursor);
+}
+function reviewAdvance(fromSid) {
+  const ids = STATE.review.ids || [];
+  if (!ids.length) { closeDrawer(); loadReview().catch(()=>{}); return; }
+  const i = ids.indexOf(fromSid);
+  const next = i >= 0 ? ids[i + 1] : ids[0];
+  if (!next) {
+    STATE.review.cursor = null;
+    closeDrawer();
+    toast("本轮待审已处理完", "ok");
+    loadReview().catch(()=>{});
+    return;
+  }
+  STATE.review.cursor = next;
+  openGold(next);
+}
+function reviewLater() {
+  STATE.review.cursor = REV.sid;
+  closeDrawer();
+  if (STATE.tab === "review") loadReview().catch(()=>{});
+}
+function paintFocusedReview(sid, rec, st, ann, rounds, latest, mr, mrep, prog, sp, funnel, d) {
+  openDrawer(`审核 ${sid.slice(0, 8)}`, "专注工作台");
+  $("#drawerSub").innerHTML = `${effTag(d.effective)} ${labelBadge(rec.label)} <span class="faint" style="margin-left:6px">${esc(rec.project_group)}</span> <span class="chip">审核工作台</span>`;
+  const todoRows = [];
+  for (const rw of (mr.thinking_rewrites || [])) {
+    const mid = rw.msg_id; if (!mid) continue;
+    const done = revDone(mid);
+    todoRows.push(`<button class="rv-todo ${done?"done":""}" onclick="jumpMsg('${esc(mid)}')"><span class="lb backfill">改写</span>
+      <span class="mono faint">${esc(String(mid).slice(0,8))}</span>
+      <span class="grow muted" style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(short(rw.rewritten || "", 80))}</span>
+      <span class="faint">${done ? "已处置" : "待处理"}</span></button>`);
+  }
+  for (const mid of REV.bad) {
+    if (REV.rewritten.has(mid)) continue;
+    const done = revDone(mid);
+    todoRows.push(`<button class="rv-todo ${done?"done":""}" onclick="jumpMsg('${esc(mid)}')"><span class="lb prune">问题步</span>
+      <span class="mono faint">${esc(String(mid).slice(0,8))}</span><span class="grow"></span>
+      <span class="faint">${done ? "已处置" : "待处理"}</span></button>`);
+  }
+  const reviewed = rounds.length > 0 && !REV.roundsStale;
+  $("#drawerBody").innerHTML = `
+    ${REV.roundsStale ? `<div class="banner">会话内容已经变了，上一轮评审只供参考，不能直接通过。请重新评审。</div>` : ""}
+    <div class="rv-mission">${reviewMission(prog, rounds.length, REV.roundsStale)}</div>
+    ${todoRows.length ? `<div class="panel"><div class="panel-h"><h3>本条待办</h3>
+      <span class="hint">先点开处置，再决定通过或驳回</span>
+      <span class="grow"></span>
+      <span class="chip">已处置 <b class="num" data-revprog>–</b></span>
+      <button class="ghost" onclick="revBatch('accept_all_rewrites')">采纳未处置改写</button>
+      ${REV.bad.size ? `<button class="ghost" onclick="revBatch('exclude_all_bad')">排除全部问题步</button>` : ""}
+    </div><div class="panel-b rv-todos">${todoRows.join("")}</div></div>` : `<div class="panel"><div class="panel-b faint">本条没有未完成的改写/问题步待办。</div></div>`}
+    <div class="panel"><div class="panel-h"><h3>复核</h3>
+      <span class="hint">${mr.verdict ? `第 ${latest.round || 1} 轮 · 置信度 ${fmt(mr.confidence)}` : "还没有模型评审"}</span></div>
+      <div class="panel-b">
+        <div class="row" style="margin-bottom:8px">${mr.verdict ? verdictTag(mr.verdict) : `<span class="faint">未评审</span>`}
+          ${prog.rewrites ? `<span class="chip">改写 <b>${fmt(prog.rewrites_done)}</b>/${fmt(prog.rewrites)}</span>` : ""}
+          ${prog.bad_steps ? `<span class="chip">问题步 <b>${fmt(prog.bad_done)}</b>/${fmt(prog.bad_steps)}</span>` : ""}
+        </div>
+        ${(mr.reasons || []).map(r => `<div>${esc(r)}</div>`).join("") || `<div class="faint">模型还没有给出理由</div>`}
+        <div class="sub-h">给模型的整体意见</div>
+        <textarea id="revNote" class="rev-note" data-field="note" oninput="revInput(this)" placeholder="例如：轨迹可用，但关键步骤请按原文保留">${esc(REV.note)}</textarea>
+      </div>
+    </div>
+    <details class="panel"><summary class="panel-h" style="cursor:pointer;list-style:none"><h3>详细报告（可折叠）</h3>
+      <span class="hint">Stage3 漏斗 · 质量报告 · 评审轮次 · 提纯结果</span></summary>
+      <div style="padding:0 18px 14px">
+        ${mrep ? `<div class="muted" style="margin:8px 0">${esc(mrep.reason||"")}</div>
+          <div class="row" style="margin-bottom:10px"><span class="chip ${mrep.verdict==="trainable"?"train":mrep.verdict==="discard"?"neg":""}">${{trainable:"可训练",needs_human:"需人工",discard:"不建议训练"}[mrep.verdict]||mrep.verdict||""}</span></div>` : ""}
+        <div class="synth-funnel">
+          <div class="funnel-node"><span>原始步骤</span><b>${fmt(funnel.raw_steps??st.raw_steps)}</b></div>
+          <div class="funnel-node warn"><span>脚本黄金</span><b>${fmt(funnel.gold_steps??st.gold_steps)}</b></div>
+          <div class="funnel-node good"><span>实际入库窗口</span><b>${fmt(funnel.admitted_steps)}</b></div>
+          <div class="funnel-node"><span>排除/门控</span><b>${fmt((funnel.excluded_steps||0)+(funnel.pathology_dropped||0)+(funnel.blocked_or_subsegment_dropped||0))}</b></div>
+        </div>
+        ${renderRounds(rounds)}
+        <div class="kv" style="margin-top:12px">
+          <span class="k">原始 → 黄金</span><span><span class="num">${fmt(st.raw_steps)}</span> → <b class="num">${fmt(st.gold_steps)}</b></span>
+          <span class="k">根任务</span><span>${esc(st.root_prompt || "–")}</span>
+          <span class="k">脚本判定</span><span>${esc(SCRIPT_ZH[ann.status] || ann.status || "–")}</span>
+        </div>
+      </div>
+    </details>
+    ${renderMessages(rec.messages || [])}`;
+  revSyncProg();
+  $("#drawerFoot").innerHTML = `
+    ${reviewed || !rounds.length ? `<button class="primary" onclick="revDecide('approved')">通过<span class="kbd">A</span></button>
+      <button class="danger" onclick="revDecide('rejected')">驳回<span class="kbd">R</span></button>` : ""}
+    ${REV.roundsStale ? `<button class="primary" onclick="reviewOne('${sid}')">重新评审</button>
+      <button class="danger" onclick="revDecide('rejected')">驳回</button>` : ""}
+    ${reviewed ? `<button onclick="revRefine()">按意见重审</button>` : ""}
+    ${!rounds.length ? `<button onclick="reviewOne('${sid}')">让模型先评审</button>` : ""}
+    <button class="primary" onclick="reviewAdvance(REV.sid)">下一条<span class="kbd">J</span></button>
+    <button class="ghost" onclick="reviewLater()">稍后</button>
+    <span class="grow"></span>
+    <span id="revSave" class="faint" style="font-size:12px"></span>
+    <span class="faint" style="font-size:12px">结论即时同步 Stage 3</span>`;
 }
 
 async function loadGold() {
@@ -1634,6 +1941,11 @@ async function openGold(sid) {
   const prog = d.progress || {};
   const sp = d.synthesis_preview || {}, funnel = sp.funnel || {};
   STATE.drawerData = d;
+  STATE.review.cursor = sid;
+  if (STATE.tab === "review") {
+    paintFocusedReview(sid, rec, st, ann, rounds, latest, mr, mrep, prog, sp, funnel, d);
+    return;
+  }
   $("#drawerSub").innerHTML = `${effTag(d.effective)} ${labelBadge(rec.label)} <span class="faint" style="margin-left:6px">${esc(rec.project_group)}</span>`;
   $("#drawerBody").innerHTML = `
     ${REV.roundsStale ? `<div class="banner">会话内容已经变了，上一轮评审只供参考，不能直接通过。请重新评审。</div>` : ""}
@@ -2730,10 +3042,10 @@ function rwStepActions(s) {
     }
     acts.push(`<button onclick="event.stopPropagation();jumpToGold('')">去黄金数据页查看</button>`);
   } else if (s.phase === "human") {
-    acts.push(`<button class="primary" onclick="event.stopPropagation();jumpToGold('queue')">前往人工复核</button>`);
+    if (hasReviewBacklog()) acts.push(`<button class="primary" onclick="event.stopPropagation();jumpToReview()">前往审核</button>`);
   } else if (s.phase === "stage3") {
     if (s.id === "s3.package") {
-      acts.push(`<button class="primary" onclick="event.stopPropagation();exportPackage()">生成交付 zip</button>`);
+      acts.push(`<button class="primary" onclick="event.stopPropagation();exportPackage()"${PACK.running ? " disabled" : ""}>${PACK.running ? "打包中…" : "生成交付 zip"}</button>`);
     } else if (s.status === "warn" || s.status === "ready") {
       acts.push(`<button class="primary" onclick="event.stopPropagation();runStage('stage3',false)">运行 Stage 3</button>`);
     }
@@ -2751,7 +3063,9 @@ function rwStepActions(s) {
 function rwInlineJump(s) {
   if (s.status !== "warn" && s.status !== "ready") return "";
   if (s.phase === "human") {
-    return `<button class="primary" style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();jumpToGold('queue')">去复核 →</button>`;
+    return hasReviewBacklog()
+      ? `<button class="primary" style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();jumpToReview()">去审核 →</button>`
+      : "";
   }
   if (s.phase === "stage2") {
     return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();runStage('stage2',false)">续跑补齐 →</button>
@@ -2761,7 +3075,7 @@ function rwInlineJump(s) {
     return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();runStage('stage3',false)">续跑 →</button>`;
   }
   if (s.id === "s3.package") {
-    return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();exportPackage()">打包 →</button>`;
+    return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();exportPackage()"${PACK.running ? " disabled" : ""}>${PACK.running ? "打包中…" : "打包 →"}</button>`;
   }
   return "";
 }
@@ -2769,7 +3083,7 @@ function rwInlineJump(s) {
 function rwStageAction(phaseId, rb) {
   if (phaseId === "stage1") return `<button onclick="jumpToRaw()">查看原始数据</button><button onclick="runStage('stage1',false)">运行 Stage 1</button>`;
   if (phaseId === "stage2") return `<button onclick="jumpToGold('')">查看黄金数据</button><button onclick="runStage('stage2',false)">运行 Stage 2</button>`;
-  if (phaseId === "human") return `<button class="primary" onclick="jumpToGold('queue')">去黄金数据页复核</button>`;
+  if (phaseId === "human") return hasReviewBacklog() ? `<button class="primary" onclick="jumpToReview()">去审核专页</button>` : "";
   if (phaseId === "stage3") return `<button onclick="jumpToTrain()">查看训练集</button><button onclick="runStage('stage3',false)">运行 Stage 3</button>`;
   return "";
 }
@@ -2822,9 +3136,56 @@ function rwRenderStageDetail(p, rb) {
   </div>`;
 }
 
+function packCardCopy(del) {
+  // 单一卡片：idle / running / error 共用同一块 rw-pack-card
+  if (PACK.running) {
+    const phase = PACK.phase || "正在重新打包，约需 15–30 秒…";
+    return {
+      readyClass: "",
+      title: `<span class="rw-spin" style="display:inline-block;vertical-align:-3px;margin-right:8px"></span>正在重新打包…`,
+      body: `<span id="packPhase">${esc(phase)}</span><br><span id="packElapsed" class="faint">已用时 <b>${PACK.elapsed}</b> 秒 · 请勿重复点击</span>`,
+    };
+  }
+  if (PACK.error) {
+    return {
+      readyClass: "",
+      title: "打包失败",
+      body: `${esc(PACK.error)}<br><span class="faint">按钮已解锁，可重试</span>`,
+    };
+  }
+  // idle / 成功后：回到就绪文案（zip 元信息在下方 grid）
+  if (del.zip_path) {
+    const took = (PACK.result && PACK.elapsed)
+      ? `<br><span class="faint">上次打包耗时 ${PACK.elapsed} 秒</span>`
+      : "";
+    return {
+      readyClass: "ready",
+      title: "交付包已就绪，可随时下载",
+      body: `把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。${took}`,
+    };
+  }
+  if (del.handoff_exists) {
+    return {
+      readyClass: "",
+      title: "handoff.md 已生成，点击「生成交付 zip」即可打包",
+      body: `把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。`,
+    };
+  }
+  return {
+    readyClass: "",
+    title: "等待 Stage 3 完成后自动生成",
+    body: `把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。`,
+  };
+}
+
 function rwRenderDeliveryDetail(rb) {
   const del = rb.deliverable || {};
+  if (del.zip_name) window.__lastZipName = del.zip_name;
   const mb = del.zip_size_bytes ? (del.zip_size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "—";
+  const busy = !!PACK.running;
+  const dis = busy ? " disabled" : "";
+  const packLabel = del.zip_path ? "重新打包" : "生成交付 zip";
+  const card = packCardCopy(del);
   return `<div class="rw-stage">
     <div class="rw-stage-h">
       <div>
@@ -2832,22 +3193,20 @@ function rwRenderDeliveryDetail(rb) {
         <p>将数据集、LLaMA-Factory 配置与 handoff.md 打包为 zip，直接交给下游 AI 训练并交付模型。</p>
       </div>
       <div class="rw-stage-acts">
-        ${del.zip_path ? `<button class="primary" onclick="downloadZip()">下载交付 zip</button>` : ""}
+        ${del.zip_path ? `<button class="primary" onclick="downloadZip()"${dis}>下载交付 zip</button>` : ""}
         ${del.handoff_exists ? `<button onclick="openHandoff()">阅读 handoff.md</button>` : ""}
-        <button class="ghost" onclick="exportPackage()">${del.zip_path ? "重新打包" : "生成交付 zip"}</button>
+        <button class="ghost" onclick="exportPackage()"${dis}>${busy ? "打包中…" : packLabel}</button>
       </div>
     </div>
     <div class="rw-pack">
-      <div class="rw-pack-card ${del.zip_path ? "ready" : ""}">
-        <div style="font-size:14px;font-weight:600;margin-bottom:6px">
-          ${del.zip_path ? "交付包已就绪，可随时下载" : del.handoff_exists ? "handoff.md 已生成，点击「生成交付 zip」即可打包" : "等待 Stage 3 完成后自动生成"}
-        </div>
-        <div class="muted" style="font-size:12.5px;line-height:1.65">
-          把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。
-        </div>
+      <div class="rw-pack-card ${card.readyClass}" id="packStatus">
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px" id="packTitle">${card.title}</div>
+        <div class="muted" style="font-size:12.5px;line-height:1.65" id="packBody">${card.body}</div>
       </div>
       <div class="rw-pack-grid">
         <div class="rw-pack-item"><span>压缩包文件名</span><b>${esc(del.zip_name || "待生成")}</b></div>
+        <div class="rw-pack-item"><span>包内容指纹</span><b class="mono">${esc(del.package_hash || "—")}</b></div>
+        <div class="rw-pack-item"><span>配置版本</span><b class="mono">${esc(String(rb.config_hash || "").slice(0, 8) || "—")}</b></div>
         <div class="rw-pack-item"><span>体积</span><b>${mb}</b></div>
         <div class="rw-pack-item"><span>生成时间</span><b>${esc(stamp(del.zip_generated_at) || "—")}</b></div>
       </div>
@@ -2927,9 +3286,9 @@ function renderRunsView(rb, hist) {
       <span class="rb-bar wide"><i style="width:${pct}%"></i></span>
       <div class="rw-head-next">${statusText}</div>
       <div class="rw-head-acts">
-        <button class="primary" onclick="runStage('all',false)">运行全流程</button>
-        ${del.zip_path ? `<button onclick="downloadZip()">下载交付 zip</button>` : ""}
-        <button class="danger" onclick="runStage('all',true)">强制重建</button>
+        <button class="primary" onclick="runStage('all',false)"${PACK.running ? " disabled" : ""}>运行全流程</button>
+        ${del.zip_path ? `<button onclick="downloadZip()"${PACK.running ? " disabled" : ""}>下载交付 zip</button>` : ""}
+        <button class="danger" onclick="runStage('all',true)"${PACK.running ? " disabled" : ""}>强制重建</button>
       </div>
     </div>
 
@@ -2960,25 +3319,98 @@ function renderRunsView(rb, hist) {
 
 async function loadRuns() {
   try {
-    const [rb, hist] = await Promise.all([api("/api/runbook"), api("/api/runs")]);
+    const [rb, hist] = await Promise.all([api("/api/runbook"), api("/api/runs"), updateReviewBadge()]);
     renderRunsView(rb, hist);
   } catch (e) {
     $("#view-runs").innerHTML = `<div class="panel"><div class="empty">${esc(e.message)}</div></div>`;
   }
 }
 
+function stopPackTimer() {
+  if (PACK.timer) { clearInterval(PACK.timer); PACK.timer = null; }
+}
+function startPackTimer() {
+  stopPackTimer();
+  PACK.elapsed = 0;
+  PACK.timer = setInterval(() => {
+    if (!PACK.running || !PACK.startedAt) return;
+    PACK.elapsed = Math.max(0, Math.floor((Date.now() - PACK.startedAt) / 1000));
+    const el = document.getElementById("packElapsed");
+    if (el) el.innerHTML = `已用时 <b>${PACK.elapsed}</b> 秒 · 请勿重复点击`;
+    if (JOB_META && JOB_META.stage === "package" && JOB_LINES.length) {
+      const last = JOB_LINES[JOB_LINES.length - 1] || "";
+      const m = last.replace(/^\d{2}:\d{2}:\d{2}\s*/, "");
+      if (m && m !== PACK.phase) {
+        PACK.phase = m;
+        const ph = document.getElementById("packPhase");
+        if (ph) ph.textContent = m;
+      }
+    }
+  }, 500);
+}
+function setPackButtonsDisabled(disabled) {
+  document.querySelectorAll("button").forEach(btn => {
+    const oc = btn.getAttribute("onclick") || "";
+    if (/exportPackage\(|downloadZip\(/.test(oc) || /runStage\('all'/.test(oc)) {
+      btn.disabled = !!disabled;
+      if (/exportPackage\(/.test(oc) && disabled) btn.textContent = "打包中…";
+    }
+  });
+}
 async function exportPackage() {
-  toast("正在打包交付 zip…");
+  if (PACK.running) return;
+  PACK.running = true;
+  PACK.jobId = null;
+  PACK.startedAt = Date.now();
+  PACK.elapsed = 0;
+  PACK.phase = "正在重新打包，约需 15–30 秒…";
+  PACK.error = null;
+  PACK.result = null;
+  setPackButtonsDisabled(true);
+  startPackTimer();
+  if (STATE.tab === "runs") {
+    try {
+      const [rb, hist] = await Promise.all([api("/api/runbook"), api("/api/runs")]);
+      renderRunsView(rb, hist);
+    } catch (_) {}
+  }
   try {
-    const r = await api("/api/export/package", {method: "POST"});
-    const mb = (r.size_bytes / (1024 * 1024)).toFixed(1);
-    toast(`交付包已生成：${r.zip_name}（${mb} MB）`, "ok");
-    loadRuns();
-  } catch (e) { toast(e.message, "err"); }
+    const { job_id } = await api("/api/export/package", { method: "POST" });
+    PACK.jobId = job_id;
+    watchJob(job_id, (j) => {
+      stopPackTimer();
+      PACK.running = false;
+      PACK.elapsed = Math.max(
+        PACK.elapsed,
+        PACK.startedAt ? Math.floor((Date.now() - PACK.startedAt) / 1000) : PACK.elapsed
+      );
+      if (j.status === "done") {
+        PACK.result = j.result || null;
+        PACK.error = null;
+      } else {
+        PACK.error = j.error || "打包失败";
+        PACK.result = null;
+      }
+      setPackButtonsDisabled(false);
+      if (STATE.tab === "runs") loadRuns();
+    });
+  } catch (e) {
+    stopPackTimer();
+    PACK.running = false;
+    PACK.error = e.message || String(e);
+    PACK.result = null;
+    setPackButtonsDisabled(false);
+    toast(PACK.error, "err");
+    if (STATE.tab === "runs") loadRuns();
+  }
 }
 
 function downloadZip() {
-  window.location.href = "/api/export/download";
+  // same URL previously cached the old zip in browsers — bust with zip_name + ts
+  const name = (window.__lastZipName || "") + "";
+  const q = new URLSearchParams({ t: String(Date.now()) });
+  if (name) q.set("name", name);
+  window.location.href = "/api/export/download?" + q.toString();
 }
 
 async function openHandoff() {
@@ -3039,11 +3471,16 @@ function watchJob(jobId, onDone) {
         clearInterval(JOB_TIMER); JOB_TIMER = null;
         if (RB_TIMER) { clearInterval(RB_TIMER); RB_TIMER = null; }
         if (j.status === "done") {
-          toast(`${j.stage} 已完成`, "ok"); STATE.poured = true;
+          if (j.stage !== "package") toast(`${j.stage} 已完成`, "ok");
+          STATE.poured = true;
           refreshMeta().catch(() => {});
-          if (STATE.tab === "runs") loadRuns();
+          if (STATE.tab === "runs" && j.stage !== "package") loadRuns();
           if (onDone) onDone(j);
-        } else toast(`${j.stage} 失败：${j.error||""}`, "err");
+        } else if (j.stage === "package") {
+          if (onDone) onDone(j);
+        } else {
+          toast(`${j.stage} 失败：${j.error||""}`, "err");
+        }
       }
     } catch (e) { /* job may not be registered yet */ }
   };

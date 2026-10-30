@@ -1,7 +1,7 @@
 """训练交付包：把 handoff + 已规整数据集打成 zip，解压后可直接用 LLaMA-Factory 训练。
 
-产出（默认在 data/03_train/delivery/）：
-    goldthread-delivery-<config_hash>.zip
+产出（默认在 data/04_release/delivery/）：
+    goldthread-delivery-<package_hash>.zip
         START_HERE.md / README.txt / handoff.md
         train_*.yaml          dataset_dir=./data，dataset 键为 gt_*_lf
         train_lowmem.py / lowmem_dpo.py / check_data.py / check_env.py
@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -18,16 +19,21 @@ from typing import Any, Dict, List, Optional
 from pipeline.common.config import config_hash, load_config, stage_dirs
 from pipeline.common.store import now_iso, read_json
 from pipeline.lf_normalize import dumps_jsonl, dataset_info_for, prepare_datasets, require_sft
+from pipeline import length_gate as length_gate_mod
 
 _REPO_TOOLS = Path(__file__).resolve().parents[1] / "tools"
 _DATA_REL = "./data"
 
 # 这些脚本必须以仓库版本打进 zip：它们认识 data/ 与 gt_*_lf，而 03_train 里可能还是旧检查。
-_REPO_SCRIPTS = ("check_data.py", "check_env.py")
-
-_OPTIONAL_SCRIPTS = (
+_REPO_SCRIPTS = (
+    "check_data.py",
+    "check_env.py",
     "train_lowmem.py",
     "lowmem_dpo.py",
+    "filter_by_cutoff.py",
+)
+
+_OPTIONAL_SCRIPTS = (
     "train_monitor.py",
     "verify_longctx.py",
     "probe_24g.py",
@@ -38,13 +44,14 @@ _YAML_FILES = (
     "train_sft.yaml",
     "train_sft_qlora.yaml",
     "train_dpo.yaml",
+    "train_dpo_qlora_27b.yaml",
+    "train_dpo_qlora_27b_b.yaml",
     "eval_sft.yaml",
     "train_sft_qwen3_8b.yaml",
     "train_dpo_qwen3_8b.yaml",
     "train_sft_smoke_qwen3_8b.yaml",
     "train_dpo_smoke_qwen3_8b.yaml",
     "eval_sft_qwen3_8b.yaml",
-    "train_dpo_qlora_27b.yaml",
 )
 
 _DS_FILES = ("ds_z2_config.json", "ds_z3_config.json")
@@ -56,6 +63,7 @@ _HANDOFF_BANNER = """> **本交付包已按可直接训练的布局打包**（�
 > - SFT：`gt_sft_train_lf` / `gt_sft_eval_lf` → `data/sft.train.lf.jsonl`、`data/sft.eval.lf.jsonl`
 > - DPO：`gt_dpo_train_lf` / `gt_dpo_eval_lf` → `data/dpo.train.lf.jsonl`、`data/dpo.eval.lf.jsonl`
 > - 27B 必须在解压目录启动：`CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_sft.yaml`
+> - 训练前 `train_lowmem.py` 会按 YAML 的 `cutoff_len` 过滤超长样本（包内保留全集）
 >
 > 下文若仍写着绝对路径、`pi_*` 键或 stage3 原始文件名，以本包 YAML 与 `data/dataset_info.json` 为准。最短步骤见 `START_HERE.md`。
 
@@ -200,6 +208,8 @@ cd goldthread-delivery
 python check_data.py
 ```
 
+包内 `*.lf.jsonl` 是全集（含相对默认 cutoff 仍偏长的样本）。`train_lowmem.py` 开训前会按该次 YAML 的 `cutoff_len` 过滤；跳过过滤可设环境变量 `GT_SKIP_LENGTH_FILTER=1`。
+
 `check_data.py` 退出码必须是 0。它确认：
 
 - 每份 `train_*.yaml` / `eval_*.yaml` 的 `dataset` / `eval_dataset` 都在 `data/dataset_info.json`
@@ -295,6 +305,28 @@ def _prepend_banner(handoff: str) -> str:
     return _HANDOFF_BANNER + handoff
 
 
+
+def compute_package_hash(
+    cfg_h: str,
+    prepared_files: Dict[str, List[Dict[str, Any]]],
+    length_gate_fp: str,
+) -> str:
+    """8-hex fingerprint of delivery payload (post-gate lf bytes + config + gate version).
+
+    Soft-compress / data rebuilds that change packed jsonl bytes, or a
+    LENGTH_GATE_VERSION bump, produce a new zip filename even when
+    pipeline.yaml config_hash is unchanged.
+    """
+    parts: List[str] = [cfg_h]
+    for name, rows in sorted(prepared_files.items()):
+        content = dumps_jsonl(rows)
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        parts.append(f"{name}:{digest}")
+    parts.append(length_gate_fp)
+    blob = "\n".join(parts)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
+
+
 def build_delivery_zip(
     train_root: Optional[Path] = None,
     cfg: Optional[Dict[str, Any]] = None,
@@ -304,12 +336,16 @@ def build_delivery_zip(
     cfg = cfg or load_config()
     dirs = stage_dirs(cfg)
     root = Path(train_root or dirs["train"])
-    delivery_dir = root / "delivery"
+    # 发布产物统一落在 data/04_release/，与 03_train 工作区分离
+    release_root = root.parent / "04_release"
+    delivery_dir = release_root / "delivery"
     delivery_dir.mkdir(parents=True, exist_ok=True)
 
     cfg_h = config_hash(cfg)
-    zip_name = f"goldthread-delivery-{cfg_h[:8]}.zip"
-    zip_path = delivery_dir / zip_name
+
+    def _emit(msg: str) -> None:
+        if log:
+            log(msg)
 
     handoff_path = root / "handoff.md"
     if not handoff_path.exists():
@@ -317,11 +353,17 @@ def build_delivery_zip(
     if not (root / "train_sft.yaml").is_file():
         raise FileNotFoundError("train_sft.yaml 尚未生成，请先运行 stage3")
 
-    prepared = prepare_datasets(root)
+    _emit("[package] 正在准备数据集并做长度闸门（软压缩）…")
+    prepared = prepare_datasets(root, log=log)
     require_sft(prepared)
     info = dataset_info_for(prepared)
     available = set(info)
     has_dpo = "gt_dpo_train_lf" in available and "gt_dpo_eval_lf" in available
+
+    lg_fp = length_gate_mod.length_gate_fingerprint()
+    pkg_h = compute_package_hash(cfg_h, prepared.files, lg_fp)
+    zip_name = f"goldthread-delivery-{pkg_h}.zip"
+    zip_path = delivery_dir / zip_name
 
     stats = read_json(root / "stats.json", default={}) or {}
     manifest_files: List[Dict[str, Any]] = []
@@ -331,6 +373,7 @@ def build_delivery_zip(
         zf.writestr(arc, data)
         manifest_files.append({"path": arc, "size": len(data)})
 
+    _emit(f"[package] 正在写入 zip：{zip_name}…")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         _add(zf, "README.txt", _readme(cfg_h, stats, prepared.counts, prepared.sources))
         _add(zf, "START_HERE.md", _start_here(prepared.counts, has_dpo))
@@ -375,17 +418,25 @@ def build_delivery_zip(
         info_json = json.dumps(info, ensure_ascii=False, indent=2) + "\n"
         _add(zf, "data/dataset_info.json", info_json)
 
+        if prepared.length_gate:
+            detail = length_gate_mod.overlength_report_jsonl_from_summary(prepared.length_gate)
+            if detail:
+                _add(zf, "overlength_report.jsonl", detail)
+
         manifest = {
             "package": zip_name,
             "layout": "llamafactory-dataset_dir-data",
             "dataset_dir": _DATA_REL,
             "generated_at": now_iso(),
             "config_hash": cfg_h,
+            "package_hash": pkg_h,
+            "length_gate_version": lg_fp,
             "stats_generated_at": stats.get("generated_at"),
             "datasets": {key: entry.get("file_name") for key, entry in info.items()},
             "sources": prepared.sources,
             "dropped": prepared.dropped,
             "counts": prepared.counts,
+            "length_gate": prepared.length_gate,
             "yaml": packed_yaml,
             "yaml_skipped": skipped_yaml,
             "files": manifest_files,
@@ -402,16 +453,22 @@ def build_delivery_zip(
         "file_count": len(manifest_files) + 1,
         "generated_at": manifest["generated_at"],
         "config_hash": cfg_h,
+        "package_hash": pkg_h,
         "counts": prepared.counts,
         "sources": prepared.sources,
         "datasets": manifest["datasets"],
+        "length_gate": prepared.length_gate,
     }
     if log:
         size_mb = result["size_bytes"] / (1024 * 1024)
         sft_n = prepared.counts.get("sft.train.lf.jsonl", 0)
         dpo_n = prepared.counts.get("dpo.train.lf.jsonl", 0)
+        gate = prepared.length_gate or {}
+        salv = sum(int(v.get("salvaged_by_obs_truncate") or 0) for v in gate.values() if isinstance(v, dict))
+        over = sum(int(v.get("overlength_at_default_cutoff") or 0) for v in gate.values() if isinstance(v, dict))
         log(
             f"[package] 交付包已生成: {zip_path.name} ({size_mb:.1f} MB, "
-            f"SFT lf {sft_n} / DPO lf {dpo_n}, {result['file_count']} 个文件)"
+            f"SFT lf {sft_n} / DPO lf {dpo_n}, {result['file_count']} 个文件, "
+            f"length_gate salvaged={salv} overlength_at_default={over})"
         )
     return result

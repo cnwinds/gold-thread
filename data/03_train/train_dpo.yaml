@@ -16,26 +16,26 @@ stage: dpo
 do_train: true
 finetuning_type: lora                                 # 新的 DPO LoRA（叠在 SFT 合并模型上）
 lora_rank: 32
-lora_target: mlp
+lora_target: gate_proj,up_proj,down_proj          # 'mlp' 在 qwen3_5 上是容器模块（Qwen3_5MLP 无 in/out_features），peft 会拒
 pref_beta: 0.1
 pref_loss: sigmoid                                    # sigmoid 需要 ref（use_ref_model=true），由 disable_adapter 提供
 # deepspeed:                                            # 单卡不要设
 
 ### dataset
 dataset_dir: /data/goldthread/03_train
-dataset: pi_dpo_preference_pairs_train_v2w       # 窗口裁剪版（保住最近上下文，显存友好）
-eval_dataset: pi_dpo_preference_pairs_eval_v2w
+dataset: gt_dpo_train_lf   # 规整版：连续 observation 已合并、chosen/rejected 已取 value（原版 22/100 结构非法）
+eval_dataset: gt_dpo_eval_lf
 template: qwen3_8
-cutoff_len: 8192                                       # DPO 双前向，激活翻倍
+cutoff_len: 5120                                       # 8192 OOM；6144 峰值 77.9/80G 只剩 1.6G 余量，5120 留出 ~5G
 packing: false
 overwrite_cache: true
 preprocessing_num_workers: 8
 
 ### output
 # 产物是叠在 Qwen3.8-27B-merged 上的 DPO 适配器；导出时 model_name_or_path 要填 merged 目录，不是原始 base
-output_dir: /data/saves/qwen38-27b-goldthread-dpo
+output_dir: /data/saves/qwen38-27b-goldthread-dpo-lf
 logging_steps: 5
-save_steps: 100
+save_steps: 25
 save_total_limit: 2
 overwrite_output_dir: true
 
@@ -43,7 +43,7 @@ overwrite_output_dir: true
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 4
 learning_rate: 1.0e-5           # 8B 实测 5e-5 会把模型推崩；27B 同样用小 lr
-num_train_epochs: 1.0
+num_train_epochs: 3.0          # 100 对 / batch4 = 25 步/epoch，1 epoch 只有 25 步太少
 lr_scheduler_type: cosine
 warmup_ratio: 0.05
 bf16: true
@@ -53,4 +53,4 @@ gradient_checkpointing: true
 # 评测同样走 lowmem 路径（policy + disable_adapter ref 两次 no_grad 前向），显存低于训练步
 per_device_eval_batch_size: 1
 eval_strategy: steps
-eval_steps: 50
+eval_steps: 10

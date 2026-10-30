@@ -188,7 +188,7 @@ def main() -> int:
                         msgs = [{"role": role_map.get(c["from"], "user"), "content": c["value"]} for c in conv]
                         try:
                             text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
-                            o, c2 = text.count(" thinking"), text.count("<" + "/think>")
+                            o, c2 = text.count("<" + "think>"), text.count("<" + "/think>")
                             tcalls = text.count("<tool_call>")
                             ids = tok(text, add_special_tokens=False)["input_ids"]
                             msg = f"模板渲染：tokens={len(ids)}  thinking×{o} ×{c2} <tool_call>×{tcalls}"
@@ -218,22 +218,22 @@ def main() -> int:
             for p in files:
                 n = sum(1 for line in p.open(encoding="utf-8") if line.strip())
                 print(f"  {p.name:<48} {n:>6} 条")
-            # 必需数据集：优先 v2（实际训练用），兼容 v1 旧版
-            pairs = [
-                ("sft_step_windows_sharegpt.train.v2.jsonl", "SFT 训练集"),
-                ("sft_step_windows_sharegpt.eval.v2.jsonl", "SFT 验证集"),
-            ]
-            for f, desc in pairs:
-                (ok if (d / f).exists() else bad)(f"存在 {f}（{desc}）")
-            # DPO 数据：v2w（窗口裁剪）优先，v2 兜底
-            dpo_hit = next((x for x in ("dpo_preference_pairs.train.v2w.jsonl",
-                                        "dpo_preference_pairs.train.v2.jsonl",
-                                        "dpo_preference_pairs.train.jsonl")
+            # 必需数据集：发布版（sft.train.jsonl 等，gt_* 键）优先，兼容 v2 旧版
+            for names, desc in (
+                (("sft.train.jsonl", "sft_step_windows_sharegpt.train.v2.jsonl"), "SFT 训练集"),
+                (("sft.eval.jsonl", "sft_step_windows_sharegpt.eval.v2.jsonl"), "SFT 验证集"),
+            ):
+                hit = next((x for x in names if (d / x).exists()), None)
+                (ok if hit else bad)(f"存在 {hit or names[0]}（{desc}）")
+            # DPO 数据：窗口裁剪版优先
+            dpo_hit = next((x for x in ("dpo_w.train.jsonl", "dpo.train.jsonl",
+                                        "dpo_preference_pairs.train.v2w.jsonl",
+                                        "dpo_preference_pairs.train.v2.jsonl")
                             if (d / x).exists()), None)
-            (ok if dpo_hit else bad)(f"存在 DPO 训练集（{dpo_hit or 'v2w / v2 / v1 均未找到'}）")
+            (ok if dpo_hit else bad)(f"存在 DPO 训练集（{dpo_hit or 'dpo_w / dpo / v2w / v2 均未找到'}）")
             (ok if (d / "dataset_info.json").exists() else bad)("存在 dataset_info.json")
-            # 长度分布（有 tokenizer 才有意义）：优先 v2
-            t = next((d / x for x in ("sft_step_windows_sharegpt.train.v2.jsonl",
+            # 长度分布（有 tokenizer 才有意义）
+            t = next((d / x for x in ("sft.train.jsonl", "sft_step_windows_sharegpt.train.v2.jsonl",
                                       "sft_step_windows_sharegpt.train.jsonl")
                       if (d / x).exists()), None)
             if t is not None and t.exists():

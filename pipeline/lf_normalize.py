@@ -111,6 +111,7 @@ class PreparedDatasets:
     sources: Dict[str, str] = field(default_factory=dict)
     dropped: Dict[str, List[str]] = field(default_factory=dict)
     counts: Dict[str, int] = field(default_factory=dict)
+    length_gate: Dict[str, Any] = field(default_factory=dict)
 
     def has(self, name: str) -> bool:
         return bool(self.files.get(name))
@@ -193,6 +194,42 @@ def rows_are_aligned(rows: Sequence[Dict[str, Any]], *, ranking: bool) -> bool:
     return all(alignment_error(r.get("conversations") or [], ranking=ranking) is None for r in rows)
 
 
+def _row_sample_id(row: Dict[str, Any]) -> Optional[str]:
+    sid = row.get("sample_id")
+    if sid:
+        return str(sid)
+    meta = row.get("metadata") or {}
+    if isinstance(meta, dict) and meta.get("sample_id"):
+        return str(meta["sample_id"])
+    return None
+
+
+def _should_keep_existing_lf(
+    existing: Sequence[Dict[str, Any]],
+    source_rows: Optional[Sequence[Dict[str, Any]]],
+    *,
+    ranking: bool,
+) -> bool:
+    """只有结构合法，且相对候选源不是缩水/无 id 的旧子集时，才沿用盘上的 lf。"""
+    if not rows_are_aligned(existing, ranking=ranking):
+        return False
+    if source_rows is None:
+        return True
+    # 源有 sample_id 而 lf 大量缺失 → 旧 release 子集，必须重生成
+    src_ids = {_row_sample_id(r) for r in source_rows}
+    src_ids.discard(None)
+    lf_ids = {_row_sample_id(r) for r in existing}
+    lf_ids.discard(None)
+    if src_ids:
+        missing = src_ids - lf_ids
+        # 相对 v2/候选源丢了超过 5%（或超过 3 条）→ 旧子集，重生成
+        if len(missing) > max(3, int(0.05 * len(src_ids))):
+            return False
+    if len(existing) < int(0.95 * len(source_rows)):
+        return False
+    return True
+
+
 def _first_existing(root: Path, names: Sequence[str]) -> Optional[Path]:
     for name in names:
         path = root / name
@@ -259,8 +296,15 @@ def dataset_info_for(prepared: PreparedDatasets) -> Dict[str, Any]:
     return info
 
 
-def prepare_datasets(root: Path) -> PreparedDatasets:
-    """从 ``03_train`` 目录选出并规整出交付用的 sft/dpo（含 lf）。"""
+def prepare_datasets(
+    root: Path, *, apply_length_gate: bool = True, log=None
+) -> PreparedDatasets:
+    """从 ``03_train`` 目录选出并规整出交付用的 sft/dpo（含 lf）。
+
+    默认在规整后跑 observation 软压缩（按 yaml 默认 cutoff），**不因超长丢弃**。
+    would-be-overlength 写入 ``length_gate.overlength_at_default_cutoff`` 供 MANIFEST；
+    训练入口再按当次 ``cutoff_len`` 硬过滤。
+    """
     root = Path(root)
     prepared = PreparedDatasets()
     for logical, lf_name, share_name, ranking, candidates in SPECS:
@@ -269,14 +313,14 @@ def prepare_datasets(root: Path) -> PreparedDatasets:
         lf_rows: Optional[List[Dict[str, Any]]] = None
         origin = ""
         dropped: List[str] = []
+        source_rows = load_jsonl(source) if source is not None else None
         if existing_lf.is_file():
             loaded = load_jsonl(existing_lf)
-            if rows_are_aligned(loaded, ranking=ranking):
+            if _should_keep_existing_lf(loaded, source_rows, ranking=ranking):
                 lf_rows = loaded
                 origin = f"existing:{lf_name}"
-        if lf_rows is None and source is not None:
-            raw = load_jsonl(source)
-            lf_rows, dropped = _normalize_all(raw, ranking=ranking)
+        if lf_rows is None and source_rows is not None:
+            lf_rows, dropped = _normalize_all(source_rows, ranking=ranking)
             origin = source.name
         if not lf_rows:
             prepared.dropped[logical] = dropped
@@ -291,6 +335,19 @@ def prepare_datasets(root: Path) -> PreparedDatasets:
         elif (root / share_name).is_file():
             prepared.files[share_name] = load_jsonl(root / share_name)
             prepared.counts[share_name] = len(prepared.files[share_name])
+
+    if apply_length_gate and prepared.files:
+        from pipeline import length_gate as lg
+
+        gated_files, gate_stats = lg.gate_prepared_files(
+            prepared.files, root=root, log=log
+        )
+        prepared.files = gated_files
+        for name, rows in list(prepared.files.items()):
+            if name.endswith(".lf.jsonl"):
+                prepared.counts[name] = len(rows)
+        prepared.length_gate = lg.stats_to_manifest(gate_stats)
+        # 超长样本仍在包内；不再写入 prepared.dropped（那只记录结构非法丢弃）
     return prepared
 
 

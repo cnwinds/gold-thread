@@ -4,7 +4,7 @@
 ###       若仍 OOM 依次降 cutoff_len → 12288 → 8192
 ### model
 model_name_or_path: /data/models/Qwen3.8-27B
-adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft
+adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft-ab56c1d1
 trust_remote_code: true
 flash_attn: fa2                                  # 装不上改 sdpa
 enable_liger_kernel: false
@@ -15,14 +15,14 @@ do_train: false
 do_eval: true
 finetuning_type: lora
 lora_rank: 32
-lora_target: mlp
+lora_target: gate_proj,up_proj,down_proj
 # deepspeed:                                     # 单卡不要设
 
 ### dataset
 dataset_dir: /data/goldthread/03_train
-eval_dataset: pi_sft_step_windows_eval_v2
+eval_dataset: gt_sft_eval_lf
 template: qwen3_8                                # 专用模板，勿用 qwen3
-cutoff_len: 16384
+cutoff_len: 12288
 packing: false
 mask_history: true
 overwrite_cache: true

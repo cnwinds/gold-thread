@@ -1,17 +1,17 @@
 {
-  "generated_at": "2026-10-26T17:01:44+08:00",
-  "config_hash": "ab56c1d1fe908d0e",
+  "generated_at": "2026-10-30T10:07:10+08:00",
+  "config_hash": "bc1d8bf6a281ba8e",
   "counts": {
-    "sft_gold_trajectories_sharegpt.jsonl": 3,
-    "sft_step_windows_sharegpt.jsonl": 769,
-    "sft_step_windows_openai.jsonl": 769,
+    "sft_gold_trajectories_sharegpt.jsonl": 4,
+    "sft_step_windows_sharegpt.jsonl": 496,
+    "sft_step_windows_openai.jsonl": 496,
     "dpo_preference_pairs.jsonl": 243,
     "negative_diagnostics.jsonl": 814,
-    "sft_gold_trajectories_sharegpt.train.jsonl": 2,
+    "sft_gold_trajectories_sharegpt.train.jsonl": 3,
     "sft_gold_trajectories_sharegpt.eval.jsonl": 1,
-    "sft_step_windows_sharegpt.train.jsonl": 548,
+    "sft_step_windows_sharegpt.train.jsonl": 275,
     "sft_step_windows_sharegpt.eval.jsonl": 221,
-    "sft_step_windows_openai.train.jsonl": 548,
+    "sft_step_windows_openai.train.jsonl": 275,
     "sft_step_windows_openai.eval.jsonl": 221,
     "dpo_preference_pairs.train.jsonl": 100,
     "dpo_preference_pairs.eval.jsonl": 143,
@@ -26,34 +26,35 @@
     "game::riddle": "eval"
   },
   "by_project": {
-    "game::jigsawcard": 548,
-    "game::meowdoku": 221
+    "game::meowdoku": 221,
+    "game::mahjong": 164,
+    "game::altosodyssey": 77,
+    "game::cookingmadness": 34
   },
   "by_stage": {
-    "opening": 9,
-    "key_decision": 418,
-    "routine": 279,
-    "highlight": 54,
-    "closing": 9
+    "opening": 10,
+    "key_decision": 183,
+    "highlight": 72,
+    "routine": 220,
+    "closing": 11
   },
   "by_model": {
-    "glm-5.3": 1,
-    "deepseek-v4.1-flash-1017": 2
+    "deepseek-v4.1-flash-1017": 1,
+    "glm-5.3-flash": 3
   },
   "admit_reasons": {
-    "clean_gold": 499,
-    "rescued_by_rewrite": 218,
-    "human_kept": 1,
+    "clean_gold": 329,
+    "rescued_by_rewrite": 116,
     "whitelisted_subsegment": 51
   },
   "drop_reasons": {
-    "excluded_by_review": 9,
-    "pathology": 28,
-    "empty_thinking": 5,
+    "session_blocked": 583,
     "model_discard": 708,
     "label_excluded": 791,
+    "pathology": 25,
+    "empty_thinking": 2,
     "outside_subsegment_whitelist": 341,
-    "session_blocked": 298
+    "excluded_by_review": 3
   },
   "session_funnels": {
     "01a15341-6ad4-7530-bd18-84943ebbe26f": {
@@ -62,21 +63,21 @@
       "project_group": "game::jigsawcard",
       "model": "glm-5.3",
       "split": "train",
-      "effective_state": "approved",
-      "full_sft_allowed": true,
+      "effective_state": "stale",
+      "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
         "raw_steps": 316,
         "gold_steps": 290,
-        "admitted_steps": 268,
-        "rescued_steps": 100,
-        "human_kept_steps": 1,
-        "excluded_steps": 9,
-        "pathology_dropped": 11,
+        "admitted_steps": 0,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
         "synthesized_dropped": 0,
-        "empty_dropped": 2,
-        "blocked_or_subsegment_dropped": 0,
-        "weighted_steps": 453
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 290,
+        "weighted_steps": 0
       },
       "dpo_pruned": 25,
       "dpo_review": 0,
@@ -89,7 +90,7 @@
       "project_group": "game::meowdoku",
       "model": "glm-5.3",
       "split": "eval",
-      "effective_state": "approved",
+      "effective_state": "auto_reject",
       "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
@@ -116,21 +117,21 @@
       "project_group": "game::jigsawcard",
       "model": "deepseek-v4.1-flash-1017",
       "split": "train",
-      "effective_state": "approved",
-      "full_sft_allowed": true,
+      "effective_state": "held",
+      "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
         "raw_steps": 309,
         "gold_steps": 293,
-        "admitted_steps": 280,
-        "rescued_steps": 98,
+        "admitted_steps": 0,
+        "rescued_steps": 0,
         "human_kept_steps": 0,
         "excluded_steps": 0,
-        "pathology_dropped": 11,
+        "pathology_dropped": 0,
         "synthesized_dropped": 0,
-        "empty_dropped": 2,
-        "blocked_or_subsegment_dropped": 0,
-        "weighted_steps": 478
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 293,
+        "weighted_steps": 0
       },
       "dpo_pruned": 16,
       "dpo_review": 0,
@@ -170,7 +171,7 @@
       "project_group": "game::jigsawcard",
       "model": "Qwen3.8-27B-Uncensored-Q4_K_M",
       "split": "train",
-      "effective_state": "approved",
+      "effective_state": "auto_reject",
       "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
@@ -224,7 +225,7 @@
       "project_group": "game::meowdoku",
       "model": "deepseek-v4.1-flash-1017",
       "split": "eval",
-      "effective_state": "approved",
+      "effective_state": "auto_gold",
       "full_sft_allowed": true,
       "subsegment_only": false,
       "funnel": {
@@ -238,7 +239,7 @@
         "synthesized_dropped": 0,
         "empty_dropped": 1,
         "blocked_or_subsegment_dropped": 0,
-        "weighted_steps": 306
+        "weighted_steps": 368
       },
       "dpo_pruned": 2,
       "dpo_review": 0,
@@ -251,7 +252,7 @@
       "project_group": "game::meowdoku",
       "model": "glm-5.3",
       "split": "eval",
-      "effective_state": "approved",
+      "effective_state": "auto_gold",
       "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
@@ -305,7 +306,7 @@
       "project_group": "game::meowdoku",
       "model": "Qwen3.8-27B-Uncensored-Q4_K_M",
       "split": "eval",
-      "effective_state": "approved",
+      "effective_state": "held",
       "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
@@ -359,7 +360,7 @@
       "project_group": "game::meowdoku",
       "model": "google/gemma-4-31b-it",
       "split": "eval",
-      "effective_state": "approved",
+      "effective_state": "held",
       "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
@@ -386,7 +387,7 @@
       "project_group": "game::meowdoku",
       "model": "deepseek-v4.1-flash-1017",
       "split": "eval",
-      "effective_state": "approved",
+      "effective_state": "auto_gold",
       "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
@@ -413,21 +414,21 @@
       "project_group": "game::mahjong",
       "model": "glm-5.3-flash",
       "split": "train",
-      "effective_state": "held",
-      "full_sft_allowed": false,
+      "effective_state": "approved",
+      "full_sft_allowed": true,
       "subsegment_only": false,
       "funnel": {
         "raw_steps": 202,
         "gold_steps": 180,
-        "admitted_steps": 0,
-        "rescued_steps": 0,
+        "admitted_steps": 164,
+        "rescued_steps": 60,
         "human_kept_steps": 0,
-        "excluded_steps": 0,
-        "pathology_dropped": 0,
+        "excluded_steps": 3,
+        "pathology_dropped": 12,
         "synthesized_dropped": 0,
-        "empty_dropped": 0,
-        "blocked_or_subsegment_dropped": 180,
-        "weighted_steps": 0
+        "empty_dropped": 1,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 243
       },
       "dpo_pruned": 22,
       "dpo_review": 0,
@@ -440,21 +441,21 @@
       "project_group": "game::altosodyssey",
       "model": "glm-5.3-flash",
       "split": "train",
-      "effective_state": "held",
-      "full_sft_allowed": false,
+      "effective_state": "approved",
+      "full_sft_allowed": true,
       "subsegment_only": false,
       "funnel": {
         "raw_steps": 86,
         "gold_steps": 81,
-        "admitted_steps": 0,
-        "rescued_steps": 0,
+        "admitted_steps": 77,
+        "rescued_steps": 27,
         "human_kept_steps": 0,
         "excluded_steps": 0,
-        "pathology_dropped": 0,
+        "pathology_dropped": 4,
         "synthesized_dropped": 0,
         "empty_dropped": 0,
-        "blocked_or_subsegment_dropped": 81,
-        "weighted_steps": 0
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 155
       },
       "dpo_pruned": 5,
       "dpo_review": 0,
@@ -467,21 +468,21 @@
       "project_group": "game::cookingmadness",
       "model": "glm-5.3-flash",
       "split": "train",
-      "effective_state": "held",
-      "full_sft_allowed": false,
+      "effective_state": "approved",
+      "full_sft_allowed": true,
       "subsegment_only": false,
       "funnel": {
         "raw_steps": 38,
         "gold_steps": 37,
-        "admitted_steps": 0,
-        "rescued_steps": 0,
+        "admitted_steps": 34,
+        "rescued_steps": 8,
         "human_kept_steps": 0,
         "excluded_steps": 0,
-        "pathology_dropped": 0,
+        "pathology_dropped": 3,
         "synthesized_dropped": 0,
         "empty_dropped": 0,
-        "blocked_or_subsegment_dropped": 37,
-        "weighted_steps": 0
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 81
       },
       "dpo_pruned": 1,
       "dpo_review": 0,
@@ -494,7 +495,7 @@
       "project_group": "game::riddle",
       "model": "MiniMax-M3.1-Flash",
       "split": "eval",
-      "effective_state": "unreviewed",
+      "effective_state": "rejected",
       "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
@@ -516,7 +517,7 @@
       "diagnostics": 151
     }
   },
-  "weighted_steps": 1313,
+  "weighted_steps": 923,
   "dpo_by_source": {
     "stage2_pruned": 190,
     "negative_step": 53
@@ -537,9 +538,12 @@
     "negative": 6
   },
   "review_states": {
-    "approved": 13,
+    "stale": 1,
+    "auto_reject": 2,
     "held": 3,
-    "unreviewed": 1
+    "approved": 7,
+    "auto_gold": 3,
+    "rejected": 1
   },
   "dpo_review": {
     "checked": 305,

@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 ENV = {
     "gpu": "1 × NVIDIA A800 80GB（Ampere / SM80 / bf16）",
@@ -64,38 +64,104 @@ def _table(rows: List[List[str]], head: List[str]) -> str:
     return "\n".join(out)
 
 
+def _pick_first(root: Path, names: Sequence[str]) -> Optional[Path]:
+    for n in names:
+        p = root / n
+        if p.exists():
+            return p
+    return None
+
+
+def _char_quantiles(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    lens = sorted(
+        sum(len(str(c.get("value", ""))) + 16 for c in (r.get("conversations") or []))
+        or sum(len(str(m.get("content", ""))) + 16 for m in (r.get("messages") or []))
+        for r in rows
+    )
+    n = len(lens)
+    if not n:
+        return {}
+    def q(p: float) -> int:
+        return lens[min(n - 1, int(n * p))]
+    return {"ch_p50": q(0.5), "ch_p90": q(0.9), "ch_p99": q(0.99), "ch_max": lens[-1]}
+
+
 def _data_profile(root: Path) -> Dict[str, Any]:
-    """读训练集，算长度分布（字符数 + 粗估 token），用于论证 cutoff_len。"""
-    p = root / "sft_step_windows_sharegpt.train.jsonl"
-    lens: List[int] = []
-    if p.exists():
-        with p.open(encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    r = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                lens.append(sum(len(str(c.get("value", ""))) + 16 for c in r.get("conversations", [])))
-    lens.sort()
+    """读训练集，用**真实 tokenizer + ChatML 渲染**算长度分布（决定 cutoff_len）。
 
-    def pct(q: float) -> int:
-        if not lens:
-            return 0
-        return lens[min(len(lens) - 1, int(len(lens) * q))]
+    口径与 `pipeline/common/seqlength.py` 一致（工具 `tools/check_seq_len.py` 也用它）。
+    找不到 tokenizer 时退化为「字符 / 2.13」估算，返回值的 `tok_source` 会标明来源，
+    文档里据此标注「实测」或「估算」，不再统一按 2.2 字符/token 糊过去（实测会低估 3~5%）。
 
-    if not lens:
-        return {"n": 0}
-    # 中英混合约 2.2 字符/token；纯英文/代码约 3.0
-    return {
-        "n": len(lens),
-        "p50": pct(0.5), "p90": pct(0.9), "p99": pct(0.99), "max": lens[-1],
-        "tok_p50": round(pct(0.5) / 2.2), "tok_p90": round(pct(0.9) / 2.2),
-        "tok_p99": round(pct(0.99) / 2.2), "tok_max": round(lens[-1] / 2.2),
-        "tok_max_en": round(lens[-1] / 3.0),
-        "over_8k": sum(1 for x in lens if x / 2.2 > 8192),
+    会返回 `sft_list` / `dpo_list`（每个存在的 train 文件一行），因为同一个包里往往同时存在
+    v1 / v2 / v2w 多个版本，长度能差一倍——只能逐文件量，不能拿一个数代表全部。
+    """
+    root = Path(root)
+    from .common import seqlength as sl  # 局部导入：没有 tokenizers 也不影响 handoff 其它部分
+
+    sft_names = ("sft.train.jsonl", "sft_step_windows_sharegpt.train.jsonl",
+                 "sft_step_windows_sharegpt.train.v2.jsonl")
+    dpo_names = ("dpo.train.jsonl", "dpo_preference_pairs.train.jsonl",
+                 "dpo_preference_pairs.train.v2w.jsonl", "dpo_preference_pairs.train.v2.jsonl")
+    sft_paths = [root / n for n in sft_names if (root / n).exists()]
+    dpo_paths = [root / n for n in dpo_names if (root / n).exists()]
+    if not sft_paths:
+        return {"n": 0, "tok_source": "estimate:nodata", "sft_list": [], "dpo_list": []}
+
+    tok, tok_src = sl.find_tokenizer()
+    prefix, pfx_src = sl.prefix_from_logs(root / "logs")
+    # 用训练日志里的 input_ids（当时真 tokenizer 数出来的）给当前口径打分
+    verify = None
+    for lp in sorted((root / "logs").glob("*.log")) if (root / "logs").is_dir() else []:
+        verify = sl.verify_tokenizer(tok, lp)
+        if verify:
+            break
+
+    sft_list: List[Dict[str, Any]] = []
+    for p in sft_paths:
+        rows = sl.load_jsonl(p)
+        lens = sl.sft_lengths(rows, tok, prefix)
+        q = sl.quantiles([n for n, _ in lens])
+        q["file"] = p.name
+        q.update(_char_quantiles(rows))
+        q["top"] = [{"len": n, "id": i} for n, i in sorted(lens, reverse=True)[:5]]
+        sft_list.append(q)
+
+    dpo_list: List[Dict[str, Any]] = []
+    for p in dpo_paths:
+        rows = sl.load_jsonl(p)
+        q = sl.quantiles([n for n, _ in sl.dpo_lengths(rows, tok, prefix)])
+        q["file"] = p.name
+        dpo_list.append(q)
+
+    # 主口径取「最长」的那个文件（保守：cutoff 必须覆盖将被训练的那份）
+    primary = max(sft_list, key=lambda q: q["max"])
+    prof: Dict[str, Any] = {
+        "file": primary["file"],
+        "n": primary["n"],
+        "tok_source": tok_src,
+        "prefix_source": pfx_src,
+        "prefix_tokens": sl.prefix_tokens(tok, prefix),
+        "verify": verify,
+        "est": tok is None,
+        "p50": primary.get("ch_p50"), "p90": primary.get("ch_p90"),
+        "p99": primary.get("ch_p99"), "max": primary.get("ch_max"),
+        "tok_p50": primary["p50"], "tok_p90": primary["p90"],
+        "tok_p99": primary["p99"], "tok_max": primary["max"],
+        "tok_mean": primary["mean"],
+        "over_8k": max(q["over_8k"] for q in sft_list),
+        "over_12k": max(q["over_12k"] for q in sft_list),
+        "over_16k": max(q["over_16k"] for q in sft_list),
+        "tok_top": primary["top"],
+        "sft_list": sft_list,
+        "dpo_list": dpo_list,
     }
+    # 推荐的 cutoff_len：覆盖全部样本的最小档位
+    m = prof["tok_max"]
+    prof["cutoff_recommend"] = 12288 if m <= 12288 else (16384 if m <= 16384 else 32768)
+    if dpo_list:
+        prof["dpo"] = max(dpo_list, key=lambda q: q["max"])
+    return prof
 
 
 def write_handoff(
@@ -132,6 +198,26 @@ def write_handoff(
     admit = stats.get("admit_reasons") or {}
     drop = stats.get("drop_reasons") or {}
     prof = _data_profile(root)
+    # 长度口径：有 tokenizer 就是实测（ChatML 渲染），没有则退化估算；文档里必须标清楚
+    tok_est = bool(prof.get("est", True))
+    tok_label = ("≈tokens（估算：字符 / 2.13，未找到 tokenizer）" if tok_est
+                 else "tokens（**实测**：ChatML 渲染 + 真实 tokenizer）")
+    cut_rec = int(prof.get("cutoff_recommend") or 16384)
+    len_over_12k = int(prof.get("over_12k") or 0)
+    len_over_8k = int(prof.get("over_8k") or 0)
+    len_cover = (f"**`cutoff_len: {cut_rec}` 覆盖全部样本，0 截断**"
+                 if cut_rec >= int(prof.get("tok_max") or 0)
+                 else f"**`cutoff_len: {cut_rec}` 仍会截断部分样本，请先裁剪数据**")
+    len_tok_src = prof.get("tok_source", "?")
+    len_verify = prof.get("verify")
+    len_verify_txt = (
+        f"ground truth 校验（{len_verify['file']}）：日志 {_fmt(len_verify['log_tokens'])} vs 本口径 "
+        f"{_fmt(len_verify['tok_tokens'])} tokens，偏差 {len_verify['delta']:+d} / {len_verify['delta_pct']:+.3f}%"
+        f" → {'✅ 同一份分词器' if len_verify['ok'] else '⚠️ 偏差偏大，长度数字仅供参考（去拿模型自己的 tokenizer.json 放进 .tokenizer/）'}"
+    ) if len_verify else "ground truth 校验：日志里没有可用的 input_ids 样本，未校验"
+    len_pfx = f"{_fmt(prof.get('prefix_tokens', 0))} tokens（来源 {prof.get('prefix_source', '—')}）"
+    dpo_prof = prof.get("dpo") or {}
+    len_top = prof.get("tok_top") or []
 
     def cnt(name: str) -> int:
         return int(counts.get(name, 0) or 0)
@@ -188,6 +274,9 @@ def write_handoff(
 
 - 阶段权重分布（train）：{", ".join(f"{k} {_fmt(v)}" for k, v in stage_counts.items()) or "—"}
   （`highlight` = 模型判定的关键决策步，权重最高；若你的 collator 支持 `metadata.sample_weight` 可直接用）
+- 并行工具调用加权：`×{(cfg.get("synth") or {}).get("parallel_weight", 1.5)}`
+  （一步里 >=2 个 `tool_call` 的步；`highlight` 不参与，避免双重计分。
+  实测 train 并行步占比远低于 eval，不加权模型会退化成「一次一个调用」，见 `tools/check_parallel_calls.py`）
 - 项目分布：{", ".join(f"`{p}` {_fmt(n)}" for p, n in sorted(by_project.items(), key=lambda kv: -kv[1])) or "—"}
 - 训练/验证切分（**按项目整包**，防相邻步泄漏）：
   - train：{", ".join(f"`{p}`" for p in train_projects) or "—"}
@@ -202,17 +291,40 @@ def write_handoff(
 
 ## 2. 显存与长度核算（决定 cutoff_len）
 
-**训练样本长度实测**（train，{_fmt(prof.get("n", 0))} 条）：
+**SFT 训练样本长度**（{tok_label}；已含模板前缀固定开销）：
 
 {_table([
-    ["字符数", _fmt(prof.get("p50")), _fmt(prof.get("p90")), _fmt(prof.get("p99")), _fmt(prof.get("max"))],
-    ["≈tokens（中英混合 2.2 字符/token）", _fmt(prof.get("tok_p50")), _fmt(prof.get("tok_p90")), _fmt(prof.get("tok_p99")), _fmt(prof.get("tok_max"))],
-], ["分位", "p50", "p90", "p99", "max"])}
+    [f"`{q['file']}`", _fmt(q['n']), _fmt(q['p50']), _fmt(q['p90']), _fmt(q['p99']), _fmt(q['max']),
+     f"{_fmt(q['over_12k'])}" + (" ⚠️" if q['over_12k'] else "")]
+    for q in (prof.get("sft_list") or [])
+], ["训练集文件", "条数", "p50", "p90", "p99", "max", "超 12K"])}
 
-- 最长样本约 **{_fmt(prof.get("tok_max"))} tokens**（按纯英文 3.0 字符/token 估则约 {_fmt(prof.get("tok_max_en"))}）
-- 因此 **`cutoff_len: 16384` 覆盖全部样本，0 截断**；若降到 8192，约 {_fmt(prof.get("over_8k"))} 条会被截断（含目标步，直接丢弃该能力）
+- 计数口径：`{len_tok_src}`
+- {len_verify_txt}
+- 模板前缀（Reasoning effort 行 + `# Tools` + tools JSON + 调用格式指令）
+  固定开销 **{len_pfx}**，每条样本都要付
+- 全包最长 **{_fmt(prof.get("tok_max"))} tokens**（`{prof.get("file", "—")}`，均值 {_fmt(prof.get("tok_mean"))}）；
+  超 8K **{_fmt(len_over_8k)}** 条、超 12K **{_fmt(len_over_12k)}** 条、超 16K **{_fmt(prof.get("over_16k"))}** 条
+- {len_cover}；若降到 8192，约 {_fmt(len_over_8k)} 条会被截断（含目标步，直接丢弃该能力）
+- ⚠️ LLaMA-Factory 是 `truncation_side='right'`，被截掉的正好是**最后一个 assistant 目标步**；
+  叠加 `mask_history: true` 会出现「标签全被切光、loss=0」的假训练，所以超长必须在**数据侧**解决
+  （`config/pipeline.yaml: synth.max_tool_output_chars` 与 `window_turns`），不能靠 cutoff 硬截
 
-**27B bf16 显存预算（单卡 80GB，cutoff_len 16384）**
+最长样本：
+{_table([[_fmt(t['len']), f"`{t['id']}`"] for t in len_top[:5]], ["长度（tokens）", "sample_id"]) if len_top else "—"}
+
+**DPO 长度**（prompt+chosen 与 prompt+rejected 取大者，上限 8192）：
+
+{_table([
+    [f"`{q['file']}`", _fmt(q['n']), _fmt(q['p50']), _fmt(q['p99']), _fmt(q['max']),
+     f"{_fmt(q['over_8k'])}" + (" ⚠️" if q['over_8k'] else "")]
+    for q in (prof.get("dpo_list") or [])
+], ["偏好对文件", "对数", "p50", "p99", "max", "超 8K"]) if prof.get("dpo_list") else "（无 DPO 训练集）"}
+
+> DPO 优先用**窗口裁剪版**（`*v2w`）：全窗口版明显更长，超 8K 的对会被截到只剩前缀，
+> 而 DPO 截断比 SFT 更致命（chosen/rejected 两侧都可能被截，差异消失后等于噪声）。
+
+**27B bf16 显存预算（单卡 80GB，cutoff_len {cut_rec}）**
 
 {_table([
     ["文本权重（bf16）", "≈ 54 GB", "全参数常驻（27B dense 为主体）"],
@@ -255,7 +367,7 @@ def write_handoff(
 ### 3.2 关于"原生 256K"的正确理解
 
 1. **训练长度 ≠ 能力长度**。本数据集滑窗最长约 {_fmt(prof.get("tok_max"))} tokens，
-   用 `cutoff_len 16384` 训练不会改变 `max_position_embeddings`，
+   用 `cutoff_len {cut_rec}` 训练不会改变 `max_position_embeddings`，
    合并后 vLLM 仍接受 256K 输入（接口层面成立）。
 2. **但长上下文质量不会被强化**，所以默认 `lora_target: mlp`（不动注意力投影层）+ §7 有验收脚本。
 3. **单卡 80GB 跑 256K 推理也不现实**，算一下 KV cache：
@@ -587,7 +699,8 @@ train_on_prompt: false # 与 mask_history 互斥，保持 false
 {_table([
     ["`template`", "qwen3_8", "**专用模板**；不要设 tool_format"],
     ["`mask_history`", "true", "**只训练最后一轮**（本数据集的关键开关）"],
-    ["`cutoff_len`", "16384", "实测最长 " + _fmt(prof.get("tok_max")) + " tokens，0 截断"],
+    ["`cutoff_len`", str(cut_rec), ("实测最长 " + _fmt(prof.get("tok_max")) + " tokens，0 截断")
+     if not tok_est else "建议值（估算口径，拿到 tokenizer 后复核）"],
     ["`lora_target`", "mlp", "不动注意力投影层，尽量保住原生长上下文能力"],
     ["`lora_rank`", "32", "27B 用 32~64 均可"],
     ["`learning_rate`", "1.0e-4", "LoRA 常规区间；总步数 ~" + _fmt(total_steps)],
@@ -1309,7 +1422,25 @@ python verify_longctx_api.py \
 
     _emit(root / "handoff.md", doc, encoding="utf-8")
 
-    _emit(root / "train_sft.yaml", f"""### model
+    # 数据集键：发布包流程（releases + normalize_sharegpt.py）登记了 gt_*_lf 时优先用它，
+    # 否则退回 stage3 自己产出的 pi_*；两套流程共用同一份模板。
+    def _pick(*candidates: str) -> str:
+        for c in candidates:
+            if c in dataset_info:
+                return c
+        return candidates[-1]
+
+    _sft_train_ds = _pick("gt_sft_train_lf", "pi_sft_step_windows_train_v2", "pi_sft_step_windows_train")
+    _sft_eval_ds = _pick("gt_sft_eval_lf", "pi_sft_step_windows_eval_v2", "pi_sft_step_windows_eval")
+    _dpo_train_ds = _pick("gt_dpo_train_lf", "pi_dpo_preference_pairs_train_v2w", "pi_dpo_preference_pairs_train")
+    _dpo_eval_ds = _pick("gt_dpo_eval_lf", "pi_dpo_preference_pairs_eval_v2w", "pi_dpo_preference_pairs_eval")
+
+    _emit(root / "train_sft.yaml", f"""### 启动：python run_train.py train /data/goldthread/03_train/train_sft.yaml
+###       或 python train_lowmem.py train_sft.yaml（只算监督位置 logits）
+###       原生 llamafactory-cli 会对 16K 全部位置算 fp32 logits（词表 248320，≈16GB）→ 80G 必 OOM
+### 前置：qwen3_5 在 LLaMA-Factory 下无条件 patch decoder forward，
+###       必须 pip install "flash-linear-attention==0.4.2"，否则第一个 step 前就 ImportError
+### model
 model_name_or_path: /data/models/Qwen3.8-27B          # 改成你的真实路径
 trust_remote_code: true
 flash_attn: fa2                                      # 仅对 full_attention 层生效；装不上改 sdpa
@@ -1320,15 +1451,17 @@ stage: sft
 do_train: true
 finetuning_type: lora
 lora_rank: 32
-lora_target: mlp                                     # 不动注意力投影层，保住长上下文
+# 'mlp' 在 qwen3_5 上是复合容器模块（Qwen3_5MLP），peft 会报 ValueError；
+# 直接点名三个投影层，语义完全相同：不动注意力、保住长上下文
+lora_target: gate_proj,up_proj,down_proj
 # deepspeed:                                          # 单卡不要设
 
 ### dataset
 dataset_dir: {root.as_posix()}
-dataset: pi_sft_step_windows_train
-eval_dataset: pi_sft_step_windows_eval
+dataset: {_sft_train_ds}
+eval_dataset: {_sft_eval_ds}
 template: qwen3_8                                     # 专用模板，勿用 qwen3
-cutoff_len: 16384
+cutoff_len: 12288                                    # 实测 16384 首步 OOM（A800 80G）；p99=12085 基本全覆盖
 packing: false                                       # 必须关闭
 mask_history: true                                   # 只训练最后一轮（本数据集关键开关）
 overwrite_cache: true
@@ -1564,16 +1697,16 @@ stage: sft
 do_train: true
 finetuning_type: lora
 lora_rank: 32
-lora_target: mlp
+lora_target: gate_proj,up_proj,down_proj             # 'mlp' 在 qwen3_5 上会被 peft 拒绝
 quantization_type: nf4
 double_quantization: true
 
 ### dataset
 dataset_dir: {root.as_posix()}
-dataset: pi_sft_step_windows_train
-eval_dataset: pi_sft_step_windows_eval
+dataset: {_sft_train_ds}
+eval_dataset: {_sft_eval_ds}
 template: qwen3_8
-cutoff_len: 16384
+cutoff_len: 12288                                    # 4bit 下余量更大，仍建议 ≤12288
 packing: false
 mask_history: true                                    # 只训练最后一轮
 overwrite_cache: true
@@ -1620,17 +1753,17 @@ stage: dpo
 do_train: true
 finetuning_type: lora                                 # 新的 DPO LoRA（叠在 SFT 合并模型上）
 lora_rank: 32
-lora_target: mlp
+lora_target: gate_proj,up_proj,down_proj          # 'mlp' 在 qwen3_5 上是容器模块（Qwen3_5MLP），peft 会拒
 pref_beta: 0.1
 pref_loss: sigmoid                                    # sigmoid 需要 ref（use_ref_model=true），由 disable_adapter 提供
 # deepspeed:                                            # 单卡不要设
 
 ### dataset
 dataset_dir: {root.as_posix()}
-dataset: pi_dpo_preference_pairs_train_v2w       # 窗口裁剪版（保住最近上下文，显存友好）
-eval_dataset: pi_dpo_preference_pairs_eval_v2w
+dataset: {_dpo_train_ds}
+eval_dataset: {_dpo_eval_ds}
 template: qwen3_8
-cutoff_len: 8192                                       # DPO 双前向，激活翻倍
+cutoff_len: 5120                                       # 8192 OOM；6144 峰值 77.9/80G 只剩 1.6G，5120 留 ~5G
 packing: false
 overwrite_cache: true
 preprocessing_num_workers: 8
@@ -1639,7 +1772,7 @@ preprocessing_num_workers: 8
 # 产物是叠在 Qwen3.8-27B-merged 上的 DPO 适配器；导出时 model_name_or_path 要填 merged 目录，不是原始 base
 output_dir: /data/saves/qwen38-27b-goldthread-dpo
 logging_steps: 5
-save_steps: 100
+save_steps: 25
 save_total_limit: 2
 overwrite_output_dir: true
 
@@ -1647,7 +1780,7 @@ overwrite_output_dir: true
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 4
 learning_rate: 1.0e-5           # 8B 实测 5e-5 会把模型推崩；27B 同样用小 lr
-num_train_epochs: 1.0
+num_train_epochs: 3.0           # 100 对 / batch4 = 25 步/epoch，1 epoch 只有 25 步太少
 lr_scheduler_type: cosine
 warmup_ratio: 0.05
 bf16: true
@@ -1657,7 +1790,7 @@ gradient_checkpointing: true
 # 评测同样走 lowmem 路径（policy + disable_adapter ref 两次 no_grad 前向），显存低于训练步
 per_device_eval_batch_size: 1
 eval_strategy: steps
-eval_steps: 50
+eval_steps: 10
 """, encoding="utf-8")
 
     _emit(root / "probe_24g.py", '''#!/usr/bin/env python3
@@ -1884,6 +2017,9 @@ def main() -> int:
     ap.add_argument("--model", default="")
     ap.add_argument("--data", default="")
     ap.add_argument("--cutoff", type=int, default=16384)
+    ap.add_argument("--prefix-tokens", type=int, default=700,
+                    help="模板注入的固定开销（Reasoning effort + # Tools + tools JSON + 调用格式指令），"
+                         "27B/qwen3_8 实测 686，对齐 qwen3 约 720）")
     args = ap.parse_args()
 
     # ---------- A. 运行时 ----------
@@ -2041,37 +2177,61 @@ def main() -> int:
                     "dpo_preference_pairs.train.jsonl", "dataset_info.json"]
             for f in need:
                 (ok if (d / f).exists() else bad)(f"存在 {f}")
-            # 长度分布（有 tokenizer 才有意义）
+            # 长度分布：按 LLaMA-Factory 的 ChatML 渲染逐条拼序列（含 <tool_response> 包装），
+            # 不再用「\n join 各段」的近似（那样会漏掉 ChatML 标记与 tool_response 包装）。
             t = d / "sft_step_windows_sharegpt.train.jsonl"
             if t.exists():
-                lens = []
-                over = 0
-                tok = None
+                enc = None
+                src = "估算(字符/2.13)"
                 try:
-                    from transformers import AutoTokenizer
-                    if args.model:
-                        tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+                    from tokenizers import Tokenizer
+                    tj = Path(args.model) / "tokenizer.json" if args.model else None
+                    if tj is not None and tj.exists():
+                        _tk = Tokenizer.from_file(str(tj))
+                        enc = lambda s: len(_tk.encode(s, add_special_tokens=False).ids)  # noqa: E731
+                        src = f"实测(tokenizers:{tj.name})"
                 except Exception:  # noqa: BLE001
-                    tok = None
+                    enc = None
+                if enc is None and args.model:
+                    try:
+                        from transformers import AutoTokenizer
+                        _at = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+                        enc = lambda s: len(_at(s, add_special_tokens=False)["input_ids"])  # noqa: E731
+                        src = "实测(transformers)"
+                    except Exception:  # noqa: BLE001
+                        enc = None
+
+                def _render(conv):
+                    out = []
+                    for c in conv:
+                        v = str(c.get("value", ""))
+                        frm = c.get("from")
+                        if frm == "system":
+                            out.append("<|im_start|>system\n" + v + "<|im_end|>\n")
+                        elif frm == "observation":
+                            out.append("<|im_start|>user\n<tool_response>\n" + v + "\n</tool_response><|im_end|>\n")
+                        elif frm == "gpt":
+                            out.append("<|im_start|>assistant\n" + v + "<|im_end|>\n")
+                        else:
+                            out.append("<|im_start|>user\n" + v + "<|im_end|>\n")
+                    return "".join(out)
+
+                lens = []
                 with t.open(encoding="utf-8") as f:
                     for line in f:
                         if not line.strip():
                             continue
                         r = json.loads(line)
-                        chars = sum(len(str(c.get("value", ""))) + 16 for c in r["conversations"])
-                        if tok is not None:
-                            txt = "\n".join(str(c.get("value", "")) for c in r["conversations"])
-                            n = len(tok(txt, add_special_tokens=False)["input_ids"])
-                        else:
-                            n = round(chars / 2.2)
-                        lens.append(n)
+                        txt = _render(r["conversations"])
+                        n = enc(txt) if enc else round(len(txt) / 2.13)
+                        lens.append(n + int(args.prefix_tokens))
                 lens.sort()
                 if lens:
                     p50 = lens[len(lens) // 2]
                     p99 = lens[min(len(lens) - 1, int(len(lens) * 0.99))]
                     over = sum(1 for x in lens if x > args.cutoff)
-                    unit = "tokens(真实)" if tok is not None else "tokens(估算)"
-                    print(f"  长度分布 {unit}: p50={p50} p99={p99} max={lens[-1]}")
+                    print(f"  长度分布 {src}（已加模板前缀 {args.prefix_tokens} tok）: "
+                          f"p50={p50} p99={p99} max={lens[-1]}")
                     if over:
                         print(f"  [WARN] {over} 条超过 cutoff_len={args.cutoff}，会被截断（可能丢目标步）")
                     else:

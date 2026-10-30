@@ -12,6 +12,7 @@ from . import steps as stepcat
 from .handoff import write_handoff
 from .common.config import config_hash, load_config, stage_dirs
 from .common.format import conversation, to_openai, to_sharegpt
+from .common.pilog import truncate_middle
 from .common.quality import compact_thinking, evaluate_effective_step
 from .common.store import (
     dump_index,
@@ -210,6 +211,26 @@ def _review_rewrite_dpo(
     return pairs
 
 
+def apply_parallel_boost(weight: int, n_calls: int, stage_name: str, factor: float) -> Tuple[int, bool]:
+    """并行工具调用（一步里 >=2 个 tool_call）的权重加成。
+
+    为什么单独做这一步：实测 train 并行步只占 5.3%、eval 占 26.2%（并行步几乎全在被整包
+    留出的 meowdoku），不加权模型会退化成「一次一个调用」，多出 N 次工具往返。
+
+    规则：
+    - 只在 `n_calls >= 2` 且 `factor > 1` 时生效，且**只乘不降**（保证单调）；
+    - `highlight` 不参与：它的权重是模型给的分，再乘就是双重计分；
+    - 四舍五入用 `+0.5` 而不是 `round()`，避开银行家舍入（round(4.5) == 4 会让 3 倍步降级）。
+
+    返回 (新权重, 是否发生加成)。
+    """
+    if n_calls >= 2 and stage_name != "highlight" and factor > 1:
+        boosted = int(weight * factor + 0.5)
+        new_weight = max(weight, boosted)
+        return new_weight, new_weight != weight
+    return weight, False
+
+
 def evaluate_session_synthesis(
     rec: Dict[str, Any],
     annotation: Dict[str, Any],
@@ -221,6 +242,22 @@ def evaluate_session_synthesis(
     window_turns = int(scfg.get("window_turns", 8))
     sft_labels = set(scfg.get("sft_labels", ["positive"]))
     weights = scfg.get("weights", {})
+    # 并行工具调用加权：训练集里并行步占比远低于 eval（实测 5.3% vs 26.2%），
+    # 不加权的话模型会退化成「一次一个调用」。多调一步就走一次工具往返，是实打实的效率能力。
+    try:
+        parallel_weight = float(scfg.get("parallel_weight", 1.5))
+    except (TypeError, ValueError):
+        parallel_weight = 1.5
+    # 历史步是否保留思考。默认 True=剥离（历史只留 tool_calls + 工具结果）。
+    # 实测（pi + vLLM）：轮内多步调用时思考 100% 会带进下一次调用；跨轮也带（除非该轮回复是空白
+    # 且无 tool_calls，pi 会整条丢掉）。所以若要严格对齐推理上下文，应设为 False。
+    strip_history_thinking = bool(scfg.get("strip_history_thinking", True))
+    # 保留历史思考时，把单步思考压到多少字符（0=不压缩）。历史里「有没有  thinking」比「写多少」
+    # 更影响分布对齐，压到 600 字符即可把 +1911 tokens/条 的代价降到 +468。
+    try:
+        history_thinking_max_chars = int(scfg.get("history_thinking_max_chars", 0) or 0)
+    except (TypeError, ValueError):
+        history_thinking_max_chars = 0
     max_think_chars = int(cfg["gold"].get("max_thinking_chars", 2400))
     max_think_target = int(cfg["gold"].get("target_thinking_chars", 1600))
 
@@ -327,6 +364,11 @@ def evaluate_session_synthesis(
         else:
             stage_name, weight = "routine", int(weights.get("routine", 1))
 
+        # 并行调用加权：只乘不降；highlight 的权重是模型给的分，不参与乘算（避免双重计分）
+        n_calls = len(m.get("tool_calls") or [])
+        weight_before = weight
+        weight, boosted = apply_parallel_boost(weight, n_calls, stage_name, parallel_weight)
+
         status = "dropped"
         reason = ""
 
@@ -382,9 +424,17 @@ def evaluate_session_synthesis(
                 funnel["weighted_steps"] += weight
                 step_id = f"step::{sid}::{mid}"
                 prompt_sgpt: List[Dict[str, str]] = []
-                for h in cleaned:
-                    prompt_sgpt.extend(to_sharegpt(h, strip_thinking=True))
-                prompt_oai = [to_openai(h, strip_thinking=True) for h in cleaned]
+                hist_msgs = cleaned
+                if not strip_history_thinking and history_thinking_max_chars > 0:
+                    hist_msgs = []
+                    for h in cleaned:
+                        th = h.get("thinking") or ""
+                        if len(th) > history_thinking_max_chars:
+                            h = {**h, "thinking": truncate_middle(th, history_thinking_max_chars)}
+                        hist_msgs.append(h)
+                for h in hist_msgs:
+                    prompt_sgpt.extend(to_sharegpt(h, strip_thinking=strip_history_thinking))
+                prompt_oai = [to_openai(h, strip_thinking=strip_history_thinking) for h in hist_msgs]
 
                 step_meta = {
                     "sample_id": step_id,
@@ -398,6 +448,8 @@ def evaluate_session_synthesis(
                     "total_steps": total,
                     "stage": stage_name,
                     "sample_weight": weight,
+                    "parallel_calls": n_calls,
+                    "weight_boost": (f"parallel x{parallel_weight:g}" if boosted else ""),
                     "admit_reason": reason,
                     "rewritten": is_rewritten,
                     "quality_score": eff_q.get("score"),
@@ -429,6 +481,8 @@ def evaluate_session_synthesis(
                 "msg_id": mid,
                 "stage": stage_name,
                 "weight": weight,
+                "weight_before_parallel_boost": weight_before,
+                "parallel_calls": n_calls,
                 "status": status,
                 "reason": reason,
                 "rewritten": is_rewritten,
@@ -794,7 +848,15 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                             "rejected": "rejected", "tools": "tools"},
                 "tags": dict(_SGPT_TAGS),
             }
-    write_json_atomic(train_root / "dataset_info.json", dataset_info)
+    # 保留非 stage3 产出的登记项（例如发布包流程写入的 gt_* / gt_*_lf）。
+    # 这些键指向 releases 解包出来的 sft.train.lf.jsonl 等文件，重跑 stage3 不能把它们抹掉，
+    # 否则 yaml 里 dataset: gt_sft_train_lf 会直接报 “dataset not found”。
+    info_path = train_root / "dataset_info.json"
+    if info_path.exists():
+        prev = read_json(info_path, default={}) or {}
+        for key, meta in prev.items():
+            dataset_info.setdefault(key, meta)
+    write_json_atomic(info_path, dataset_info)
 
     stepcat.emit(log, "s3.manifest", len(dataset_info), len(dataset_info),
                  f"{len(dataset_info)} 个数据集登记")

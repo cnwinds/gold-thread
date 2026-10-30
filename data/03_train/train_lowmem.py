@@ -19,6 +19,7 @@
 用法（参数与 llamafactory-cli train 完全相同，YAML 不用改）：
     单卡：  CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_sft.yaml
     多卡：  torchrun --nproc_per_node 2 train_lowmem.py train_sft.yaml
+    开训前自动按 YAML cutoff_len 过滤超长样本（跳过：GT_SKIP_LENGTH_FILTER=1）。
     配合监控：
         python train_monitor.py --timeout-hours 5 --log logs/27b_sft.log -- \\
           python train_lowmem.py train_sft.yaml
@@ -97,10 +98,13 @@ def patch_trainer() -> None:
     from transformers import Trainer
 
     original = Trainer.compute_loss
-    state = {"reported": 0}
+    state = {"reported": 0, "fallback_reported": 0}
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        labels = inputs.get("labels") if isinstance(inputs, dict) else None
+        # 注意：Trainer 传来的 inputs 是 BatchEncoding（继承 UserDict），不是 dict 子类，
+        # 早先的 isinstance(inputs, dict) 恒为 False，导致补丁静默失效、退回全序列 logits（16K 必 OOM）。
+        has_labels = hasattr(inputs, "get") and "labels" in inputs
+        labels = inputs.get("labels") if has_labels else None
         # 只接管「默认 CE」路径；DFT/EAFT/ASFT、label smoothing、需要完整 logits 的 eval 指标都走原逻辑
         usable = (
             labels is not None
@@ -110,6 +114,15 @@ def patch_trainer() -> None:
             and (model.training or self.compute_metrics is None)
         )
         if not usable:
+            if model.training and state["fallback_reported"] < 1:
+                state["fallback_reported"] += 1
+                _log(
+                    "[WARN] lowmem 未接管本次 loss，退回全序列 logits："
+                    f"labels={'有' if labels is not None else '无'} "
+                    f"compute_loss_func={self.compute_loss_func!r} "
+                    f"label_smoother={self.label_smoother!r} "
+                    f"training={model.training} compute_metrics={self.compute_metrics!r}"
+                )
             return original(self, model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
 
         inputs = dict(inputs)
@@ -157,11 +170,36 @@ def patch_trainer() -> None:
     _log(f"已接管 Trainer.compute_loss（只算监督位置 logits，CE 分块 {CE_CHUNK}）")
 
 
+def _maybe_filter_by_cutoff() -> None:
+    """开训前按 YAML cutoff_len 过滤超长样本（包内全集 → 本次可跑子集）。"""
+    if os.environ.get("GT_SKIP_LENGTH_FILTER", "").strip() in ("1", "true", "True", "yes"):
+        _log("GT_SKIP_LENGTH_FILTER=1，跳过长度过滤")
+        return
+    yaml_arg = sys.argv[1]
+    if not yaml_arg.endswith((".yaml", ".yml")):
+        return
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        from filter_by_cutoff import filter_datasets_for_yaml
+    except ImportError as exc:
+        print(
+            f"[lowmem] 缺少 filter_by_cutoff.py（{exc}）。"
+            "拒绝在未过滤超长样本的情况下开训；请补齐脚本或设置 GT_SKIP_LENGTH_FILTER=1。",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    _log(f"按 {yaml_arg} 的 cutoff_len 过滤超长样本…")
+    filter_datasets_for_yaml(yaml_arg)
+
+
 def main() -> None:
     if len(sys.argv) < 2 or not sys.argv[1].endswith((".yaml", ".yml", ".json")):
         print(__doc__)
         sys.exit(1)
     _preflight()
+    _maybe_filter_by_cutoff()
     patch_trainer()
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from lowmem_dpo import patch_dpo_trainer

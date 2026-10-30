@@ -19,6 +19,7 @@
 用法（参数与 llamafactory-cli train 完全相同，YAML 不用改）：
     单卡：  CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_sft.yaml
     多卡：  torchrun --nproc_per_node 2 train_lowmem.py train_sft.yaml
+    开训前自动按 YAML cutoff_len 过滤超长样本（跳过：GT_SKIP_LENGTH_FILTER=1）。
     配合监控：
         python train_monitor.py --timeout-hours 5 --log logs/27b_sft.log -- \\
           python train_lowmem.py train_sft.yaml
@@ -169,11 +170,36 @@ def patch_trainer() -> None:
     _log(f"已接管 Trainer.compute_loss（只算监督位置 logits，CE 分块 {CE_CHUNK}）")
 
 
+def _maybe_filter_by_cutoff() -> None:
+    """开训前按 YAML cutoff_len 过滤超长样本（包内全集 → 本次可跑子集）。"""
+    if os.environ.get("GT_SKIP_LENGTH_FILTER", "").strip() in ("1", "true", "True", "yes"):
+        _log("GT_SKIP_LENGTH_FILTER=1，跳过长度过滤")
+        return
+    yaml_arg = sys.argv[1]
+    if not yaml_arg.endswith((".yaml", ".yml")):
+        return
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        from filter_by_cutoff import filter_datasets_for_yaml
+    except ImportError as exc:
+        print(
+            f"[lowmem] 缺少 filter_by_cutoff.py（{exc}）。"
+            "拒绝在未过滤超长样本的情况下开训；请补齐脚本或设置 GT_SKIP_LENGTH_FILTER=1。",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    _log(f"按 {yaml_arg} 的 cutoff_len 过滤超长样本…")
+    filter_datasets_for_yaml(yaml_arg)
+
+
 def main() -> None:
     if len(sys.argv) < 2 or not sys.argv[1].endswith((".yaml", ".yml", ".json")):
         print(__doc__)
         sys.exit(1)
     _preflight()
+    _maybe_filter_by_cutoff()
     patch_trainer()
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from lowmem_dpo import patch_dpo_trainer

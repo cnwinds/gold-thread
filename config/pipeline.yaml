@@ -219,6 +219,20 @@ synth:
     key_decision: 2
     closing: 3
     routine: 1
+  # 并行工具调用（一步里 >=2 个 tool_call）再乘的倍数，1.0 = 关闭。
+  # 理由：实测 train 并行步只有 5.3%、eval 26.2%（并行步几乎都在被整包留出的 meowdoku），
+  # 不加权模型会退化成「一次一个调用」。只做 highlight 以外的加成，不参与 highlight 的模型给分。
+  parallel_weight: 1.5
+  # 历史步是否保留  thinking：
+  #   true （默认）= 历史只留 tool_calls + 工具结果，目标步才有思考
+  #   false      = 历史也保留思考。实测 pi + vLLM 的真实上下文是「轮内多步调用时思考全带、
+  #                跨轮也带（除非该轮回复为空白且无 tool_calls 被整条丢弃）」，
+  #                所以严格对齐推理要设 false；代价是每条样本 +约 800 tokens（超 12K 的样本变多）。
+  # 改之前先跑 tools/simulate_history_thinking.py 算账，改之后跑 tools/check_thinking_shape.py 验收。
+  strip_history_thinking: true
+  # strip_history_thinking=false 时，历史里每步思考压缩到多少字符（0=不压缩）。
+  # 实测（cap=3000）：不压缩 +1911 tokens/条（20 条超 12K）；压到 600 → +468（0 条超）。
+  history_thinking_max_chars: 600
   # 只从这些标签的黄金会话生成 SFT 正样本
   sft_labels: ["positive"]
   # 允许「个别反例/混合会话内的高分成功子段」进入 SFT 单步窗口

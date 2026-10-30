@@ -5,7 +5,12 @@
 
 ## 数据版本
 
-原始版（`.jsonl`）是 first pass 产物；v2 版（`.v2.jsonl`）经过修复后成为**实际训练数据**。dataset_info.json 同时注册了所有版本。
+**v3（当前）**：训练数据只来自冻结发布 `releases/<版本>/`（人工审核通过 + 契约校验通过），
+文件为 `sft.{train,eval}.jsonl`、`dpo.{train,eval}.jsonl`、`dpo_w.{train,eval}.jsonl`，
+dataset_info 键为 `gt_sft_*`、`gt_dpo_*`、`gt_dpo_w_*`，条数见该发布的 `manifest.json`。
+所有 yaml 已改用 `gt_*` 键。下面是 v2 时代的记录（旧文件保留在本目录，不再被 yaml 引用）：
+
+原始版（`.jsonl`）是 first pass 产物；v2 版（`.v2.jsonl`）经过修复后成为当时的实际训练数据。
 
 | 用途 | dataset_info 名字 | 文件 | 条数 |
 | :--- | :--- | :--- | ---: |

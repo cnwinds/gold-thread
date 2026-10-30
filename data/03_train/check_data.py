@@ -56,10 +56,11 @@ def main() -> int:
         bad = [r for r in rows if not r.get("conversations") and not r.get("messages")]
         print(f"  {p.name:<48} {len(rows):>6} 条  结构异常 {len(bad)}")
     train = next((root / x for x in (
+        "sft.train.jsonl",
         "sft_step_windows_sharegpt.train.v2.jsonl",
         "sft_step_windows_sharegpt.train.jsonl") if (root / x).exists()), None)
     if train is None:
-        print("[err] 找不到训练集（v2 / v1 均无）", file=sys.stderr)
+        print("[err] 找不到训练集（发布版 sft.train.jsonl / v2 / v1 均无）", file=sys.stderr)
         return 1
     print(f"  目标数据集: {train.name}")
 
@@ -97,7 +98,7 @@ def main() -> int:
                     "observation": "tool", "tool": "tool"}.get(c["from"], "user")
             msgs.append({"role": role, "content": c["value"]})
         msgs.append({"role": "assistant", "content": conv[-1]["value"]})
-        msgs_pool.append((r["sample_id"], msgs))
+        msgs_pool.append((r.get("sample_id") or (r.get("metadata") or {}).get("sample_id") or "?", msgs))
 
     print("\n模板渲染检查：")
     for sid, msgs in msgs_pool:
@@ -106,7 +107,7 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"  [warn] {sid[:14]} 模板渲染失败: {exc}")
             continue
-        opens = text.count(" thinking")
+        opens = text.count("<" + "think>")
         closes = text.count("<" + "/think>")
         tools = TOOL_RE.findall(text)
         n_tok = len(tok(text, add_special_tokens=False)["input_ids"])

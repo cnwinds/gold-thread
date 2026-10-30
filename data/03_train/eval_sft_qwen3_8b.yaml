@@ -18,7 +18,7 @@ enable_liger_kernel: true
 
 ### dataset
 dataset_dir: /data/goldthread/03_train
-eval_dataset: pi_sft_step_windows_eval_v2
+eval_dataset: gt_sft_eval
 template: qwen3
 cutoff_len: 16384
 packing: false

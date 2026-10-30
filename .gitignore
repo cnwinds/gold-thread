@@ -39,3 +39,8 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+# ── 本机缓存 / 临时 / 04 发布产物 ──────────────────────────────────
+.cache/
+.tokenizer/
+_tmp*/
+data/04_release/

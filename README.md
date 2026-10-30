@@ -97,6 +97,7 @@ gold-thread/
     ├── 01_raw/                   # positive / negative / pending
     ├── 02_gold/                  # sessions / annotations / rejects / dpo_pairs
     └── 03_train/                 # SFT / DPO / 诊断 / dataset_info / stats
+    └── 04_release/               # 冻结发布 / delivery zip / 训练 packs（与 03_train 工作区分离）
 ```
 
 `01_raw` 里的 `.jsonl` 是源文件**逐字节副本**，所有加工信息都在同名 `.meta.json`
@@ -147,8 +148,18 @@ gold-thread/
 | `dataset_info.json` | LLaMA-Factory 数据集注册 |
 | `stats.json` / `index.json` | 统计与切分信息 |
 
-**训练版本（`<file>.v2.jsonl`）**
-：经过二次修复后的最终裁剪版，是实际上机训练的数据集：
+**训练版本（v3 · 冻结发布）**
+：上机训练只认 `releases/<版本>/` 解包出来的这一套（人工审核 + 契约校验通过）。
+`dataset_info` 键为 `gt_sft_train/eval`、`gt_dpo_train/eval`，文件为 `sft.{train,eval}.jsonl`、`dpo.{train,eval}.jsonl`。
+
+**`*.lf.jsonl` = 规整版（必须先跑 `normalize_sharegpt.py`）**
+：发布包把「一条 assistant 消息里的多个 `<tool_call>`」拆成了多条连续 `observation`，
+LLaMA-Factory 的 `SharegptDatasetConverter` 要求严格 `user/assistant` 交替，会**静默丢弃**这些样本：
+实测 `sft.train` 丢 67/548、`sft.eval` 丢 107/221（训练只跑 363 步而不是 411）、`dpo` 也有 22/100 不合法。
+`normalize_sharegpt.py` 合并连续同角色消息、把 `chosen/rejected` 从 dict 取 `value`，产出 `*.lf.jsonl`，
+`dataset_info` 注册为 `gt_sft_train_lf` 等，yaml 全部指向 `_lf` 版本。
+
+**v2 时代的数据（保留，不再被 yaml 引用）**
 - `sft_step_windows_sharegpt.train.v2.jsonl`（548 条）/ `.eval.v2.jsonl`（221 条）—— SFT 主数据集
 - `dpo_preference_pairs.train.v2.jsonl`（100 对）/ `.eval.v2.jsonl`（143 对）—— DPO 原始对
 - `dpo_preference_pairs.train.v2w.jsonl`（窗口裁剪版）/ `.eval.v2w.jsonl`—— 48G 显存 DPO 专用
@@ -156,12 +167,19 @@ gold-thread/
 
 **训练配置与脚本**
 ：
+- **`run_train.py` / `chunked_ce_patch.py`** —— **27B 正式启动入口**：lm_head + CE 按 1024 位置分块，
+  避免 `16384 × 248320 × 4B ≈ 16.3 GB` 的 fp32 logits（数值等价，实测逐步 loss 差 ≤ 2e-3）
+- **`train_lowmem.py` / `lowmem_dpo.py`** —— 低显存启动器：只算监督位置的 logits（DPO 走 `disable_adapter()` 当 ref，不再加载第二份权重）
 - `train_sft_qwen3_8b.yaml` / `train_dpo_qwen3_8b.yaml` —— 8B 正式训练配置（含完整调试注释）
 - `train_sft_smoke_qwen3_8b.yaml` / `train_dpo_smoke_qwen3_8b.yaml` —— 冒烟测试（200 条 SFT + 50 对 DPO）
 - `train_sft.yaml` / `train_dpo.yaml` / `train_sft_qlora.yaml` —— 27B 配置与 QLoRA 备选
+- `train_dpo_qlora_27b.yaml` / `_b.yaml` / `train_sft_27b_smoke.yaml` —— 27B DPO 的 QLoRA 尝试（80G 未跑通，见 RESULT_27b_run.md §4）
+- `merge_lora.yaml` / `merge_dpo.yaml` —— 合并 SFT / 叠 DPO adapter（`export_device: cpu`，不占显存）
 - `eval_sft_qwen3_8b.yaml` —— 单独 eval（训练时关掉 eval，训完用此跑）
+- `normalize_sharegpt.py` —— 发布包数据规整（不做会静默丢样本，见上）
 - `check_env.py` / `check_data.py` —— 上机前自检（含 tokenizer 渲染验证）
 - `smoke_infer_merged.py` —— 合并后推理冒烟（验证 `thinking` + `tool_call`）
+- `smoke_ab_dpo.py` / `verify_dpo_adapter.py` / `verify_merged_dpo.py` —— DPO 前后 A/B、adapter 与合并产物验收
 - `verify_longctx.py` / `verify_longctx_api.py` —— 长上下文档级验收
 - `probe_24g.py` —— 模拟小显存加载（bf16 / 8bit / 4bit 可行性探测）
 - `prep_dpo_window.py` —— DPO 窗口裁剪（从头部丢旧步，保留 system + 根任务 + 最近步）
@@ -170,8 +188,10 @@ gold-thread/
 - `server/reasoning_proxy.py` —— ReasoningProxy 中间件（给 LLaMA-Factory API 补上非流式 reasoning 拆分）
 - **`train_monitor.py`** —— **训练进程监控器**：实时 tail 日志 + OOM 秒级诊断 + 进程退出一秒通知（推荐用它替代裸跑 `llamafactory-cli`）
 
-> 训练实跑记录与踩坑经验见 `data/03_train/RESULT.md`（含 Liger 必开原因、DPO ref_model 修正、
-> eval OOM 绕过、流式+tools 补丁、SDK 兼容修复、脚本 bug 修复等硬经验）完整交接说明见 `data/03_train/handoff.md`。
+> 训练实跑记录：8B 见 `data/03_train/RESULT.md`，**27B 见 `data/03_train/RESULT_27b_run.md`**
+> （单卡 A800 80G：2h21m / 411 步 / 峰值 76 GB；含 fla 必装、`lora_target` 必须点名投影层、
+> cutoff 上限定为 12288、分块 CE、DPO 在 80G 上三种配置全部 OOM 的实测结论）。
+> 完整交接说明见 `data/03_train/handoff.md`。
 
 切分按 `project_group` 整包留出（默认 `eval_ratio` 取项目数比例），
 避免同一游戏的相邻步泄漏到验证集。

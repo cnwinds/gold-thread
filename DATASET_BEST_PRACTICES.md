@@ -155,3 +155,258 @@
 - **`sft_step_windows.jsonl`（620 条高纯度单步窗口样本）**：100% 锚定根破解指令、100% 剥离历史 `<think>`、不含任何空思考或无关提问；
 - **`dpo_preference_pairs.jsonl`（270 对工程分析专属偏好对）**：涵盖状态折叠代码修复对、手滑命令剪枝对、心算十六进制打勾反例、万字反刍压缩对与跨目录违规负例；
 - **`negative_diagnostics.jsonl`（449 条工程分析病态诊断记录）**。
+
+---
+
+## 五、 工具调用格式契约（Tool-Call Format Contract，2026-10 27B 事故复盘）
+
+> **事故**：`Qwen3.8-27B` 用 `template: qwen3_8` 训练本数据集后，工具调用格式混乱——
+> 同一会话里时而输出 `<tool_call>{"name":"bash",...}</tool_call>`（能被服务端 `hermes` parser 解析，正常干活），
+> 时而输出 `<tool_call><function=bash><parameter=command>…</parameter></function></tool_call>`（parser 解析不了；
+> 流式下这段被服务端直接丢弃，`finish_reason=stop` + 正文只剩 `\n\n` → pi 认为回合结束 → **答一句就停工**）。
+> 而 8B 用 `template: qwen3` 训练同样数据，**没有**出现该问题。
+
+### 5.1 根因：数据与模板互相打架
+
+| 环节 | 实际值 | 与数据集是否一致 |
+| :--- | :--- | :--- |
+| 数据集 `gpt` 步 / `tool_calls` | `<tool_call>\n{"name": …, "arguments": {…}}\n</tool_call>`（hermes JSON） | — |
+| 8B 训练 `template: qwen3` | system 注入「return a **json object** … within `<tool_call></tool_call>`」 | ✔ 一致 |
+| **27B 训练 `template: qwen3_8`** | system 注入「ONLY reply in the following format：`<function=…><parameter=…>`」 | ✘ **冲突** |
+| 推理 `tools/serve_vllm.sh` | `TOOL_PARSER=hermes`（认 JSON） | ✔ 与数据一致 |
+
+同一条训练样本里，system 要求写 XML、示范答案却是 JSON。模型学到的是「两种都行」，
+推理时随机二选一 —— 恰好一半机会触发服务端解析失败。**这不是模型质量问题，是协议没统一。**
+
+### 5.2 三条铁律
+
+1. **三方一致（SSoT）**：`数据渲染格式` == `训练 chat template 注入的格式` == `推理端 --tool-call-parser`。
+   换任何一个，另外两个必须同步改；不允许「数据是 JSON、模板教 XML、服务端解析 XML」这种错位组合。
+   - hermes JSON ⇄ `--tool-call-parser hermes` ⇄ LLaMA-Factory `template: qwen3`
+   - coder XML ⇄ `--tool-call-parser qwen3_coder` ⇄ `template: qwen3_8`（及 Qwen3-Coder 系）
+2. **优先用 openai 结构化格式训练，不要在 sharegpt 的 `gpt` 文本里硬编码 `<tool_call>` 文本。**
+   `messages` + `tool_calls`（`sft_step_windows_openai.*.jsonl`）由 chat template 负责渲染，
+   换模型/换模板时数据一行都不用改，天然不会与模板冲突；sharegpt 的文本写法则必须随模板重渲染。
+3. **训练后必做格式回归**：固定 prompt 跑 20~50 次工具调用，要求输出格式 100% 单一、可解析率 100%；
+   同时用 `tools/check_toolcall_contract.py` 在训练前卡住不一致（会同时校验 JSON 合法性、`name` 是否在 `tools` 内、
+   `arguments` 是否为 object、是否混入裸 `<function=…>`）。
+
+### 5.3 其它容易踩的格式细节
+
+- **`` 后不要插空行**：数据前缀目前是 `…\n\n` + 调用块，模型因此学会在正文开头先吐 `\n\n`
+  （推理实测正是 `content="\n\n"`）。改成 `…\n` + 调用块，和推理端 reasoning parser 的切分点对齐，
+  避免「块不在文本首位」导致的严格正则失配。
+- **`tools` 列必须和推理端工具箱完全同构**：名字（`bash`/`read`/`write`/`edit`/`codemode`）、必填项、参数名、
+  description 都要一致。训练里教了推理端没有的工具 → 模型幻觉调用不存在的函数。
+- **DPO 对里只允许质量差异，不允许格式差异**：若 `chosen` 不带 tool_call 而 `rejected` 带，
+  模型学到的是「少调工具」而不是「调得对」。当前 `dpo.*.jsonl` 有 **2 对**属于此类，应剔除或补齐。
+- **模板版本同源**：`merge_lora` 之后确认 merged 模型的 `tokenizer_config.json.chat_template`
+  与训练时用的是同一份，否则训练/推理看到的注入指令又不一样。
+- **推理端 fallback**：服务端解析失败时应退化为「原文落到 content」，而不是在流式路径静默丢弃 token
+  （27B 这次就是丢弃，客户端只看到 `\n\n`，问题被伪装成「模型不干活」）。
+
+### 5.4 27B 的正确重训姿势
+
+```yaml
+# data/03_train/train_sft_qlora.yaml / train_dpo_qlora_27b*.yaml
+template: qwen3        # ← 由 qwen3_8 改回 qwen3（与 8B、与 hermes 数据、与 serve_vllm.sh 对齐）
+```
+
+或反向：保留 `qwen3_8`（coder XML），把 `pipeline/common/format.py` 的 `to_sharegpt` 改为渲染
+`<function=…><parameter=…>`，同时把 `serve_vllm.sh` 的 `TOOL_PARSER` 改成 `qwen3_coder`——
+但改数据要重跑整条管线，不如改模板一行。**已训崩的 merged 模型无法修复，只能按统一协议重训。**
+
+---
+
+## 六、 长度预算与 cutoff_len（2026-10 实测口径）
+
+长度不能再按「字符数 / 2.2」粗估：用真实 tokenizer 校准过一条渲染后的真实样本（18,996 字符 = 8,911 tokens，
+2.13 字符/token），粗估会**低估 3~5%**，正好卡在 12K 边界时会误判「没超」。而 LLaMA-Factory 是
+`truncation_side='right'`，超长被切掉的恰恰是最后一个 assistant 目标步；叠加 `mask_history: true`
+就是「标签全被切光、loss=0」的假训练——loss 曲线好看，能力没学到。
+
+### 6.1 口径（`pipeline/common/seqlength.py`，handoff 与 CLI 共用）
+
+- 按 ChatML 逐轮渲染：`system` / `user` / `<tool_response>` 包装的 observation / `assistant`，末尾 `assistant\n`
+  生成位；**不是**把各段 `\n` 拼起来。
+- 加上模板注入的固定开销（`Reasoning effort` 行 + `# Tools` + tools JSON + 调用格式指令），
+  27B/qwen3_8 实测 **686 tokens/条**。前缀从训练日志的 `inputs:` / `chosen_inputs:` 里抠，跟实际训练完全一致。
+- tokenizer 来源优先级：`--tokenizer` → `GT_TOKENIZER` 环境变量 → `/data/models/<模型>/tokenizer.json`。
+  找不到时退化为「字符 / 2.13」估算，并在文档里明确标注「估算」，不会冒充实测。
+
+### 6.2 当前数据包实测（548 条 SFT / 94 对 DPO）
+
+| | p50 | p90 | p99 | max | 超 12K |
+|---|---|---|---|---|---|
+| SFT train | 4,535 | 7,850 | 12,840 | **14,980** | **6 条** |
+| SFT eval | 4,620 | 9,187 | 13,222 | 13,495 | 6 条 |
+
+| DPO 文件 | 对数 | max | 超 8K |
+|---|---|---|---|
+| `*_train.v2w.jsonl`（窗口裁剪） | 94 | 4,190 | 0 |
+| `dpo.train.jsonl` / `*_train.v2.jsonl`（全窗口） | 100 | 17,069 | 28 |
+
+超长样本的成因很集中：**单条工具输出太大**（十六进制 dump / 偏移熵统计表），不是历史步数多。
+`synth.max_tool_output_chars`（默认 12000 **字符**）就是那个旋钮：降到 4000 后 SFT 最长 12,212（0 条超 12K），
+降到 3000 后最长 10,769。
+
+### 6.3 命令
+
+```bash
+# SFT 12K 体检（自动找 tokenizer + 从日志抠模板前缀）
+python tools/check_seq_len.py --kind sft --limit 12288 --log-dir data/03_train/logs \
+  --files sft.train.jsonl sft_step_windows_sharegpt.eval.v2.jsonl
+
+# DPO 8K 体检（prompt+chosen 与 prompt+rejected 取大者）
+python tools/check_seq_len.py --kind dpo --limit 8192 --log-dir data/03_train/logs \
+  --files dpo_preference_pairs.train.v2w.jsonl dpo_preference_pairs.eval.v2w.jsonl
+
+# 训练机上直接用模型自己的 tokenizer（顺便验证 find_tokenizer 是否命中）
+GT_TOKENIZER=/data/models/Qwen3.8-27B/tokenizer.json python tools/check_seq_len.py ...
+```
+
+`handoff.md` 的第 2 节现在由 `pipeline/handoff.py::_data_profile` 自动生成，会逐文件列出
+v1 / v2 / v2w 各自的长度与超限数，并按最长样本给出 `cutoff_len` 建议值；生成出来的 `check_env.py`
+也改成了同样的 ChatML 口径（多了 `--prefix-tokens` 参数，默认 700）。
+
+### 6.4 怎么把 tokenizer 换成「真」的（不用上训练机）
+
+两条路，都接进工具了：
+
+**A. 你给文件（推荐，确定性强）**
+
+```
+D:\ai_projects\dataset_sync\.tokenizer\qwen3.8-27b\tokenizer.json     # 首选，只这一个文件就够
+# 或：vocab.json + merges.txt (+ tokenizer_config.json)
+```
+
+`find_tokenizer()` 会**优先**扫描这个目录（在 `/data/models/...` 之前），说明见 `.tokenizer/README.md`。
+来源：本地模型目录直接拷 / `modelscope download --include 'tokenizer*'` / HF 单文件下载 / 找有模型的人要一个。
+
+**B. 你给我一个端点（能服务同一份模型即可）**
+
+```bash
+python tools/check_seq_len.py --kind sft --limit 12288 \
+  --via-api http://106.75.44.136:8000/v1 --api-model qwen38-dpo --api-key gt-2026 \
+  --log-dir data/03_train/logs --verify --files sft.train.jsonl
+```
+
+- 优先走 vLLM 原生 `POST /tokenize`（直接数原始文本，不受 chat template 包装影响）；
+  没有该接口时退化为 `/chat/completions` 的 `usage.prompt_tokens` 差值法（先量出包装开销）；
+- 结果按文本 sha1 缓存在 `.cache/api_token_counts.json`，重跑零成本。
+
+**验收标准（关键）**：用训练日志里的 `input_ids` 当 ground truth（那是当时训练真 tokenizer 数出来的）：
+
+```
+ground truth 校验 27b_probe16k.log: 日志 8,911 vs 本口径 8,923 tokens（偏差 +12 / +0.135%）→ ✅ 同一份分词器
+```
+
+- 偏差 ≤ 0.5% → 可用（8B 代理 tokenizer 就在这个水平）
+- 偏差 > 2% → 拿错文件/端点不是同一模型，长度数字别用
+
+**实测反例（不要再踩）**：
+
+| 口径 | 同一段渲染文本 | 相对真实值 |
+|---|---|---|
+| 训练日志（真 27B tokenizer） | 8,911 | 基准 |
+| Qwen3-8B 代理 tokenizer | 8,923 | +0.135%（可用） |
+| sub2api `/v1` 的 `qwen3.8-27b` | 9,075 | **+1.84%（不可用）** |
+| 同上，另一条样本 | 10,341 | **+0.99%（不可用）** |
+
+所以「随便找个 qwen3.8 端点」不行——`--via-api` 会自动用 ground truth 打这个分，偏大直接标 ⚠️。
+
+### 6.5 并行工具调用（一步多调用）的供给与验证
+
+vLLM 侧支持并行输出（`--enable-auto-tool-choice --tool-call-parser hermes`，
+一个 assistant 消息里的多个 `<tool_call>` 块会被拆成 `tool_calls[0..n]`；流式按 `index` 递增下发），
+前提是：parser 与训练模板一致、**没有**把 `</tool_call>` 配成 stop、`max_tokens` 足够。
+
+真正会掉链子的是数据侧。实测（`tools/check_parallel_calls.py --data`）：
+
+| 文件 | assistant 步 | 每步调用数分布 | ≥2 并行 |
+|---|---|---|---|
+| `sft.train.jsonl`（jigsawcard） | 2,606 | 0个=43, 1个=2,424, 2个=139 | **5.3%** |
+| `sft.eval.jsonl`（meowdoku） | 940 | 0个=5, 1个=689, 2个=243, 3个=3 | **26.2%** |
+
+两个坑：
+
+1. **分布倒挂**：eval 依赖并行的程度是 train 的 5 倍——并行步几乎全在被「按项目整包留出」的 meowdoku 里，
+   训练时模型几乎看不到这个模式，训完会退化成「一次一个调用」，而 `eval_loss` 上看不出来。
+2. **train 完全没覆盖「3 个并行调用」**（eval 有 3 例）。
+
+对策（已实现）：`synth.parallel_weight`（默认 `1.5`）——对 `tool_calls >= 2` 的步做权重加成。
+
+```yaml
+# config/pipeline.yaml
+synth:
+  parallel_weight: 1.5      # 1.0 = 关闭；只乘不降；highlight 不参与（避免双重计分）
+```
+
+- 落点是 `pipeline/stage3_synth.py::apply_parallel_boost`，四舍五入用 `int(x+0.5)`（避开 `round(4.5)==4` 的银行家舍入）；
+- 权重以整数写回 `metadata.sample_weight`，同时在 `metadata.parallel_calls` / `metadata.weight_boost`
+  与 `step_audits[].weight_before_parallel_boost` 留血缘；
+- 单测见 `tests/test_parallel_weight.py`；
+- 训练后再用 `tools/check_parallel_calls.py --probe` 验证服务端真能吐 `tool_calls >= 2`（支持 `--stream`）。
+
+若加权还不够（比如想把 3 并行也覆盖到），可以用同一条开关临时调到 `2.0`，或按项目补样本进 train。
+
+### 6.6 历史步要不要保留思考（2026-10 实测推翻旧假设）
+
+旧假设：推理时历史里没有思考，所以 SFT 窗口把历史步的 ` thinking` 剥掉（`strip_thinking=True`）。
+实测（pi + vLLM，用 `usage.prompt_tokens` 逐次调用做差分，分量用真实 tokenizer 核）：
+
+| 场景 | Δ prompt_tokens | 含思考估计 | 不含估计 | 判定 |
+|---|---|---|---|---|
+| 轮内（assistant 带 tool_calls） | 289 | 301 | 171 | **思考带上** |
+| 轮内 | 448 | 465 | 426 | **思考带上** |
+| 轮内 | 768 | 721 | 597 | **思考带上** |
+| 跨轮（上轮有真实文本） | 94（user 57 + text 10） | 29+57 | 10+57 | **思考带上**（残差 8） |
+| 跨轮（上轮文本是 `"\n\n"`） | 11 | 98 | 9 | **整条 assistant 消息被丢弃** |
+
+第三条的原因是 pi 的 `convertMessages`：
+
+```js
+// content 只保留 trim 后非空的 text block；空文本 + 无 tool_calls 的 assistant 会被整条跳过
+if (!hasContent && !assistantMsg.tool_calls) continue;
+```
+
+所以真相是：**轮内多步调用时思考 100% 带进上下文；跨轮也带**，除非那一轮的回复是空白
+（这正是 qwen38-dpo "只回 `\n\n` 就停" 的副作用——下一轮连它做过什么都看不见）。
+
+结论：**剥离历史思考 = 训练/推理分布失配**。开关已加：
+
+```yaml
+synth:
+  strip_history_thinking: true      # true=剥离（旧行为）；false=保留（对齐推理）
+  history_thinking_max_chars: 600   # 保留时每步思考压缩到多少字符（0=不压缩）
+```
+
+翻开关前先算账（不重跑管线、不调 LLM，按 `metadata.msg_id` 回 `02_gold/sessions/*.gold.jsonl` 取思考）：
+
+```bash
+python tools/simulate_history_thinking.py --limit 12288 --caps 3000 --history-caps 0 1200 600 300
+```
+
+实测结果（`max_tool_output_chars=3000`）：
+
+| 形态 | p50 | p99 | max | 超 12K | 增量 |
+|---|---|---|---|---|---|
+| 历史剥离（现状） | 4,330 | 9,203 | 10,769 | 0 | — |
+| 保留、不压缩 | 6,111 | 14,895 | 17,898 | **20** | +1,911 |
+| 保留 + 压到 1200 字符 | 5,227 | 10,444 | 12,388 | 1 | +778 |
+| **保留 + 压到 600 字符** | 4,898 | 9,816 | 11,631 | **0** | **+468** |
+| 保留 + 压到 300 字符 | 4,644 | 9,620 | 11,230 | 0 | +270 |
+
+推荐组合：`strip_history_thinking: false` + `history_thinking_max_chars: 600` +
+`max_tool_output_chars: 3000` —— 守住 12K，同时让历史里"有 ` thinking`"这件事与推理一致
+（内容压缩到 600 字符，位置/形态对齐，代价仅 +468 tokens/条）。
+
+改完必须验收形态一致性（同一批训练集不能"有的带有的不带"）：
+
+```bash
+python tools/check_thinking_shape.py                       # 默认扫三个文件
+python tools/check_thinking_shape.py --expect keep         # 改了开关后按 keep 校验
+```
+
+判据：历史带思考比例要么 ≈0%（剥离）要么 ≈100%（保留）；目标步带思考应 100%，
+空/极短思考占比 <1%。

@@ -19,8 +19,8 @@ pref_loss: sigmoid
 
 ### dataset
 dataset_dir: /data/goldthread/03_train
-dataset: pi_dpo_preference_pairs_train_v2w      # 已按“保留最近 4 步”裁窗，见 prep_dpo_window.py
-eval_dataset: pi_dpo_preference_pairs_eval_v2w
+dataset: gt_dpo_train      # 本包无窗口裁剪版，使用包内全量偏好对
+eval_dataset: gt_dpo_eval
 template: qwen3
 cutoff_len: 4096
 packing: false

@@ -18,8 +18,8 @@ double_quantization: true
 
 ### dataset
 dataset_dir: /data/goldthread/03_train
-dataset: pi_sft_step_windows_train_v2
-eval_dataset: pi_sft_step_windows_eval_v2
+dataset: gt_sft_train
+eval_dataset: gt_sft_eval
 template: qwen3_8
 cutoff_len: 16384
 packing: false

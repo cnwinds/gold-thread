@@ -11,7 +11,8 @@ from pathlib import Path
 
 from pipeline.common.config import load_config
 from pipeline.lf_normalize import TOOL_RESPONSE_JOIN, normalize_messages, prepare_datasets
-from pipeline.package import build_delivery_zip
+from pipeline.package import build_delivery_zip, compute_package_hash
+from pipeline import length_gate as length_gate_mod
 
 THINK = "<" + "think>" + "\nok\n" + "<" + "/think>" + "\n\n"
 
@@ -145,6 +146,23 @@ class DeliveryZipTests(unittest.TestCase):
             self.assertIn("lowmem_dpo.py", names)
             self.assertIn("START_HERE.md", names)
             self.assertIn("check_data.py", names)
+            self.assertIn("filter_by_cutoff.py", names)
+
+            # zip stem is package_hash (content fingerprint), not config_hash[:8]
+            self.assertIn("package_hash", result)
+            self.assertIn("config_hash", result)
+            self.assertEqual(
+                result["zip_name"],
+                f"goldthread-delivery-{result['package_hash']}.zip",
+            )
+            self.assertEqual(8, len(result["package_hash"]))
+            man = json.loads((unzipped / "MANIFEST.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["package_hash"], man["package_hash"])
+            self.assertEqual(result["config_hash"], man["config_hash"])
+            self.assertIn("length_gate_version", man)
+            self.assertTrue(
+                str(man["length_gate_version"]).startswith(length_gate_mod.LENGTH_GATE_VERSION)
+            )
 
             info = json.loads((unzipped / "data" / "dataset_info.json").read_text(encoding="utf-8"))
             self.assertEqual("sft.train.lf.jsonl", info["gt_sft_train_lf"]["file_name"])
@@ -250,11 +268,50 @@ class DeliveryZipTests(unittest.TestCase):
             )
             self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
+    def test_stale_subset_lf_is_rebuilt_from_v2(self):
+        """盘上 lf 条数明显少于 v2（旧 release 子集）时必须按 v2 重生成。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _scaffold(root)
+            v2 = [_sft(f"s{i}") for i in range(10)]
+            _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", v2)
+            _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", v2[:2])
+            _write_jsonl(root / "sft.train.lf.jsonl", v2[:4])
+            _write_jsonl(root / "sft.eval.lf.jsonl", v2[:1])
+            from pipeline.lf_normalize import prepare_datasets
+            prep = prepare_datasets(root)
+            self.assertEqual(prep.counts.get("sft.train.lf.jsonl"), 10)
+            self.assertTrue(str(prep.sources["sft.train"]).endswith(".v2.jsonl"))
+
 
 def _dpo_aligned(sample_id: str):
     row = _dpo(sample_id)
     row["conversations"] = normalize_messages(row["conversations"])
     return row
+
+
+class PackageHashTests(unittest.TestCase):
+    def test_content_change_renames_hash(self):
+        rows_a = [{"sample_id": "a", "conversations": [{"from": "human", "value": "x"}, {"from": "gpt", "value": "y"}]}]
+        rows_b = [{"sample_id": "b", "conversations": [{"from": "human", "value": "x"}, {"from": "gpt", "value": "y"}]}]
+        fp = length_gate_mod.length_gate_fingerprint()
+        h1 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows_a}, fp)
+        h2 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows_b}, fp)
+        self.assertEqual(8, len(h1))
+        self.assertNotEqual(h1, h2)
+
+    def test_length_gate_version_changes_hash(self):
+        rows = [{"sample_id": "a", "conversations": [{"from": "human", "value": "x"}, {"from": "gpt", "value": "y"}]}]
+        h1 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows}, "obs-soft-v1")
+        h2 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows}, "obs-soft-v2")
+        self.assertNotEqual(h1, h2)
+
+    def test_stable_for_same_inputs(self):
+        rows = [{"sample_id": "a", "conversations": [{"from": "human", "value": "x"}, {"from": "gpt", "value": "y"}]}]
+        fp = length_gate_mod.length_gate_fingerprint()
+        h1 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows}, fp)
+        h2 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows}, fp)
+        self.assertEqual(h1, h2)
 
 
 if __name__ == "__main__":

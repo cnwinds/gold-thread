@@ -95,7 +95,7 @@ STEPS: List[Dict[str, Any]] = [
      "output": "03_train/handoff.md"},
     {"id": "s3.package", "phase": "stage3", "owner": "程序", "label": "打包交付 zip",
      "detail": "规整成 sft/dpo 的 *.lf.jsonl，dataset_info 与 YAML 的 gt_*_lf 对齐，打成可直接训练的 zip",
-     "output": "03_train/delivery/*.zip"},
+     "output": "04_release/delivery/*.zip"},
 ]
 
 STEP_BY_ID: Dict[str, Dict[str, Any]] = {s["id"]: s for s in STEPS}

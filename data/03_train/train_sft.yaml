@@ -12,22 +12,22 @@ stage: sft
 do_train: true
 finetuning_type: lora
 lora_rank: 32
-lora_target: mlp                                     # 不动注意力投影层，保住长上下文
+lora_target: gate_proj,up_proj,down_proj             # 不动注意力投影层，保住长上下文（'mlp' 在 qwen3_5 上会被 peft 拒绝）
 # deepspeed:                                          # 单卡不要设
 
 ### dataset
 dataset_dir: /data/goldthread/03_train
-dataset: pi_sft_step_windows_train_v2
-eval_dataset: pi_sft_step_windows_eval_v2
+dataset: gt_sft_train_lf
+eval_dataset: gt_sft_eval_lf
 template: qwen3_8                                     # 专用模板，勿用 qwen3
-cutoff_len: 16384
+cutoff_len: 12288                                    # 实测 16384 首步 OOM（A800 80G）；p99=12085 全覆盖
 packing: false                                       # 必须关闭
 mask_history: true                                   # 只训练最后一轮（本数据集关键开关）
 overwrite_cache: true
 preprocessing_num_workers: 8
 
 ### output
-output_dir: /data/saves/qwen38-27b-goldthread-sft
+output_dir: /data/saves/qwen38-27b-goldthread-sft-ab56c1d1-lf
 logging_steps: 5
 save_steps: 100
 save_total_limit: 2

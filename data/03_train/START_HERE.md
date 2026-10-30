@@ -9,24 +9,23 @@
 
 ```bash
 mkdir -p /data/goldthread
-tar xzf 03_train_*.tar.gz -C /data/goldthread
+tar xzf 03_train_*.tar.gz -C /data/goldthread        # tools/pack_27b.sh 打的包
+# 或：unzip goldthread-<版本>.zip -d /data/goldthread  # 界面「发布」页下载的包
 cd /data/goldthread/03_train
 ```
 
-目录里应该是（**实际训练用的是 `.v2` 文件，不是无后缀的旧版**）：
+数据来自一次**冻结发布**（只含人工审核通过、契约校验通过的样本），条数以 `manifest.json` 为准。
+目录里应该是：
 
 ```
 03_train/
 │
-├── 【数据】真正被 YAML 引用的文件
-│   ├── sft_step_windows_sharegpt.train.v2.jsonl   ← SFT 训练集 548 条
-│   ├── sft_step_windows_sharegpt.eval.v2.jsonl    ← SFT 验证集 221 条（整项目留出）
-│   ├── sft_gold_trajectories_sharegpt.*.v2.jsonl  ← 完整长轨迹（可选混训）
-│   ├── dpo_preference_pairs.train.v2w.jsonl       ← DPO 训练（窗口裁剪，48G 首选）
-│   ├── dpo_preference_pairs.eval.v2w.jsonl        ← DPO 验证
-│   ├── dpo_preference_pairs.train.v2.jsonl        ← DPO 训练（全窗口，显存充足时用）
-│   ├── dpo_preference_pairs.eval.v2.jsonl
-│   └── dataset_info.json                          ← 必须；LLaMA-Factory 靠它认数据集
+├── 【数据】发布文件（dataset_info.json 里的键名在括号中）
+│   ├── sft.train.jsonl / sft.eval.jsonl           ← SFT 单步窗口（gt_sft_train / gt_sft_eval，eval 整项目留出）
+│   ├── dpo_w.train.jsonl / dpo_w.eval.jsonl       ← DPO 窗口裁剪版（gt_dpo_w_*，48G/80G 首选）
+│   ├── dpo.train.jsonl / dpo.eval.jsonl           ← DPO 全窗口（gt_dpo_*，只收不超 8K 的对）
+│   ├── dataset_info.json                          ← 必须；LLaMA-Factory 靠它认数据集
+│   └── manifest.json                              ← 版本、逐文件条数与 sha256、排除明细
 │
 ├── 【配置】8B 冒烟
 │   ├── train_sft_qwen3_8b.yaml
@@ -47,11 +46,10 @@ cd /data/goldthread/03_train
 │   ├── smoke_infer_merged.py                      ← 合并后推理冒烟
 │   ├── verify_longctx.py / verify_longctx_api.py  ← 长上下文验收
 │   ├── probe_24g.py                               ← 小显存可行性探测
-│   ├── prep_dpo_window.py                         ← DPO 窗口裁剪
 │   ├── serve_api.sh / serve_vllm.sh               ← 起推理服务
 │   └── reasoning_proxy.py                         ← reasoning 拆分过渡代理
 │
-└── 【文档】README.md / handoff.md / RESULT.md / stats.json / index.json
+└── 【文档】README.md / handoff.md / RESULT.md
 ```
 
 ---

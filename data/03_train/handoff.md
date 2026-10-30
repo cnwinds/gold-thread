@@ -14,22 +14,23 @@
 
 - **程序**：机械去噪、静默执行、命令规范化、窗口拼装、血缘记录、切分
 - **模型**：判断删哪些步、接缝是否平滑、整条会话值不值得训练、偏好对是否成立
-- **人工**：逐条复核改写与问题步，最后定稿
+- **人工**：审核最终候选样本（必审 + 抽样，默认拒绝），批准的样本冻结为发布
 
 来源模型分布：`deepseek-v4.1-flash-1017` × 2, `glm-5.3` × 1
 
 ## 1. 数据集清单
 
-| 用途 | 文件 | dataset_info 名字 | 条数 |
-| :--- | :--- | :--- | :--- |
-| **SFT 训练（主）** | `sft_step_windows_sharegpt.train.jsonl` | `pi_sft_step_windows_train` | 548 |
-| SFT 验证 | `sft_step_windows_sharegpt.eval.jsonl` | `pi_sft_step_windows_eval` | 221 |
-| 完整轨迹训练（可选） | `sft_gold_trajectories_sharegpt.train.jsonl` | `pi_sft_gold_trajectories_train` | 2 |
-| 完整轨迹验证 | `sft_gold_trajectories_sharegpt.eval.jsonl` | `pi_sft_gold_trajectories_eval` | 1 |
-| **DPO 训练** | `dpo_preference_pairs.train.jsonl` | `pi_dpo_preference_pairs_train` | 100 |
-| DPO 验证 | `dpo_preference_pairs.eval.jsonl` | `pi_dpo_preference_pairs_eval` | 143 |
-| OpenAI 格式备选 | `sft_step_windows_openai.train.jsonl` | 未注册（同数据另一种格式） | 548 |
-| 病态诊断（不进训练） | `negative_diagnostics.jsonl` | — | 814 |
+> v3 起数据来自冻结发布（`data/03_train/releases/<版本>/`），只含人工审核通过、契约校验通过的样本；
+> 条数以发布目录的 `manifest.json` 为准。下方统计段落是 v2 时代的记录，仅供参考。
+
+| 用途 | 文件 | dataset_info 名字 |
+| :--- | :--- | :--- |
+| **SFT 训练（主）** | `sft.train.jsonl` | `gt_sft_train` |
+| SFT 验证 | `sft.eval.jsonl` | `gt_sft_eval` |
+| **DPO 训练（窗口裁剪，首选）** | `dpo_w.train.jsonl` | `gt_dpo_w_train` |
+| DPO 验证（窗口裁剪） | `dpo_w.eval.jsonl` | `gt_dpo_w_eval` |
+| DPO 训练（全窗口，≤8K） | `dpo.train.jsonl` | `gt_dpo_train` |
+| DPO 验证（全窗口） | `dpo.eval.jsonl` | `gt_dpo_eval` |
 
 统计：
 
@@ -670,7 +671,7 @@ CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_dpo.yaml   # 不要用 llama
   现方案：`model_name_or_path: /data/models/Qwen3.8-27B-merged`（SFT 合并产物）+ 新 DPO LoRA、不设 `ref_model`，
   reference = 关 adapter 的 merged = SFT 模型，且不额外加载权重。8B 的 `train_dpo_qwen3_8b.yaml` 同方案。
 - `cutoff_len` 已降到 **8192**（DPO 同时跑 policy + reference 两路前向，激活约翻倍）；
-  数据用 **v2w 窗口裁剪版**（`pi_dpo_preference_pairs_train_v2w`），避免 LLaMA-Factory
+  数据用 **窗口裁剪版**（`gt_dpo_w_train`），避免 LLaMA-Factory
   从 prompt **尾部**截断（那会丢掉最近的 observation）
 - **显存**：bf16 权重 ≈54G + 激活；`train_lowmem.py` 加载 `lowmem_dpo.py`，policy / ref 只对 response 位置算 logits、
   分块升 fp32（原生 2×8192×248320 全量 fp32 logits ≈ 40G 是 OOM 主因）。

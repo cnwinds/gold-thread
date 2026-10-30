@@ -112,6 +112,45 @@ def sliced_batch_logps(logits, labels, pos, ld_alpha=None, chunk: int = DPO_CHUN
     return chunked_logps(logits, targets, weights, chunk), valid_length
 
 
+def _unwrapped_forward(model):
+    """取回 accelerate 包装里的 forward（保留 autocast，只去掉整块 fp32 转换）。
+
+    prepare_model 实际做的是：
+        model.forward = MethodType(convert_outputs_to_fp32(autocast_context(model.forward.__func__)), model)
+    也就是 convert_outputs_to_fp32 套在**未绑定**的 forward 外面。它会把整块 logits
+    无条件升 fp32（2 × K × 248320 × 4B，K=3548 时 = 6.56GB），ref 前向时直接把 80G 顶爆。
+    这里取回内层（autocast + 原 forward），未绑定就手动绑定到 model。
+    """
+    fwd = model.forward
+    wrapped = getattr(fwd, "__wrapped__", None)  # convert_outputs_to_fp32 里的 ConvertOutputsToFp32
+    inner = getattr(wrapped, "model_forward", None)
+    if inner is None:
+        return fwd, False
+    if getattr(inner, "__self__", None) is None:  # 未绑定函数 → 手动绑定
+        try:
+            inner = inner.__get__(model, type(model))
+        except Exception:  # noqa: BLE001
+            return fwd, False
+    return inner, True
+
+
+_BYPASS_LOGGED = {"done": False}
+
+
+def _forward_logits(model, batch, pos):
+    fwd, bypassed = _unwrapped_forward(model)
+    if bypassed and not _BYPASS_LOGGED["done"]:
+        _BYPASS_LOGGED["done"] = True
+        _log("已绕过 accelerate 的 ConvertOutputsToFp32（否则整块 logits 升 fp32 会 OOM）")
+    try:
+        return fwd(**batch, return_dict=True, use_cache=False, logits_to_keep=pos).logits
+    except TypeError as e:  # 兜底：绑定失败就退回带 fp32 转换的官方路径
+        if "self" not in str(e) or not bypassed:
+            raise
+        _log(f"[WARN] 绕过失败（{e}），回退官方 forward（会整块升 fp32）")
+        return model(**batch, return_dict=True, use_cache=False, logits_to_keep=pos).logits
+
+
 def patch_dpo_trainer() -> bool:
     """替换 CustomDPOTrainer.concatenated_forward。导入失败或源码结构不符时只告警、不打补丁。"""
     try:
@@ -147,7 +186,7 @@ def patch_dpo_trainer() -> bool:
 
         labels = batch.pop("labels")
         pos = select_positions(labels)
-        logits = model(**batch, return_dict=True, use_cache=False, logits_to_keep=pos).logits
+        logits = _forward_logits(model, batch, pos)
         all_logps, valid_length = sliced_batch_logps(
             logits, labels, pos, ld_alpha=(self.ld_alpha if not is_ref_model else None)
         )

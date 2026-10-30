@@ -16,6 +16,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,7 +51,27 @@ from pipeline.common.store import (
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
 
-app = FastAPI(title="GoldThread 数据集控制台", version="2.0")
+
+def _prewarm_tokenizer() -> None:
+    """后台预热 length_gate 分词器，缩短首次打包等待。"""
+    try:
+        from pipeline.length_gate import load_gate_tokenizer
+
+        tok, label = load_gate_tokenizer()
+        print(f"[ui] tokenizer prewarm: {'ok' if tok else 'skip'} ({label})")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ui] tokenizer prewarm failed: {exc}")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    threading.Thread(
+        target=_prewarm_tokenizer, daemon=True, name="tok-prewarm"
+    ).start()
+    yield
+
+
+app = FastAPI(title="GoldThread 数据集控制台", version="2.0", lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +190,13 @@ def _run_job(job: Job) -> None:
             stage1_extract.update_turn_overrides(sid, cfg=cfg)
             stage2_gold.run(force=False, log=job.log, cfg=cfg)
             job.result = ann
+        elif job.stage == "package":
+            from pipeline.package import build_delivery_zip  # noqa: PLC0415
+
+            train_root = stage_dirs(cfg)["train"]
+            if not (train_root / "handoff.md").exists():
+                raise RuntimeError("handoff.md 尚未生成，请先运行 stage3")
+            job.result = build_delivery_zip(train_root, cfg, log=job.log)
         else:
             raise RuntimeError(f"未知阶段: {job.stage}")
         job.status = "done"
@@ -490,7 +519,7 @@ def _runbook_state() -> Dict[str, Any]:
         ho = train_root / "handoff.md"
         put("s3.handoff", "done" if ho.exists() else "ready",
             "handoff.md 已生成" if ho.exists() else "待生成", "含环境搭建 → 训练 → 评估全流程")
-        delivery_dir = train_root / "delivery"
+        delivery_dir = train_root.parent / "04_release" / "delivery"
         zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"), key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
         if zips:
             z = zips[0]
@@ -546,17 +575,24 @@ def runbook() -> Dict[str, Any]:
                  for x in steps_out if x["status"] == "done"]
     current = next((x for x in steps_out if x["status"] == "running"), None)
     train_root = stage_dirs(cfg)["train"]
-    delivery_dir = train_root / "delivery"
+    delivery_dir = train_root.parent / "04_release" / "delivery"
     zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
                   key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
+    _zip0 = zips[0] if zips else None
+    _pkg_h = None
+    if _zip0 is not None:
+        _stem = _zip0.stem
+        if _stem.startswith("goldthread-delivery-"):
+            _pkg_h = _stem[len("goldthread-delivery-"):]
     deliverable = {
         "ready": bool(zips) and done >= total - 1,
         "handoff_exists": (train_root / "handoff.md").exists(),
-        "zip_path": str(zips[0]) if zips else None,
-        "zip_name": zips[0].name if zips else None,
-        "zip_size_bytes": zips[0].stat().st_size if zips else 0,
+        "zip_path": str(_zip0) if _zip0 else None,
+        "zip_name": _zip0.name if _zip0 else None,
+        "zip_size_bytes": _zip0.stat().st_size if _zip0 else 0,
         "zip_generated_at": time.strftime("%Y-%m-%dT%H:%M:%S",
-                                         time.localtime(zips[0].stat().st_mtime)) if zips else None,
+                                         time.localtime(_zip0.stat().st_mtime)) if _zip0 else None,
+        "package_hash": _pkg_h,
     }
     # 建议的下一步操作（界面直接渲染按钮）
     actions: List[Dict[str, str]] = []
@@ -1254,36 +1290,56 @@ def train_handoff() -> Dict[str, Any]:
 
 @app.post("/api/export/package")
 def export_package() -> Dict[str, Any]:
-    """手动生成交付 zip（handoff + 数据集）。"""
-    from pipeline.package import build_delivery_zip  # noqa: PLC0415
+    """异步生成交付 zip（复用 Job 轮询；约 15–30 秒）。
 
+    返回 ``{job_id}``；客户端用 ``GET /api/jobs/{id}`` 看日志与结果。
+    """
     cfg = load_config()
     train_root = stage_dirs(cfg)["train"]
     if not (train_root / "handoff.md").exists():
         raise HTTPException(400, "handoff.md 尚未生成，请先运行 stage3")
-    try:
-        return build_delivery_zip(train_root, cfg)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, f"打包失败: {exc}") from exc
+    job = _start("package", True)
+    return {"job_id": job.id}
 
 
 @app.get("/api/export/package")
 def export_package_info() -> Dict[str, Any]:
-    """返回当前交付包信息（若存在）。"""
+    """返回当前交付包信息（若存在）。
+
+    zip 文件名用 package_hash（内容指纹）；config_hash 仍是 pipeline.yaml 配置版本，
+    二者可以不同。下载始终取 delivery/ 下 mtime 最新的 goldthread-delivery-*.zip。
+    """
+    import zipfile  # noqa: PLC0415
+
     cfg = load_config()
     train_root = stage_dirs(cfg)["train"]
-    delivery_dir = train_root / "delivery"
+    delivery_dir = train_root.parent / "04_release" / "delivery"
     zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
                   key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
     if not zips:
         return {"exists": False, "handoff_exists": (train_root / "handoff.md").exists()}
     z = zips[0]
+    package_hash = None
+    cfg_hash = None
+    stem = z.stem  # goldthread-delivery-<pkg8>
+    if stem.startswith("goldthread-delivery-"):
+        package_hash = stem[len("goldthread-delivery-"):]
+    try:
+        with zipfile.ZipFile(z) as zf:
+            if "MANIFEST.json" in zf.namelist():
+                man = json.loads(zf.read("MANIFEST.json").decode("utf-8"))
+                package_hash = man.get("package_hash") or package_hash
+                cfg_hash = man.get("config_hash")
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "exists": True,
         "zip_path": str(z),
         "zip_name": z.name,
         "size_bytes": z.stat().st_size,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(z.stat().st_mtime)),
+        "package_hash": package_hash,
+        "config_hash": cfg_hash,
     }
 
 
@@ -1291,7 +1347,7 @@ def export_package_info() -> Dict[str, Any]:
 def export_download():
     """下载最新交付 zip。"""
     cfg = load_config()
-    delivery_dir = stage_dirs(cfg)["train"] / "delivery"
+    delivery_dir = stage_dirs(cfg)["train"].parent / "04_release" / "delivery"
     zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
                   key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
     if not zips:
@@ -1301,6 +1357,10 @@ def export_download():
         path=str(z),
         filename=z.name,
         media_type="application/zip",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
     )
 
 
