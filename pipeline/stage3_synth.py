@@ -93,6 +93,20 @@ def _build_anchored_history(
     return cleaned
 
 
+def _load_dpo_exclusions(state_dir: Path) -> Dict[str, Dict[str, Any]]:
+    """对级 DPO 排除账本（data/00_state/dpo_exclusions.json）。
+    人工/线上训练后对单个偏好对的否决不随数据重建丢失；账本条目：
+    {sample_id: {reason, by, at}}。缺失/损坏时视为空（不阻断构建）。"""
+    path = state_dir / "dpo_exclusions.json"
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        return obj if isinstance(obj, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
 def _negative_dpo(
     msgs: List[Dict[str, Any]],
     sys_msg: Optional[Dict[str, Any]],
@@ -593,8 +607,29 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
 
     # 1) stage2 产出的天然 DPO 对
     if dcfg.get("from_pruned_steps", True):
+        excluded_pairs = _load_dpo_exclusions(dirs["state"])
+        if excluded_pairs:
+            log(f"[stage3] dpo 排除账本：{len(excluded_pairs)} 个 sample_id 不再产出（data/00_state/dpo_exclusions.json）")
         for pair in read_jsonl(dirs["gold"] / "dpo_pairs.jsonl"):
             pair["metadata"]["split"] = split_map.get(pair["metadata"].get("project_group"), "train")
+            if pair.get("sample_id") in excluded_pairs:
+                md = pair.get("metadata") or {}
+                exc = excluded_pairs[pair.get("sample_id")]
+                if not isinstance(exc, dict):
+                    exc = {"reason": str(exc)}
+                pair["metadata"]["dpo_excluded"] = exc.get("reason", "")
+                diagnostics.append({
+                    "diagnostic_id": f"dpoexcl::{pair.get('sample_id')}",
+                    "sample_id": pair.get("sample_id"),
+                    "session_id": md.get("session_id", ""),
+                    "project_group": md.get("project_group", ""),
+                    "model": md.get("model", ""),
+                    "source": md.get("source", ""),
+                    "reason": exc.get("reason", ""),
+                    "excluded_by": exc.get("by", ""),
+                    "excluded_at": exc.get("at", ""),
+                })
+                continue
             dpo_pairs.append(pair)
 
     stage_counts = Counter()

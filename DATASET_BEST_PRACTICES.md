@@ -216,6 +216,36 @@ template: qwen3        # ← 由 qwen3_8 改回 qwen3（与 8B、与 hermes 数�
 `<function=…><parameter=…>`，同时把 `serve_vllm.sh` 的 `TOOL_PARSER` 改成 `qwen3_coder`——
 但改数据要重跑整条管线，不如改模板一行。**已训崩的 merged 模型无法修复，只能按统一协议重训。**
 
+### 5.5 按模型导出（Export Profiles，2026-11 新增）
+
+项目定位：**金线基础数据保持中立，按目标模型导出对应格式**。中立格式就是 openai 结构化
+`tool_calls`（`sft_step_windows_openai.*`），它不需要转换——渲染由训练时的 chat template 负责。
+sharegpt 文本产物默认是 hermes-json（历史行为），给不同模型训练前用导出工具转换：
+
+```bash
+# 查看 profile（一个 profile = 数据风格 + template + parser 三元组）
+python tools/export_toolstyle.py --list-profiles
+
+# 给 27B 导出 coder-xml 数据集（原文件不动，产物写到 03_train/exports/Qwen3.8-27B/）
+python tools/export_toolstyle.py --profile Qwen3.8-27B \
+    --files sft_step_windows_sharegpt.train.v2.jsonl sft_step_windows_sharegpt.eval.v2.jsonl \
+            dpo_preference_pairs.train.v2w.jsonl dpo_preference_pairs.eval.v2w.jsonl \
+    --openai-files sft_step_windows_openai.train.jsonl sft_step_windows_openai.eval.jsonl
+
+# 导出后必须跑契约验收（§5.2 铁律 3 的机械化）
+python tools/check_toolcall_contract.py --style coder-xml --dir data/03_train/exports/Qwen3.8-27B
+```
+
+规则：
+- **只转 assistant 侧文本**（`from=gpt` / DPO 的 chosen、rejected）；observation/human/system
+  里的 `<tool_call>` 字样是数据不是格式，绝不碰。
+- 每个导出目录自带 `FORMAT_CONTRACT.json`（风格 + template + parser + 转换统计），
+  训练配置、部署配置、数据三者从同一份契约出发。
+- 新模型 = 在 `tools/export_toolstyle.py::PROFILES` 里加一个三元组；转换器两种风格互转、
+  往返无损（非串参数 JSON 序列化还原），历史产物随时可转，不需要重跑 stage2/stage3。
+- XML 路线部署后，客户端侧若有人为注入 hermes JSON 格式指令（如 pi 的 toolcall-fix 扩展）
+  **必须停用**，否则又制造新的格式打架。
+
 ---
 
 ## 六、 长度预算与 cutoff_len（2026-10 实测口径）
@@ -410,3 +440,52 @@ python tools/check_thinking_shape.py --expect keep         # 改了开关后按 
 
 判据：历史带思考比例要么 ≈0%（剥离）要么 ≈100%（保留）；目标步带思考应 100%，
 空/极短思考占比 <1%。
+
+## 七、 线上环境速查（2026-11 A800 实战，来自 goldthread-delivery-aef7ae45）
+
+### 7.1 SFT+DPO 合并模型的高速推理（vLLM）
+
+> 完整命令以线上 START_HERE §6 为准，以下是要点与踩坑。
+
+1. **另开 conda 环境 `vllm`**，不要把 vLLM 装进训练用的 Python；首次启动需系统 `g++`（flashinfer JIT）。
+2. 权重用合并后的 `…-sft-dpo-merged`；`--served-model-name` 与交付包名保持一致。
+3. **两个 parser 都必须显式给**：
+   - `--reasoning-parser qwen3`：不给则思维链混进 `content`（2026-11-01 实际踩过：客户端看到裸 `</think>`）。
+   - `--tool-call-parser hermes`：不给则模型写的 `<tool_call>` 整段落进正文，agent 无法执行工具。
+
+```bash
+conda activate vllm && export CUDA_VISIBLE_DEVICES=0
+vllm serve /cloud/cloud-ssd1/saves/Qwen3.8-27B-sft-dpo-merged \
+  --host 0.0.0.0 --port 8000 \
+  --served-model-name Qwen3.8-27B-sft-dpo \
+  --dtype bfloat16 --max-model-len 32768 \
+  --gpu-memory-utilization 0.90 --language-model-only \
+  --enable-chunked-prefill --max-num-seqs 4 \
+  --enable-auto-tool-choice --tool-call-parser hermes \
+  --reasoning-parser qwen3 --performance-mode throughput
+```
+
+A800 80G / 32K 实测约 28 tok/s；reasoning 字段名取 `message.reasoning`（vLLM 0.32）。
+
+### 7.2 CUDA / 轮子安装
+
+- **驱动 CUDA 版 ≠ toolkit 版**：`nvidia-smi` 显示的是驱动最高支持版本；轮子按
+  `torch.version.cuda`（本方案 12.6）对齐，不要看到 13.x 就换镜像。
+- **flash-attn / causal-conv1d 一律优先 GitHub Releases 预编译 wheel**；选型四要素
+  `cp3xx + torch版本 + cu版本 + cxx11abi`，用下面命令打印后再选：
+
+```python
+import torch, sys
+print(f"cp{sys.version_info.minor} torch{torch.__version__.split('+')[0]} "
+      f"cu{torch.version.cuda} abi={torch._C._GLIBCXX_USE_CXX11_ABI}")
+# 例：cp312 torch2.7.1 cu12.6 abi=True -> 选 cu12torch2.7cxx11abiTRUE
+```
+
+- `causal-conv1d`（27B 的 48 层 linear_attention 需要）**不要** `pip install causal-conv1d`：
+  PyPI 源码包会在隔离构建环境里重装一份别的 CUDA 的 torch，报
+  `detected CUDA 12.6 mismatches ... compile PyTorch (... 13.2)`。
+  装 `cu12torch2.7cxx11abiTRUE` 官方 wheel。没装上的后果：明显变慢、显存更高，但通常能训。
+- 必须走代理时：`pip install "$GH_PROXY/https://github.com/..."`，并带
+  `--no-build-isolation --no-cache-dir`。
+
+---

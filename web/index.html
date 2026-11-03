@@ -593,6 +593,20 @@
   .rw-pack-item{padding:12px 14px;border-radius:8px;background:var(--ink-0);border:1px solid var(--line-soft)}
   .rw-pack-item span{display:block;font-size:11px;color:var(--text-3)}
   .rw-pack-item b{font:15px var(--f-mono);color:var(--text);font-weight:500;margin-top:3px;display:block}
+  .fmt-head h3{margin:0;font-size:13px;font-weight:600}
+  .fmt-head p{margin:4px 0 0;font-size:12px;color:var(--text-3);line-height:1.55}
+  .fmt-pick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  button.fmt-opt{display:block;width:100%;text-align:left;padding:14px 14px 12px;border-radius:10px;
+    background:var(--ink-0);border:1px solid var(--line);color:var(--text);font:inherit;font-size:13px;white-space:normal}
+  button.fmt-opt:hover{border-color:#3e4655;background:var(--ink-0)}
+  button.fmt-opt.on{border-color:var(--gold);background:linear-gradient(180deg,rgba(217,180,103,.12),rgba(217,180,103,.03))}
+  button.fmt-opt .fmt-k{display:flex;align-items:baseline;gap:8px;margin-bottom:4px;flex-wrap:wrap}
+  button.fmt-opt .fmt-k b{font-size:13.5px;font-weight:600}
+  button.fmt-opt .fmt-k em{font-style:normal;font-size:11.5px;color:var(--text-3)}
+  button.fmt-opt .fmt-sum{margin:0 0 8px;font-size:12px;color:var(--text-2);line-height:1.55;font-weight:400}
+  button.fmt-opt pre{margin:0;padding:8px 10px;border-radius:6px;background:#0e1116;border:1px solid var(--line-soft);
+    font:11px/1.45 var(--f-mono);color:var(--mint);white-space:pre-wrap;text-align:left}
+  button.fmt-opt .fmt-meta{display:block;margin-top:8px;font:11px var(--f-mono);color:var(--text-3);font-weight:400}
 
   .rb-fold{margin-bottom:12px;border:1px solid var(--line-soft);border-radius:10px;overflow:hidden;background:var(--ink-1)}
   .rb-fold>summary{cursor:pointer;list-style:none;padding:11px 18px;font-size:12.5px;color:var(--text-2);display:flex;align-items:center;gap:10px;user-select:none}
@@ -606,7 +620,7 @@
   @media (max-width:960px){
     .rw-shell{grid-template-columns:1fr}
     .rw-rail::before{display:none}
-    .rw-pack-grid{grid-template-columns:1fr}
+    .rw-pack-grid,.fmt-pick{grid-template-columns:1fr}
   }
 
   /* ---------- 全流程工作台 ---------- */
@@ -889,7 +903,8 @@ const PAGES = {
 
 let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:""}, gold: {label:"", project:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {name:"sft_step_windows_sharegpt.jsonl", offset:0, q:"", project:"", stage:"", split:""}, job: null, drawerData: null, poured: false };
 /** 交付打包作业 UI 状态（独立于 pipeline stage jobs） */
-let PACK = { running: false, jobId: null, startedAt: null, elapsed: 0, phase: "", error: null, result: null, timer: null };
+let PACK = { running: false, jobId: null, startedAt: null, elapsed: 0, phase: "", error: null, result: null, timer: null,
+  profile: localStorage.getItem("gt.exportProfile") || "", profileChosen: !!localStorage.getItem("gt.exportProfile") };
 const REV = {active:false, sid:null, items:{}, note:"", originals:{}, scripts:{}, modelRw:{}, bad:new Set(), rewritten:new Set(), pairs:{}, timer:null, dirty:false, hasReview:false, roundsStale:false, finalized:false};
 const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模型通过", auto_reject:"模型剔除", held:"待人工复核", stale:"过期待确认", unreviewed:"未评审", finalized:"定稿"};
 const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold"||s==="finalized", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
@@ -3136,7 +3151,39 @@ function rwRenderStageDetail(p, rb) {
   </div>`;
 }
 
-function packCardCopy(del) {
+function exportProfileList(rb) {
+  return (rb && rb.export_profiles) || [];
+}
+function currentExportProfile(rb) {
+  const ids = exportProfileList(rb).map(p => p.id);
+  if (PACK.profileChosen && ids.includes(PACK.profile)) return PACK.profile;
+  const zipId = rb && rb.deliverable && rb.deliverable.format && rb.deliverable.format.profile;
+  if (zipId && ids.includes(zipId)) return zipId;
+  const fallback = exportProfileList(rb).find(p => p.default);
+  return (fallback && fallback.id) || ids[0] || "Qwen3.8-27B";
+}
+function selectExportProfile(id) {
+  if (PACK.running) return;
+  PACK.profile = id;
+  PACK.profileChosen = true;
+  try { localStorage.setItem("gt.exportProfile", id); } catch (_) {}
+  if (STATE.runbook) renderRunsView(STATE.runbook, STATE.runHist || {runs: []});
+}
+function formatMismatchNote(del, selectedId) {
+  if (!del.zip_path) return "";
+  const fmt = del.format;
+  if (!fmt || !fmt.profile) {
+    return `<br><span class="faint">当前 zip 打包时还没有格式契约。按上面选的格式重新打包后，工具调用、template、parser 会锁成一套。</span>`;
+  }
+  if (fmt.profile !== selectedId) {
+    return `<br><span class="faint">可下载的包是 <b>${esc(fmt.label || fmt.profile)}</b>。上面选的是另一种格式，要点「按此格式重新打包」才会换。</span>`;
+  }
+  const n = fmt.blocks_converted;
+  const rewritten = (n || n === 0) ? `，改写了 ${esc(n)} 处工具调用` : "";
+  return `<br><span class="faint">这份 zip 已是 ${esc(fmt.label || fmt.profile)}（template ${esc(fmt.train_template || "")}，parser ${esc(fmt.serve_tool_parser || "")}${rewritten}）。</span>`;
+}
+
+function packCardCopy(del, extra) {
   // 单一卡片：idle / running / error 共用同一块 rw-pack-card
   if (PACK.running) {
     const phase = PACK.phase || "正在重新打包，约需 15–30 秒…";
@@ -3161,20 +3208,20 @@ function packCardCopy(del) {
     return {
       readyClass: "ready",
       title: "交付包已就绪，可随时下载",
-      body: `把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。${took}`,
+      body: `把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。${took}${extra || ""}`,
     };
   }
   if (del.handoff_exists) {
     return {
       readyClass: "",
-      title: "handoff.md 已生成，点击「生成交付 zip」即可打包",
-      body: `把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。`,
+      title: "handoff.md 已生成，选择格式后即可打包",
+      body: `把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。${extra || ""}`,
     };
   }
   return {
     readyClass: "",
     title: "等待 Stage 3 完成后自动生成",
-    body: `把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。`,
+    body: `把解压后的目录交给另一个 AI，让它按 <span class="mono">START_HERE.md</span> 执行：先 <span class="mono">python check_data.py</span>，再 <span class="mono">python train_lowmem.py train_sft.yaml</span>。环境细节见 handoff.md。${extra || ""}`,
   };
 }
 
@@ -3184,13 +3231,33 @@ function rwRenderDeliveryDetail(rb) {
   const mb = del.zip_size_bytes ? (del.zip_size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "—";
   const busy = !!PACK.running;
   const dis = busy ? " disabled" : "";
-  const packLabel = del.zip_path ? "重新打包" : "生成交付 zip";
-  const card = packCardCopy(del);
+  const profiles = exportProfileList(rb);
+  const selectedId = currentExportProfile(rb);
+  const selected = profiles.find(p => p.id === selectedId) || null;
+  const packLabel = del.zip_path ? "按此格式重新打包" : "按此格式生成 zip";
+  const card = packCardCopy(del, formatMismatchNote(del, selectedId));
+  const fmtLabel = del.format && del.format.label ? del.format.label : (del.zip_path ? "未记录" : "待生成");
+  const picker = profiles.map(p => {
+    const on = p.id === selectedId ? " on" : "";
+    const chip = p.default ? `<span class="chip">默认</span>` : "";
+    return `<button type="button" class="fmt-opt${on}" onclick="selectExportProfile('${esc(p.id)}')"${dis}>
+      <span class="fmt-k"><b>${esc(p.label)}</b><em>${esc(p.habit)}</em>${chip}</span>
+      <p class="fmt-sum">${esc(p.summary)}</p>
+      <pre>${esc(p.example)}</pre>
+      <span class="fmt-meta">template ${esc(p.template)} · parser ${esc(p.parser)}</span>
+    </button>`;
+  }).join("");
+  const eight = selected && selected.pack_8b_yaml
+    ? "8B 的 yaml 会一起打进包，template 同为 qwen3。"
+    : "8B 的 yaml 留在仓库里，不进这个包。";
+  const invFmt = selected
+    ? `${esc(selected.label)} · template ${esc(selected.template)} · parser ${esc(selected.parser)}<br>${esc(eight)}<br>`
+    : "";
   return `<div class="rw-stage">
     <div class="rw-stage-h">
       <div>
         <h2>⑤ 训练交付包</h2>
-        <p>将数据集、LLaMA-Factory 配置与 handoff.md 打包为 zip，直接交给下游 AI 训练并交付模型。</p>
+        <p>按所选格式把数据集、LLaMA-Factory 配置与 handoff.md 打成 zip。工具调用、template、parser 一起锁定。</p>
       </div>
       <div class="rw-stage-acts">
         ${del.zip_path ? `<button class="primary" onclick="downloadZip()"${dis}>下载交付 zip</button>` : ""}
@@ -3199,11 +3266,19 @@ function rwRenderDeliveryDetail(rb) {
       </div>
     </div>
     <div class="rw-pack">
+      <div class="rw-pack-card">
+        <div class="fmt-head">
+          <h3>导出格式</h3>
+          <p>金线数据保持原样。这里决定交付包里 assistant 的工具调用怎么写，并同时锁住训练 template 和推理 parser。</p>
+        </div>
+        <div class="fmt-pick">${picker}</div>
+      </div>
       <div class="rw-pack-card ${card.readyClass}" id="packStatus">
         <div style="font-size:14px;font-weight:600;margin-bottom:6px" id="packTitle">${card.title}</div>
         <div class="muted" style="font-size:12.5px;line-height:1.65" id="packBody">${card.body}</div>
       </div>
       <div class="rw-pack-grid">
+        <div class="rw-pack-item"><span>导出格式</span><b>${esc(fmtLabel)}</b></div>
         <div class="rw-pack-item"><span>压缩包文件名</span><b>${esc(del.zip_name || "待生成")}</b></div>
         <div class="rw-pack-item"><span>包内容指纹</span><b class="mono">${esc(del.package_hash || "—")}</b></div>
         <div class="rw-pack-item"><span>配置版本</span><b class="mono">${esc(String(rb.config_hash || "").slice(0, 8) || "—")}</b></div>
@@ -3211,12 +3286,12 @@ function rwRenderDeliveryDetail(rb) {
         <div class="rw-pack-item"><span>生成时间</span><b>${esc(stamp(del.zip_generated_at) || "—")}</b></div>
       </div>
       <div class="rw-pack-card">
-        <div style="font-size:12.5px;font-weight:600;margin-bottom:8px">包内清单（针对 Qwen3.8-27B Dense 稠密模型，下游 AI 直接消费）</div>
+        <div style="font-size:12.5px;font-weight:600;margin-bottom:8px">包内清单（${selected ? esc(selected.label) + " · " + esc(selected.habit) : "按所选格式"}，下游 AI 直接消费）</div>
         <div class="mono muted" style="font-size:12px;line-height:1.8">
+          ${invFmt}FORMAT_CONTRACT.json · 本包锁定的 style / template / parser<br>
           START_HERE.md · 解压后先跑 check_data.py，再按里面的命令开训<br>
           train_lowmem.py + lowmem_dpo.py · 27B 低显存启动器（不要直接 llamafactory-cli train）<br>
-          train_sft.yaml · dataset: gt_sft_train_lf，dataset_dir: ./data<br>
-          train_dpo.yaml · dataset: gt_dpo_train_lf<br>
+          train_sft.yaml · dataset: gt_sft_train_lf，template 与上面的格式一致<br>
           data/dataset_info.json + data/*.lf.jsonl · 键、文件、YAML 已对齐，无需改名或再规整
         </div>
       </div>
@@ -3375,7 +3450,8 @@ async function exportPackage() {
     } catch (_) {}
   }
   try {
-    const { job_id } = await api("/api/export/package", { method: "POST" });
+    const profile = currentExportProfile(STATE.runbook || {});
+    const { job_id } = await api("/api/export/package", { method: "POST", body: JSON.stringify({ profile }) });
     PACK.jobId = job_id;
     watchJob(job_id, (j) => {
       stopPackTimer();

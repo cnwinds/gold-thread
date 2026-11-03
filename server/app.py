@@ -33,6 +33,7 @@ from pipeline.common.config import (
     save_config_text,
     stage_dirs,
 )
+from pipeline.common.format import export_profiles_public, resolve_export_profile
 from pipeline.common.llm import load_pi_models, test_model
 
 try:
@@ -196,7 +197,9 @@ def _run_job(job: Job) -> None:
             train_root = stage_dirs(cfg)["train"]
             if not (train_root / "handoff.md").exists():
                 raise RuntimeError("handoff.md 尚未生成，请先运行 stage3")
-            job.result = build_delivery_zip(train_root, cfg, log=job.log)
+            job.result = build_delivery_zip(
+                train_root, cfg, log=job.log, profile=job.extra.get("profile")
+            )
         else:
             raise RuntimeError(f"未知阶段: {job.stage}")
         job.status = "done"
@@ -579,11 +582,13 @@ def runbook() -> Dict[str, Any]:
     zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
                   key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
     _zip0 = zips[0] if zips else None
-    _pkg_h = None
-    if _zip0 is not None:
+    _man = _zip_manifest(_zip0) if _zip0 is not None else {}
+    _pkg_h = _man.get("package_hash")
+    if _zip0 is not None and not _pkg_h:
         _stem = _zip0.stem
         if _stem.startswith("goldthread-delivery-"):
             _pkg_h = _stem[len("goldthread-delivery-"):]
+    _fmt = _man.get("format_contract") if isinstance(_man.get("format_contract"), dict) else None
     deliverable = {
         "ready": bool(zips) and done >= total - 1,
         "handoff_exists": (train_root / "handoff.md").exists(),
@@ -593,6 +598,7 @@ def runbook() -> Dict[str, Any]:
         "zip_generated_at": time.strftime("%Y-%m-%dT%H:%M:%S",
                                          time.localtime(_zip0.stat().st_mtime)) if _zip0 else None,
         "package_hash": _pkg_h,
+        "format": _fmt,
     }
     # 建议的下一步操作（界面直接渲染按钮）
     actions: List[Dict[str, str]] = []
@@ -625,6 +631,7 @@ def runbook() -> Dict[str, Any]:
                   "detail": nxt.get("detail", ""), "output": nxt.get("output", "")} if nxt else None),
         "actions": actions,
         "deliverable": deliverable,
+        "export_profiles": export_profiles_public(),
         "config_hash": config_hash(cfg),
         "data_dir": str(cfg["paths"]["data_dir"]),
         "handoff": str(train_root / "handoff.md"),
@@ -1288,17 +1295,43 @@ def train_handoff() -> Dict[str, Any]:
     return {"path": str(p), "markdown": p.read_text(encoding="utf-8")}
 
 
+class ExportPackageBody(BaseModel):
+    profile: Optional[str] = None
+
+
+def _zip_manifest(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None:
+        return {}
+    import zipfile  # noqa: PLC0415
+
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if "MANIFEST.json" not in zf.namelist():
+                return {}
+            data = json.loads(zf.read("MANIFEST.json").decode("utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 @app.post("/api/export/package")
-def export_package() -> Dict[str, Any]:
+def export_package(body: Optional[ExportPackageBody] = None) -> Dict[str, Any]:
     """异步生成交付 zip（复用 Job 轮询；约 15–30 秒）。
 
-    返回 ``{job_id}``；客户端用 ``GET /api/jobs/{id}`` 看日志与结果。
+    ``profile`` 是导出格式（Qwen XML / Hermes JSON）。省略时沿用上次的选择，
+    没有上次选择则用 Qwen XML。返回 ``{job_id}``。
     """
     cfg = load_config()
     train_root = stage_dirs(cfg)["train"]
     if not (train_root / "handoff.md").exists():
         raise HTTPException(400, "handoff.md 尚未生成，请先运行 stage3")
-    job = _start("package", True)
+    chosen = body.profile if body else None
+    if chosen:
+        try:
+            resolve_export_profile(chosen)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    job = _start("package", True, extra={"profile": chosen})
     return {"job_id": job.id}
 
 
@@ -1309,29 +1342,20 @@ def export_package_info() -> Dict[str, Any]:
     zip 文件名用 package_hash（内容指纹）；config_hash 仍是 pipeline.yaml 配置版本，
     二者可以不同。下载始终取 delivery/ 下 mtime 最新的 goldthread-delivery-*.zip。
     """
-    import zipfile  # noqa: PLC0415
-
     cfg = load_config()
     train_root = stage_dirs(cfg)["train"]
     delivery_dir = train_root.parent / "04_release" / "delivery"
     zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
                   key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
     if not zips:
-        return {"exists": False, "handoff_exists": (train_root / "handoff.md").exists()}
+        return {"exists": False, "handoff_exists": (train_root / "handoff.md").exists(), "format": None}
     z = zips[0]
-    package_hash = None
-    cfg_hash = None
+    man = _zip_manifest(z)
+    package_hash = man.get("package_hash")
     stem = z.stem  # goldthread-delivery-<pkg8>
-    if stem.startswith("goldthread-delivery-"):
+    if not package_hash and stem.startswith("goldthread-delivery-"):
         package_hash = stem[len("goldthread-delivery-"):]
-    try:
-        with zipfile.ZipFile(z) as zf:
-            if "MANIFEST.json" in zf.namelist():
-                man = json.loads(zf.read("MANIFEST.json").decode("utf-8"))
-                package_hash = man.get("package_hash") or package_hash
-                cfg_hash = man.get("config_hash")
-    except Exception:  # noqa: BLE001
-        pass
+    fmt = man.get("format_contract") if isinstance(man.get("format_contract"), dict) else None
     return {
         "exists": True,
         "zip_path": str(z),
@@ -1339,7 +1363,8 @@ def export_package_info() -> Dict[str, Any]:
         "size_bytes": z.stat().st_size,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(z.stat().st_mtime)),
         "package_hash": package_hash,
-        "config_hash": cfg_hash,
+        "config_hash": man.get("config_hash"),
+        "format": fmt,
     }
 
 

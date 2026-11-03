@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 from pipeline.common.config import load_config
+from pipeline.common.format import _parse_tc_block, convert_toolcall_text
 from pipeline.lf_normalize import TOOL_RESPONSE_JOIN, normalize_messages, prepare_datasets
 from pipeline.package import build_delivery_zip, compute_package_hash
 from pipeline import length_gate as length_gate_mod
@@ -197,6 +198,8 @@ class DeliveryZipTests(unittest.TestCase):
                 cwd=unzipped,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
@@ -222,6 +225,8 @@ class DeliveryZipTests(unittest.TestCase):
                 cwd=unzipped,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
@@ -265,6 +270,8 @@ class DeliveryZipTests(unittest.TestCase):
                 cwd=unzipped,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
@@ -288,6 +295,177 @@ def _dpo_aligned(sample_id: str):
     row = _dpo(sample_id)
     row["conversations"] = normalize_messages(row["conversations"])
     return row
+
+
+def _hermes(command: str) -> str:
+    body = json.dumps({"name": "bash", "arguments": {"command": command}}, ensure_ascii=False)
+    return "<tool_call>\n" + body + "\n</tool_call>"
+
+
+def _sft_tool(sample_id: str = "with-tool"):
+    row = _sft(sample_id)
+    row["conversations"][2]["value"] = _hermes("ls -la")
+    row["conversations"][3]["value"] = "tool said " + _hermes("echo keep") + " and <tool_call>garbage</tool_call>"
+    row["conversations"][5]["value"] = THINK + _hermes("pwd")
+    return row
+
+
+def _dpo_tool(sample_id: str = "dpo-tool"):
+    row = _dpo(sample_id)
+    row["chosen"]["value"] = THINK + _hermes("good-cmd")
+    row["rejected"]["value"] = THINK + _hermes("bad-cmd")
+    return row
+
+
+class ExportFormatTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = load_config()
+
+    def _seed(self, root: Path):
+        _scaffold(root)
+        (root / "train_sft_qwen3_8b.yaml").write_text(
+            _yaml("sft", "gt_sft_train", "gt_sft_eval") + "template: qwen3\n",
+            encoding="utf-8",
+        )
+        _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [_sft_tool("from-v2")])
+        _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", [_sft_tool("from-v2-eval")])
+        _write_jsonl(root / "dpo_preference_pairs.train.v2.jsonl", [_dpo_tool("dpo-v2")])
+        _write_jsonl(root / "dpo_preference_pairs.eval.v2.jsonl", [_dpo_tool("dpo-v2-eval")])
+
+    def test_qwen_xml_rewrites_assistant_and_locks_template(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed(root)
+            result = build_delivery_zip(root, self.cfg, log=lambda *_: None, profile="Qwen3.8-27B")
+            unzipped = root / "out"
+            _unzip(Path(result["zip_path"]), unzipped)
+
+            names = set(zipfile.ZipFile(result["zip_path"]).namelist())
+            self.assertIn("FORMAT_CONTRACT.json", names)
+            self.assertNotIn("train_sft_qwen3_8b.yaml", names)
+
+            sft = _load_jsonl(unzipped / "data" / "sft.train.lf.jsonl")[0]
+            gpts = [m["value"] for m in sft["conversations"] if m["from"] == "gpt"]
+            gpt, target = gpts[0], gpts[-1]
+            obs = next(m["value"] for m in sft["conversations"] if m["from"] == "observation")
+            self.assertIn("<function=bash>", gpt)
+            self.assertIn("<parameter=command>", gpt)
+            self.assertIn("ls -la", gpt)
+            self.assertNotIn('"arguments"', gpt)
+            self.assertIn("<function=bash>", target)
+            self.assertIn("pwd", target)
+            self.assertIn('"arguments"', obs)
+            self.assertIn("<tool_call>garbage</tool_call>", obs)
+
+            dpo = _load_jsonl(unzipped / "data" / "dpo.train.lf.jsonl")[0]
+            self.assertIn("good-cmd", dpo["chosen"]["value"])
+            self.assertIn("<function=bash>", dpo["chosen"]["value"])
+            self.assertIn("bad-cmd", dpo["rejected"]["value"])
+            self.assertNotIn('"arguments"', dpo["rejected"]["value"])
+
+            sft_yaml = (unzipped / "train_sft.yaml").read_text(encoding="utf-8")
+            self.assertRegex(sft_yaml, r"(?m)^template: qwen3_8$")
+            start = (unzipped / "START_HERE.md").read_text(encoding="utf-8")
+            self.assertIn("--tool-call-parser qwen3_coder", start)
+            self.assertIn("没有打入", start)
+            contract = json.loads((unzipped / "FORMAT_CONTRACT.json").read_text(encoding="utf-8"))
+            self.assertEqual("Qwen3.8-27B", contract["profile"])
+            self.assertEqual("coder-xml", contract["tool_style"])
+            self.assertEqual("qwen3_8", contract["train_template"])
+            self.assertEqual("qwen3_coder", contract["serve_tool_parser"])
+            self.assertGreater(contract["blocks_converted"], 0)
+            man = json.loads((unzipped / "MANIFEST.json").read_text(encoding="utf-8"))
+            self.assertEqual(contract["profile"], man["format_contract"]["profile"])
+            self.assertIn("工具调用格式已锁定", (unzipped / "handoff.md").read_text(encoding="utf-8")[:2000])
+
+    def test_hermes_keeps_json_and_includes_8b_yaml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed(root)
+            result = build_delivery_zip(root, self.cfg, log=lambda *_: None, profile="hermes-json")
+            unzipped = root / "out"
+            _unzip(Path(result["zip_path"]), unzipped)
+            names = set(zipfile.ZipFile(result["zip_path"]).namelist())
+            self.assertIn("train_sft_qwen3_8b.yaml", names)
+
+            sft = _load_jsonl(unzipped / "data" / "sft.train.lf.jsonl")[0]
+            gpt = sft["conversations"][2]["value"]
+            self.assertIn('"arguments"', gpt)
+            self.assertNotIn("<function=bash>", gpt)
+            self.assertIn("<tool_call>garbage</tool_call>", sft["conversations"][3]["value"])
+
+            sft_yaml = (unzipped / "train_sft.yaml").read_text(encoding="utf-8")
+            self.assertRegex(sft_yaml, r"(?m)^template: qwen3$")
+            eight = (unzipped / "train_sft_qwen3_8b.yaml").read_text(encoding="utf-8")
+            self.assertRegex(eight, r"(?m)^template: qwen3$")
+            self.assertIn("dataset: gt_sft_train_lf", eight)
+            start = (unzipped / "START_HERE.md").read_text(encoding="utf-8")
+            self.assertIn("--tool-call-parser hermes", start)
+            self.assertNotIn("qwen3_coder", start)
+
+    def test_unparsed_assistant_tool_call_aborts_before_zip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed(root)
+            bad = _sft("bad")
+            bad["conversations"][5]["value"] = "<tool_call>nope</tool_call>"
+            _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [bad])
+            delivery = root.parent / "04_release" / "delivery"
+            before = {p.name for p in delivery.glob("*.zip")} if delivery.exists() else set()
+            with self.assertRaises(ValueError) as caught:
+                build_delivery_zip(root, self.cfg, log=lambda *_: None, profile="qwen-xml")
+            self.assertIn("无法识别", str(caught.exception))
+            after = {p.name for p in delivery.glob("*.zip")} if delivery.exists() else set()
+            self.assertEqual(before, after)
+
+    def test_stage3_repack_remembers_the_last_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed(root)
+            first = build_delivery_zip(root, self.cfg, log=lambda *_: None, profile="Qwen3.8-8B")
+            second = build_delivery_zip(root, self.cfg, log=lambda *_: None)
+            self.assertEqual("Qwen3.8-8B", first["format"]["profile"])
+            self.assertEqual("Qwen3.8-8B", second["format"]["profile"])
+            self.assertEqual(first["package_hash"], second["package_hash"])
+
+    def test_xml_roundtrip_keeps_hex_offsets_and_trailing_whitespace(self):
+        command = (
+            "cd /d/crack/jigsawcard/30-config/textassets-binary && "
+            "xxd -s 0x940 -l 0x90 *ab__config.bin; echo; xxd -s 0x60 -l 0x60 *ab__config.bin"
+        )
+        script = "print(rb'[\\x20-\\x7e]{4,}')\n"
+        padded = "grep flatbuffers "
+        src = _hermes(command) + "\n" + _hermes(script) + "\n" + _hermes(padded)
+        xml, converted, unparsed = convert_toolcall_text(src, "coder-xml")
+        self.assertEqual(3, converted)
+        self.assertEqual(0, unparsed)
+        self.assertIn("xxd -s 0x940 -l 0x90", xml)
+        self.assertIn("rb'[\\x20-\\x7e]{4,}'", xml)
+        back, converted_back, unparsed_back = convert_toolcall_text(xml, "hermes-json")
+        self.assertEqual(3, converted_back)
+        self.assertEqual(0, unparsed_back)
+
+        def commands(text):
+            out = []
+            for block in text.split("</tool_call>"):
+                if "<tool_call>" not in block:
+                    continue
+                tc = _parse_tc_block(block[block.index("<tool_call>"):] + "</tool_call>")
+                out.append(tc["arguments"]["command"])
+            return out
+
+        self.assertEqual([command, script, padded], commands(src))
+        self.assertEqual([command, script, padded], commands(xml))
+        self.assertEqual([command, script, padded], commands(back))
+
+    def test_profile_changes_package_hash(self):
+        rows = [_sft_tool("a")]
+        fp = length_gate_mod.length_gate_fingerprint()
+        h1 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows}, fp, "Qwen3.8-27B")
+        h2 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows}, fp, "Qwen3.8-8B")
+        h3 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows}, fp, "Qwen3.8-27B")
+        self.assertNotEqual(h1, h2)
+        self.assertEqual(h1, h3)
 
 
 class PackageHashTests(unittest.TestCase):

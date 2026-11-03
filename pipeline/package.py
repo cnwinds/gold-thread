@@ -1,5 +1,9 @@
 """训练交付包：把 handoff + 已规整数据集打成 zip，解压后可直接用 LLaMA-Factory 训练。
 
+格式在打包时选定（默认 Qwen XML）。assistant 侧的工具调用、YAML 的 template、
+推理用的 --tool-call-parser 一起锁定；03_train 里的原文件不动。
+
+
 产出（默认在 data/04_release/delivery/）：
     goldthread-delivery-<package_hash>.zip
         START_HERE.md / README.txt / handoff.md
@@ -17,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pipeline.common.config import config_hash, load_config, stage_dirs
+from pipeline.common.format import convert_sharegpt_row, profile_includes_yaml, resolve_export_profile
 from pipeline.common.store import now_iso, read_json
 from pipeline.lf_normalize import dumps_jsonl, dataset_info_for, prepare_datasets, require_sft
 from pipeline import length_gate as length_gate_mod
@@ -55,6 +60,9 @@ _YAML_FILES = (
 )
 
 _DS_FILES = ("ds_z2_config.json", "ds_z3_config.json")
+
+# 记在 delivery/ 旁边，不进 zip。stage3 再次打包时沿用上次在界面上选的格式。
+_PROFILE_CHOICE = "export_profile.json"
 
 _HANDOFF_BANNER = """> **本交付包已按可直接训练的布局打包**（不要再改文件名、不要手改 dataset_info）。
 >
@@ -127,15 +135,109 @@ def _read_script(name: str, root: Path) -> Optional[bytes]:
     return None
 
 
-def _readme(cfg_hash: str, stats: Dict[str, Any], counts: Dict[str, int], sources: Dict[str, str]) -> str:
+def _format_banner(contract: Dict[str, Any]) -> str:
+    if contract.get("pack_8b_yaml"):
+        eight = "8B 的 `template: qwen3` 配置已打进本包，与数据同一套协议。"
+    else:
+        eight = "8B 的 `*qwen3_8b.yaml` 留在仓库里，没有打进本包（那些配置的 template 是 qwen3）。"
+    return f"""> **工具调用格式已锁定为 {contract["label"]}**（{contract["habit"]}）。
+>
+> - 数据：assistant 侧 `{contract["style"]}`（observation / human / system 原样保留）
+> - 训练：YAML `template: {contract["template"]}`
+> - 推理：`--tool-call-parser {contract["parser"]}`
+>
+> {eight} 数据、template、parser 要一起用。
+
+"""
+
+
+def _remembered_profile(delivery_dir: Path) -> Optional[str]:
+    path = delivery_dir / _PROFILE_CHOICE
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    name = data.get("profile") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    try:
+        return resolve_export_profile(name)["id"]
+    except ValueError:
+        return None
+
+
+def _apply_tool_style(files: Dict[str, List[Dict[str, Any]]], style: str) -> Dict[str, int]:
+    """就地改写 assistant 侧工具调用。无法识别的块直接让这次打包失败。"""
+    converted = unparsed = 0
+    for rows in files.values():
+        for row in rows:
+            c, u = convert_sharegpt_row(row, style)
+            converted += c
+            unparsed += u
+    if unparsed:
+        raise ValueError(
+            f"有 {unparsed} 处 assistant 工具调用无法识别，已停止打包。"
+            "只接受 hermes JSON 或 Qwen XML 的 <tool_call> 块。"
+        )
+    return {"blocks_converted": converted, "blocks_unparsed": unparsed}
+
+
+def _force_template(text: str, template: str) -> str:
+    """把 YAML 的 template 锁成与数据同一套。行尾旧注释一并去掉，避免写着「勿用 qwen3」却已经改成 qwen3。"""
+    lines = text.splitlines()
+    out: List[str] = []
+    found = False
+    insert_at: Optional[int] = None
+    for line in lines:
+        stripped = line.split("#", 1)[0].strip()
+        if stripped.startswith("template:"):
+            indent = line[: len(line) - len(line.lstrip())]
+            out.append(f"{indent}template: {template}")
+            found = True
+            continue
+        out.append(line)
+        if stripped.startswith("dataset:") or stripped.startswith("eval_dataset:"):
+            insert_at = len(out)
+    if not found:
+        indent = ""
+        if insert_at is not None:
+            ref = out[insert_at - 1]
+            indent = ref[: len(ref) - len(ref.lstrip())]
+        added = f"{indent}template: {template}"
+        if insert_at is None:
+            out.append(added)
+        else:
+            out.insert(insert_at, added)
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _readme(
+    cfg_hash: str,
+    stats: Dict[str, Any],
+    counts: Dict[str, int],
+    sources: Dict[str, str],
+    contract: Dict[str, Any],
+) -> str:
     sft = counts.get("sft.train.lf.jsonl", 0)
     sft_eval = counts.get("sft.eval.lf.jsonl", 0)
     dpo = counts.get("dpo.train.lf.jsonl", 0)
     dpo_eval = counts.get("dpo.eval.lf.jsonl", 0)
     src = ", ".join(f"{k}←{v}" for k, v in sources.items()) or "—"
+    if contract.get("pack_8b_yaml"):
+        eight = "8B 配置已打入，template 同为 qwen3。"
+    else:
+        eight = "8B 的 qwen3 配置没有打入这个包。"
+    format_line = (
+        f"\n工具调用格式：{contract['label']}（{contract['habit']}）。\n"
+        f"数据风格 {contract['style']}，YAML template: {contract['template']}，"
+        f"推理 --tool-call-parser {contract['parser']}。{eight}\n"
+        "数据、template、parser 是一套。\n"
+    )
     return f"""GoldThread 训练交付包（目标模型：Qwen/Qwen3.8-27B Dense）
 =========================================================
-
+{format_line}
 解压后按 START_HERE.md 操作即可开训，不需要改文件名、不需要再跑规整脚本、不需要改 dataset_info。
 
 快速开始（在解压目录里执行，dataset_dir 是相对路径 ./data）：
@@ -149,6 +251,7 @@ def _readme(cfg_hash: str, stats: Dict[str, Any], counts: Dict[str, int], source
 
 包内结构：
   START_HERE.md         解压后的最短路径（以本文件布局为准）
+  FORMAT_CONTRACT.json  本包锁定的工具调用格式（style / template / parser）
   handoff.md            环境与架构说明（开头有本包布局，冲突时以 YAML 为准）
   train_lowmem.py       27B 低显存启动器（SFT/eval 只算监督位置 logits）
   lowmem_dpo.py         DPO 低显存补丁（train_lowmem.py 自动加载）
@@ -173,7 +276,7 @@ def _readme(cfg_hash: str, stats: Dict[str, Any], counts: Dict[str, int], source
 """
 
 
-def _start_here(counts: Dict[str, int], has_dpo: bool) -> str:
+def _start_here(counts: Dict[str, int], has_dpo: bool, contract: Dict[str, Any]) -> str:
     sft = counts.get("sft.train.lf.jsonl", 0)
     sft_eval = counts.get("sft.eval.lf.jsonl", 0)
     dpo = counts.get("dpo.train.lf.jsonl", 0)
@@ -196,9 +299,55 @@ CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_dpo.yaml
 
 这次打包没有可用的 DPO lf 文件，zip 里不会带 `train_dpo.yaml`。不要拿未打包的原始偏好对硬训。
 """
+    parser = contract["parser"]
+    contract_block = f"""
+## 工具调用格式
+
+本包锁定为 **{contract['label']}**（{contract['habit']}）。
+
+- assistant 工具调用：`{contract['style']}`
+- YAML `template: {contract['template']}`
+- 推理 `--tool-call-parser {parser}`
+
+改其中一处时，另外两处一起改。03_train 里的原文件保持不动，格式只写进这个 zip。
+"""
+    if contract.get("pack_8b_yaml"):
+        smoke_block = """## 5. 8B 冒烟
+
+包内的 `train_sft_qwen3_8b.yaml` / `train_sft_smoke_qwen3_8b.yaml`（若有）数据集键同样是 `gt_sft_*_lf`，`dataset_dir` 同样是 `./data`，`template` 与本包数据同为 `qwen3`。8B 可以直接：
+
+```bash
+cd <解压目录>
+llamafactory-cli train train_sft_smoke_qwen3_8b.yaml
+```
+
+27B 仍走上面的 `train_lowmem.py train_sft.yaml`。
+"""
+    else:
+        smoke_block = """## 5. 8B
+
+本包是 Qwen XML，没有打入 `*qwen3_8b.yaml`。那些配置的 template 是 qwen3。要改成 Hermes JSON，在导出界面改选格式后重新打包。
+"""
+    ops_block = f"""
+## 6. 训完之后：合并权重的高速推理（速查）
+
+1. 另开 conda 环境 `vllm`（不要装进训练 Python）；首次启动需系统 `g++`（flashinfer JIT）
+2. 两个 parser 必须显式给：`--reasoning-parser qwen3`（否则思维链混进 content）+
+   `--tool-call-parser {parser}`（与本包的数据和 YAML template 是一套）
+
+```bash
+vllm serve <SFT+DPO 合并目录> --served-model-name <交付包同名模型> \\
+  --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization 0.90 \\
+  --enable-auto-tool-choice --tool-call-parser {parser} --reasoning-parser qwen3
+```
+
+完整命令与排障（CUDA 驱动 vs toolkit、flash-attn/causal-conv1d 轮子选型）见仓库
+`DATASET_BEST_PRACTICES.md` §七与 `START_HERE.md` §6。
+"""
     return f"""# START HERE · GoldThread 交付 zip
 
 在**解压出来的这一层目录**里操作。YAML 的 `dataset_dir` 是 `./data`，相对当前工作目录，不是相对 yaml 文件。
+{contract_block}
 
 ## 0. 解压
 
@@ -222,7 +371,7 @@ python check_data.py
 
 ```
 ./
-├── START_HERE.md  README.txt  handoff.md
+├── START_HERE.md  README.txt  handoff.md  FORMAT_CONTRACT.json
 ├── train_sft.yaml            # dataset: gt_sft_train_lf
 ├── train_sft_qlora.yaml
 ├── train_dpo.yaml            # dataset: gt_dpo_train_lf（有 DPO 数据时才在）
@@ -285,24 +434,21 @@ python train_monitor.py --timeout-hours 5 --log logs/27b_sft.log -- \\
 
 启动后前几步应出现 `[lowmem] seq_len=… 监督位置=…`。没有这行说明补丁没生效。
 {dpo_block}
-## 5. 8B 冒烟
-
-若包内有 `train_sft_qwen3_8b.yaml` / `train_sft_smoke_qwen3_8b.yaml`，它们的数据集键同样是 `gt_sft_*_lf`，`dataset_dir` 同样是 `./data`。8B 可以直接：
-
-```bash
-cd <解压目录>
-llamafactory-cli train train_sft_smoke_qwen3_8b.yaml
-```
-
-27B 不要走这条命令。
+{smoke_block}
+{ops_block}
 """
 
 
-def _prepend_banner(handoff: str) -> str:
+def _prepend_banner(handoff: str, contract: Optional[Dict[str, Any]] = None) -> str:
     marker = "本交付包已按可直接训练的布局打包"
-    if marker in handoff[:800]:
-        return handoff
-    return _HANDOFF_BANNER + handoff
+    if marker not in handoff[:800]:
+        handoff = _HANDOFF_BANNER + handoff
+    if contract and "工具调用格式已锁定" not in handoff[:2000]:
+        if handoff.startswith(_HANDOFF_BANNER):
+            handoff = _HANDOFF_BANNER + _format_banner(contract) + handoff[len(_HANDOFF_BANNER):]
+        else:
+            handoff = _format_banner(contract) + handoff
+    return handoff
 
 
 
@@ -310,6 +456,7 @@ def compute_package_hash(
     cfg_h: str,
     prepared_files: Dict[str, List[Dict[str, Any]]],
     length_gate_fp: str,
+    profile: str = "",
 ) -> str:
     """8-hex fingerprint of delivery payload (post-gate lf bytes + config + gate version).
 
@@ -318,6 +465,8 @@ def compute_package_hash(
     pipeline.yaml config_hash is unchanged.
     """
     parts: List[str] = [cfg_h]
+    if profile:
+        parts.append(f"profile:{profile}")
     for name, rows in sorted(prepared_files.items()):
         content = dumps_jsonl(rows)
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -331,6 +480,7 @@ def build_delivery_zip(
     train_root: Optional[Path] = None,
     cfg: Optional[Dict[str, Any]] = None,
     log=None,
+    profile: Optional[str] = None,
 ) -> Dict[str, Any]:
     """打包 handoff + 规整后的数据集为 zip，返回路径与元信息。"""
     cfg = cfg or load_config()
@@ -340,6 +490,7 @@ def build_delivery_zip(
     release_root = root.parent / "04_release"
     delivery_dir = release_root / "delivery"
     delivery_dir.mkdir(parents=True, exist_ok=True)
+    spec = resolve_export_profile(profile or _remembered_profile(delivery_dir))
 
     cfg_h = config_hash(cfg)
 
@@ -360,8 +511,15 @@ def build_delivery_zip(
     available = set(info)
     has_dpo = "gt_dpo_train_lf" in available and "gt_dpo_eval_lf" in available
 
+    _emit(
+        f"[package] 导出格式 {spec['label']}："
+        f"{spec['style']} / template {spec['template']} / parser {spec['parser']}"
+    )
+    style_stats = _apply_tool_style(prepared.files, spec["style"])
+    _emit(f"[package] 已按该格式改写 {style_stats['blocks_converted']} 处工具调用")
+
     lg_fp = length_gate_mod.length_gate_fingerprint()
-    pkg_h = compute_package_hash(cfg_h, prepared.files, lg_fp)
+    pkg_h = compute_package_hash(cfg_h, prepared.files, lg_fp, spec["id"])
     zip_name = f"goldthread-delivery-{pkg_h}.zip"
     zip_path = delivery_dir / zip_name
 
@@ -373,11 +531,25 @@ def build_delivery_zip(
         zf.writestr(arc, data)
         manifest_files.append({"path": arc, "size": len(data)})
 
+    format_contract = {
+        "profile": spec["id"],
+        "label": spec["label"],
+        "habit": spec["habit"],
+        "tool_style": spec["style"],
+        "train_template": spec["template"],
+        "serve_tool_parser": spec["parser"],
+        "blocks_converted": style_stats["blocks_converted"],
+        "blocks_unparsed": style_stats["blocks_unparsed"],
+        "pack_8b_yaml": bool(spec.get("pack_8b_yaml")),
+        "note": "数据 tool_style、YAML template、推理 --tool-call-parser 是一套。",
+    }
+
     _emit(f"[package] 正在写入 zip：{zip_name}…")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        _add(zf, "README.txt", _readme(cfg_h, stats, prepared.counts, prepared.sources))
-        _add(zf, "START_HERE.md", _start_here(prepared.counts, has_dpo))
-        _add(zf, "handoff.md", _prepend_banner(handoff_path.read_text(encoding="utf-8")))
+        _add(zf, "README.txt", _readme(cfg_h, stats, prepared.counts, prepared.sources, spec))
+        _add(zf, "START_HERE.md", _start_here(prepared.counts, has_dpo, spec))
+        _add(zf, "FORMAT_CONTRACT.json", json.dumps(format_contract, ensure_ascii=False, indent=2) + "\n")
+        _add(zf, "handoff.md", _prepend_banner(handoff_path.read_text(encoding="utf-8"), spec))
 
         if (root / "RESULT.md").is_file():
             _add(zf, "RESULT.md", (root / "RESULT.md").read_text(encoding="utf-8"))
@@ -390,11 +562,15 @@ def build_delivery_zip(
             src = root / name
             if not src.is_file():
                 continue
+            if not profile_includes_yaml(name, spec):
+                skipped_yaml.append(name)
+                _emit(f"[package] 跳过 {name}：{spec['label']} 只带 template {spec['template']} 的配置")
+                continue
             patched = _patch_yaml(src.read_text(encoding="utf-8"), name, available)
             if patched is None:
                 skipped_yaml.append(name)
                 continue
-            _add(zf, name, patched)
+            _add(zf, name, _force_template(patched, spec["template"]))
             packed_yaml.append(name)
 
         if "train_sft.yaml" not in packed_yaml:
@@ -439,12 +615,27 @@ def build_delivery_zip(
             "length_gate": prepared.length_gate,
             "yaml": packed_yaml,
             "yaml_skipped": skipped_yaml,
+            "format_contract": format_contract,
             "files": manifest_files,
         }
         manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
         manifest["files"] = manifest_files + [{"path": "MANIFEST.json", "size": len(manifest_json.encode("utf-8"))}]
         manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
         zf.writestr("MANIFEST.json", manifest_json)
+
+    (delivery_dir / _PROFILE_CHOICE).write_text(
+        json.dumps(
+            {
+                "profile": spec["id"],
+                "label": spec["label"],
+                "updated_at": manifest["generated_at"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     result = {
         "zip_path": str(zip_path),
@@ -458,6 +649,7 @@ def build_delivery_zip(
         "sources": prepared.sources,
         "datasets": manifest["datasets"],
         "length_gate": prepared.length_gate,
+        "format": format_contract,
     }
     if log:
         size_mb = result["size_bytes"] / (1024 * 1024)
@@ -468,7 +660,7 @@ def build_delivery_zip(
         over = sum(int(v.get("overlength_at_default_cutoff") or 0) for v in gate.values() if isinstance(v, dict))
         log(
             f"[package] 交付包已生成: {zip_path.name} ({size_mb:.1f} MB, "
-            f"SFT lf {sft_n} / DPO lf {dpo_n}, {result['file_count']} 个文件, "
+            f"{spec['label']}, SFT lf {sft_n} / DPO lf {dpo_n}, {result['file_count']} 个文件, "
             f"length_gate salvaged={salv} overlength_at_default={over})"
         )
     return result
