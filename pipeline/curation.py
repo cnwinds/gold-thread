@@ -80,7 +80,6 @@ def is_stale(ann: Dict[str, Any]) -> bool:
 def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
     """给出会话的有效结论、生效的 thinking 改写、排除的步骤与人工强制保留的步骤。"""
     rcfg = cfg.get("review", {})
-    hold = bool(rcfg.get("hold_needs_review", True))
     conf_min = float(rcfg.get("judge_confidence_min", 0.7))
     rnd = {} if ann.get("review_rounds_stale") else latest_round(ann)
     hr = ann.get("human_review") or {}
@@ -145,7 +144,7 @@ def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
         if rep.get("needs_wholesale_rewrite") or rep_verdict == "discard":
             return {"state": "auto_reject", "rewrites": {}, "excluded": _excluded(), "kept": []}
         if rep_verdict == "needs_human":
-            return {"state": "held" if hold else "auto_gold", "rewrites": _rewrites(False), "excluded": _excluded(), "kept": _kept()}
+            return {"state": "auto_gold", "rewrites": _rewrites(False), "excluded": _excluded(), "kept": _kept()}
         if rep_verdict == "trainable" and float(rep.get("confidence") or 0) >= conf_min:
             return {"state": "auto_gold", "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
         # 即使尚未进行模型评审，人工手改或排除的单步也立即生效
@@ -155,8 +154,6 @@ def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
         return {"state": "auto_reject", "rewrites": {}, "excluded": _excluded(), "kept": []}
     if verdict == "gold" and float(rnd.get("confidence") or 0) >= conf_min:
         return {"state": "auto_gold", "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
-    if hold:
-        return {"state": "held", "rewrites": _rewrites(False), "excluded": _excluded(), "kept": _kept()}
     return {"state": "auto_gold", "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
 
 

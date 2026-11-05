@@ -93,7 +93,7 @@ class FlowTests(unittest.TestCase):
 
 
 class CurationGateTests(unittest.TestCase):
-    """ADR-0001：hold_needs_review 与 needs_human → held / auto_gold。"""
+    """ADR-0001：model_report needs_human → auto_gold，可进 SFT。"""
 
     def setUp(self):
         self.cfg = copy.deepcopy(DEFAULTS)
@@ -116,8 +116,7 @@ class CurationGateTests(unittest.TestCase):
             "model_report": {"verdict": "needs_human", "confidence": 0.5},
         }
 
-    def test_needs_human_yields_auto_gold_when_hold_disabled(self):
-        self.cfg["review"]["hold_needs_review"] = False
+    def test_needs_human_maps_to_auto_gold_and_allows_sft(self):
         effective = curation.resolve(self.annotation, self.cfg)
         self.assertEqual("auto_gold", effective["state"])
         self.assertIn(effective["state"], curation.IN_SFT)
@@ -125,13 +124,14 @@ class CurationGateTests(unittest.TestCase):
         self.assertTrue(out["full_sft_allowed"])
         self.assertGreaterEqual(len(out["windows_sgpt"]), 1)
 
-    def test_needs_human_yields_held_when_hold_enabled(self):
-        self.cfg["review"]["hold_needs_review"] = True
-        effective = curation.resolve(self.annotation, self.cfg)
-        self.assertEqual("held", effective["state"])
-        self.assertNotIn(effective["state"], curation.IN_SFT)
-        out = evaluate_session_synthesis(self.record, self.annotation, self.cfg)
-        self.assertFalse(out["full_sft_allowed"])
+    def test_low_confidence_review_round_still_auto_gold(self):
+        ann = {
+            "review_key": "1:abc:6",
+            "review_rounds": [{"round": 1, "verdict": "gold", "confidence": 0.3}],
+        }
+        effective = curation.resolve(ann, self.cfg)
+        self.assertEqual("auto_gold", effective["state"])
+        self.assertNotEqual("held", effective["state"])
 
 
 class SynthesisTests(unittest.TestCase):

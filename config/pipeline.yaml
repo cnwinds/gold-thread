@@ -202,8 +202,6 @@ review:
   judge_min_score: 60
   # 低于该置信度 -> needs_review（不直接淘汰）
   judge_confidence_min: 0.7
-  # false（默认）：无人工复核 UI 时 needs_human 仍进 SFT（auto_gold）；true 则扣在 held
-  hold_needs_review: false
 
 # ---------------------------------------------------------------------------
 # 第 5 层：训练数据合成（stage3）
