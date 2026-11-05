@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -119,6 +119,7 @@ class Job:
             "id": self.id,
             "stage": self.stage,
             "force": self.force,
+            "extra": self.extra,
             "status": self.status,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
@@ -146,6 +147,26 @@ def _run_job(job: Job) -> None:
             job.result = stage1_extract.run(force=job.force, log=job.log, cfg=cfg)
         elif job.stage == "stage2":
             job.result = stage2_gold.run(force=job.force, log=job.log, cfg=cfg)
+        elif job.stage == "analyze":
+            sids = [s for s in (job.extra.get("sessions") or []) if s]
+            if not sids:
+                raise RuntimeError("没有指定要分析的会话")
+            job.result = stage2_gold.run(force=False, log=job.log, cfg=cfg, only=sids)
+        elif job.stage == "collect":
+            from pipeline.collect import ingest_selected
+
+            sids = ingest_selected(
+                str(job.extra.get("source") or ""),
+                job.extra.get("ids") or [],
+                cfg,
+                job.log,
+            )
+            result: Dict[str, Any] = {"sessions": sids}
+            if job.extra.get("analyze"):
+                result["stage2"] = stage2_gold.run(
+                    force=False, log=job.log, cfg=cfg, only=sids
+                )
+            job.result = result
         elif job.stage == "stage3":
             job.result = stage3_synth.run(force=job.force, log=job.log, cfg=cfg)
         elif job.stage == "all":
@@ -236,8 +257,13 @@ def _persist_job(job: Job) -> None:
 
 def _start(stage: str, force: bool, extra: Optional[Dict[str, Any]] = None) -> Job:
     with JOBS_LOCK:
+        gold_write = {"stage2", "stage3", "all", "analyze", "classify", "collect"}
         for j in JOBS.values():
-            if j.status == "running" and (j.stage == stage or stage == "all" or j.stage == "all"):
+            clash = (
+                j.stage == stage or stage == "all" or j.stage == "all"
+                or (j.stage in gold_write and stage in gold_write)
+            )
+            if j.status == "running" and clash:
                 raise HTTPException(409, f"已有作业在运行: {j.stage} ({j.id})")
         job = Job(stage, force, extra)
         JOBS[job.id] = job
@@ -257,11 +283,14 @@ class ConfigBody(BaseModel):
 def get_config() -> Dict[str, Any]:
     cfg = load_config()
     text = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else ""
-    return {
-        "path": str(CONFIG_PATH),
-        "yaml": text,
-        "parsed": {k: v for k, v in cfg.items() if not k.startswith("_")},
-    }
+    return JSONResponse(
+        {
+            "path": str(CONFIG_PATH),
+            "yaml": text,
+            "parsed": {k: v for k, v in cfg.items() if not k.startswith("_")},
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/config/validate")
@@ -535,7 +564,7 @@ def _runbook_state() -> Dict[str, Any]:
     else:
         for sid in ("s3.gate", "s3.windows", "s3.traj", "s3.dpo_review",
                     "s3.split", "s3.manifest", "s3.handoff", "s3.package"):
-            put(sid, "todo", "等待 stage2 与人工复核", "")
+            put(sid, "todo", "等待 stage2", "")
 
     return st
 
@@ -603,15 +632,12 @@ def runbook() -> Dict[str, Any]:
     # 建议的下一步操作（界面直接渲染按钮）
     actions: List[Dict[str, str]] = []
     if nxt:
-        if nxt["phase"] == "human":
-            actions.append({"kind": "tab", "target": "gold", "label": "去人工复核"})
-        elif nxt["id"].startswith("s1.") or nxt["id"].startswith("s2."):
+        if nxt["id"].startswith("s1.") or nxt["id"].startswith("s2."):
             actions.append({"kind": "run", "target": "all" if nxt["phase"] == "stage1" else "stage2", "label": "运行管线"})
         elif nxt["phase"] == "stage3":
             actions.append({"kind": "run", "target": "stage3", "label": "运行 stage3"})
         if nxt["status"] == "warn":
-            actions.append({"kind": "tab", "target": "gold" if "human" in nxt["id"] or nxt["phase"] == "human" else "runs",
-                            "label": "查看详情"})
+            actions.append({"kind": "tab", "target": "runs", "label": "查看详情"})
     if deliverable["handoff_exists"] and not deliverable["zip_path"]:
         actions.append({"kind": "export", "target": "zip", "label": "生成交付包"})
     if deliverable["zip_path"]:
@@ -641,7 +667,7 @@ def runbook() -> Dict[str, Any]:
             {"id": "stage1", "label": "01_raw", "path": str(stage_dirs(cfg)["raw"]),
              "desc": "准入 + 回合分类 + 不可变副本"},
             {"id": "stage2", "label": "02_gold", "path": str(stage_dirs(cfg)["gold"]),
-             "desc": "模型判断 + 程序执行 + 人工复核"},
+             "desc": "模型判断 + 程序执行"},
             {"id": "stage3", "label": "03_train", "path": str(train_root),
              "desc": "SFT/DPO 样本 + handoff"},
             {"id": "delivery", "label": "交付 zip", "path": str(delivery_dir),
@@ -845,16 +871,48 @@ def overview() -> Dict[str, Any]:
 # 原始数据 (Stage 1)
 # ---------------------------------------------------------------------------
 
+def _session_lineage(sid: str, entry: Dict[str, Any], funnels: Dict[str, Any]) -> Dict[str, Any]:
+    """一条黄金会话的去向：有用步 → SFT，弯路 → 这条会话的 DPO。"""
+    sf = funnels.get(sid) if isinstance(funnels, dict) else None
+    sf = sf if isinstance(sf, dict) else {}
+    funnel = sf.get("funnel") if isinstance(sf.get("funnel"), dict) else {}
+    stats = entry.get("stats") if isinstance(entry.get("stats"), dict) else {}
+    written = sid in (funnels or {})
+    parts = {
+        "pruned": int(sf.get("dpo_pruned") or 0),
+        "review": int(sf.get("dpo_review") or 0),
+        "negative": int(sf.get("dpo_negative") or 0),
+    }
+    return {
+        "gold_steps": stats.get("gold_steps"),
+        "raw_steps": stats.get("raw_steps"),
+        "pruned": stats.get("pruned_detours"),
+        "dpo_made": int(entry.get("dpo_count") or 0),
+        "split": sf.get("split") or "",
+        "sft_windows": funnel.get("admitted_steps") if written else None,
+        "sft_full": bool(sf.get("full_sft_allowed")) if written else False,
+        "train_written": written,
+        "dpo_train": (parts["pruned"] + parts["review"] + parts["negative"]) if written else None,
+        "dpo_parts": parts if written else None,
+    }
+
+
 @app.get("/api/raw/sessions")
 def raw_sessions(
     label: str = "",
     project: str = "",
     q: str = "",
+    adopted: str = "",
     limit: int = 500,
 ) -> Dict[str, Any]:
     cfg = load_config()
-    index = load_index(stage_dirs(cfg)["raw"] / "index.json")
+    dirs = stage_dirs(cfg)
+    index = load_index(dirs["raw"] / "index.json")
+    gold_idx = load_index(dirs["gold"] / "index.json")
+    gold_sessions_map = gold_idx.get("sessions") or {}
     rows = []
+    adopted_n = 0
+    pool = 0
     for sid, e in index["sessions"].items():
         if label and e.get("label") != label:
             continue
@@ -867,6 +925,15 @@ def raw_sessions(
             )
             if q.lower() not in blob.lower():
                 continue
+        g = gold_sessions_map.get(sid) or {}
+        is_adopted = bool(g)
+        pool += 1
+        if is_adopted:
+            adopted_n += 1
+        if adopted == "yes" and not is_adopted:
+            continue
+        if adopted == "no" and is_adopted:
+            continue
         ann_mode = "manual" if e.get("stats", {}).get("manual_overridden") else (
             "model" if e.get("turn_annotations") else "rule"
         )
@@ -883,11 +950,19 @@ def raw_sessions(
                 "pathologies": e.get("pathologies"),
                 "strengths": e.get("strengths"),
                 "annotation": ann_mode,
+                "origin": e.get("origin") or "",
+                "adopted": is_adopted,
+                "gold_status": g.get("status") or "",
+                "analyzed_at": g.get("last_run") or "",
+                "gold_steps": (g.get("stats") or {}).get("gold_steps") if g else None,
+                "dpo_count": g.get("dpo_count") if g else None,
             }
         )
-    rows.sort(key=lambda r: (r["label"], r["project_group"], r["session_id"]))
+    rows.sort(key=lambda r: (0 if r["adopted"] else 1, r["label"] or "", r["project_group"] or "", r["session_id"]))
     return {
         "total": len(rows),
+        "pool": pool,
+        "adopted": adopted_n,
         "sessions": rows[:limit],
         "audit": {
             "skipped": index.get("skipped", {}),
@@ -941,7 +1016,7 @@ def raw_session(sid: str) -> Dict[str, Any]:
 
 class RelabelBody(BaseModel):
     label: str
-    auto_sync: bool = True
+    auto_sync: bool = False
 
 
 @app.post("/api/raw/session/{sid}/relabel")
@@ -951,18 +1026,13 @@ def relabel(sid: str, body: RelabelBody) -> Dict[str, Any]:
     cfg = load_config()
     try:
         res = stage1_extract.relabel_session(sid, body.label, cfg=cfg)
-        if body.auto_sync:
-            gold_idx = load_index(stage_dirs(cfg)["gold"] / "index.json")
-            if gold_idx.get("sessions"):
-                stage3_synth.run(force=False, log=lambda *_: None, cfg=cfg)
-        return {**res, "note": "已即时更新标签并同步索引"}
+        return {**res, "note": "已更新标签并同步 raw / gold 索引"}
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, str(exc)) from exc
 
 
 class TurnOverridesBody(BaseModel):
     turns: Optional[Dict[str, Any]] = None
-    root_prompt: Optional[str] = None
     reset: bool = False
     recompute_downstream: bool = True
 
@@ -974,7 +1044,6 @@ def save_turn_overrides(sid: str, body: TurnOverridesBody) -> Dict[str, Any]:
         res = stage1_extract.update_turn_overrides(
             sid=sid,
             turns_patch=body.turns,
-            root_prompt=body.root_prompt,
             reset=body.reset,
             cfg=cfg,
         )
@@ -993,6 +1062,61 @@ def save_turn_overrides(sid: str, body: TurnOverridesBody) -> Dict[str, Any]:
 @app.post("/api/raw/session/{sid}/classify")
 def classify_one(sid: str) -> Dict[str, Any]:
     job = _start("classify", True, {"sessions": [sid]})
+    return {"job_id": job.id}
+
+
+@app.post("/api/raw/session/{sid}/analyze")
+def analyze_one(sid: str) -> Dict[str, Any]:
+    """分析或重新分析一条原始会话：有用步写入黄金会话，弯路写入该会话的 DPO。"""
+    cfg = load_config()
+    index = load_index(stage_dirs(cfg)["raw"] / "index.json")
+    if sid not in (index.get("sessions") or {}):
+        raise HTTPException(404, "会话不存在")
+    job = _start("analyze", True, {"sessions": [sid]})
+    return {"job_id": job.id}
+
+
+class CollectBody(BaseModel):
+    source: str
+    ids: List[str] = []
+    analyze: bool = False
+
+
+@app.get("/api/collect/sessions")
+def collect_sessions(source: str = "pi", q: str = "") -> Dict[str, Any]:
+    from pipeline.collect import list_sessions
+
+    try:
+        return list_sessions(source, q)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/collect/preview")
+def collect_preview(source: str, id: str) -> Dict[str, Any]:
+    from pipeline.collect import preview_session
+
+    try:
+        return preview_session(source, id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/collect")
+def collect_start(body: CollectBody) -> Dict[str, Any]:
+    if body.source not in ("pi", "cursor"):
+        raise HTTPException(400, "source 必须是 pi 或 cursor")
+    if not body.ids:
+        raise HTTPException(400, "先选择会话")
+    if len(body.ids) > 12:
+        raise HTTPException(400, "一次最多采集 12 条")
+    job = _start(
+        "collect",
+        False,
+        {"source": body.source, "ids": body.ids, "analyze": body.analyze},
+    )
     return {"job_id": job.id}
 
 
@@ -1044,6 +1168,7 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
                 "review_round": rnd.get("round"),
                 "review_progress": curation.progress(ann),
                 "funnel": funnel_info,
+                "lineage": _session_lineage(sid, e, session_funnels),
             }
         )
     rows.sort(key=lambda r: (r.get("label", ""), r.get("project_group", ""), r["session_id"]))
@@ -1067,6 +1192,8 @@ def gold_session(sid: str) -> Dict[str, Any]:
         synth_preview = stage3_synth.preview_session_synthesis(sid, cfg=cfg)
     except Exception:  # noqa: BLE001
         synth_preview = {}
+    train_stats = read_json(stage_dirs(cfg)["train"] / "stats.json", default={}) or {}
+    funnels = train_stats.get("session_funnels") or {}
     return {
         "record": rows[0],
         "annotation": ann,
@@ -1076,6 +1203,7 @@ def gold_session(sid: str) -> Dict[str, Any]:
         "dpo": read_jsonl(Path(e["dpo_file"])) if e.get("dpo_file") else [],
         "diagnostics": read_jsonl(Path(e["diag_file"])) if e.get("diag_file") else [],
         "synthesis_preview": synth_preview,
+        "lineage": _session_lineage(sid, e, funnels),
     }
 
 
@@ -1368,16 +1496,62 @@ def export_package_info() -> Dict[str, Any]:
     }
 
 
-@app.get("/api/export/download")
-def export_download():
-    """下载最新交付 zip。"""
-    cfg = load_config()
-    delivery_dir = stage_dirs(cfg)["train"].parent / "04_release" / "delivery"
-    zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
-                  key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
+def _delivery_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
+    cfg = cfg or load_config()
+    return stage_dirs(cfg)["train"].parent / "04_release" / "delivery"
+
+
+def _resolve_delivery_zip(delivery_dir: Path, name: str = "") -> Path:
+    if name:
+        base = Path(name).name
+        if base != name or not base.endswith(".zip"):
+            raise HTTPException(400, "非法文件名")
+        path = (delivery_dir / base).resolve()
+        try:
+            path.relative_to(delivery_dir.resolve())
+        except ValueError as exc:
+            raise HTTPException(400, "非法文件名") from exc
+        if not path.is_file():
+            raise HTTPException(404, "找不到这个包")
+        return path
+    zips = sorted(delivery_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
     if not zips:
         raise HTTPException(404, "交付包尚未生成，请运行 stage3 或 POST /api/export/package")
-    z = zips[0]
+    return zips[0]
+
+
+@app.get("/api/export/history")
+def export_history() -> Dict[str, Any]:
+    """交付目录里的全部 zip，新的在前。"""
+    delivery_dir = _delivery_dir()
+    rows = []
+    if delivery_dir.exists():
+        zips = sorted(delivery_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for z in zips:
+            man = _zip_manifest(z)
+            fmt = man.get("format_contract") if isinstance(man.get("format_contract"), dict) else {}
+            counts = man.get("counts") if isinstance(man.get("counts"), dict) else {}
+            rows.append({
+                "name": z.name,
+                "size_bytes": z.stat().st_size,
+                "generated_at": man.get("generated_at") or time.strftime(
+                    "%Y-%m-%dT%H:%M:%S", time.localtime(z.stat().st_mtime)
+                ),
+                "package_hash": man.get("package_hash") or "",
+                "format_label": (fmt or {}).get("label") or "",
+                "profile": (fmt or {}).get("profile") or "",
+                "sft_train": counts.get("sft.train.lf.jsonl"),
+                "sft_eval": counts.get("sft.eval.lf.jsonl"),
+                "dpo_train": counts.get("dpo.train.lf.jsonl"),
+                "dpo_eval": counts.get("dpo.eval.lf.jsonl"),
+            })
+    return {"total": len(rows), "packs": rows}
+
+
+@app.get("/api/export/download")
+def export_download(name: str = ""):
+    """下载交付 zip。给出 name 时下载该次打包，否则下载最新一份。"""
+    z = _resolve_delivery_zip(_delivery_dir(), name)
     return FileResponse(
         path=str(z),
         filename=z.name,
@@ -1480,10 +1654,36 @@ def dataset_row(name: str, index: int) -> Dict[str, Any]:
     if "/" in name or "\\" in name or not name.endswith(".jsonl"):
         raise HTTPException(400, "非法文件名")
     cfg = load_config()
-    rows = read_jsonl(stage_dirs(cfg)["train"] / name)
+    root = stage_dirs(cfg)["train"]
+    rows = read_jsonl(root / name)
     if index < 0 or index >= len(rows):
         raise HTTPException(404, "行不存在")
-    return rows[index]
+    raw = rows[index]
+    out = dict(raw)
+    meta = out.get("metadata") or {}
+    sample_id = out.get("sample_id") or meta.get("sample_id") or ""
+    out["_lineage"] = {"same_sample": _files_with_sample(root, sample_id, name)}
+    return out
+
+
+def _files_with_sample(root: Path, sample_id: str, skip: str) -> List[str]:
+    """同一 sample_id 还出现在哪些训练文件里。编号被重写过的发布稿对不上，就返回空。"""
+    if not sample_id:
+        return []
+    found: List[str] = []
+    needle = '"' + sample_id + '"'
+    for path in sorted(root.glob("*.jsonl")):
+        if path.name == skip:
+            continue
+        try:
+            with path.open(encoding="utf-8") as fh:
+                for line in fh:
+                    if needle in line:
+                        found.append(path.name)
+                        break
+        except OSError:
+            continue
+    return found
 
 
 _THINK_RE = re.compile(r"^<think>?\s*\n?([\s\S]*?)\n?</think>\s*", re.IGNORECASE)
@@ -1511,11 +1711,20 @@ def _extract_think_and_body(raw_val: str) -> tuple[str, str, List[str]]:
     return think, body, tools
 
 
+def _pref_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        inner = value.get("value", "")
+        return inner if isinstance(inner, str) else ""
+    return ""
+
+
 def _preview(row: Dict[str, Any], dataset_name: str = "") -> Dict[str, Any]:
     # 1) DPO 偏好对
     if "chosen" in row and "rejected" in row:
-        c_val = (row.get("chosen") or {}).get("value", "")
-        r_val = (row.get("rejected") or {}).get("value", "")
+        c_val = _pref_text(row.get("chosen"))
+        r_val = _pref_text(row.get("rejected"))
         c_think, c_body, c_tools = _extract_think_and_body(c_val)
         r_think, r_body, r_tools = _extract_think_and_body(r_val)
         convs = row.get("conversations") or []
