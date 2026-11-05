@@ -13,7 +13,7 @@ paths:
 
 llm:
   # 模型参与环节统一使用该模型（通过 pi models.json 里的 provider 调用）
-  model: "MiniMax-M3.1-Flash"
+  model: "glm-5.3-flash"
   temperature: 0.2
   max_tokens: 16384
   timeout_seconds: 300
@@ -123,11 +123,11 @@ judge:
   enabled: true
   # 兜底模型（下面 decide_model / audit_model 为空时用它；再空则跟随 llm.model）
   model: ""
-  # 测试阶段：所有模型统一用 MiniMax-M3.1-Flash
+  # 留空 = 跟随主模型 llm.model。单独指定才会和主模型分开。
   # 步级判断（剪枝/折叠/改写/排除）：调用量最大
-  decide_model: "MiniMax-M3.1-Flash"
+  decide_model: ""
   # 审核类（接缝是否平滑 / 质量报告与高光 / DPO 偏好对复核）
-  audit_model: "MiniMax-M3.1-Flash"
+  audit_model: ""
   # 逐任务覆盖（留空 = 按 decide_model / audit_model 两类走）
   # 想让某一类审核也走主模型就填 glm-5.3-flash，想换第三方模型直接填模型 id
   task_models:
@@ -202,8 +202,8 @@ review:
   judge_min_score: 60
   # 低于该置信度 -> needs_review（不直接淘汰）
   judge_confidence_min: 0.7
-  # 待人工复核、结论过期的会话先扣住，不进 SFT，直到人工通过
-  hold_needs_review: true
+  # false（默认）：无人工复核 UI 时 needs_human 仍进 SFT（auto_gold）；true 则扣在 held
+  hold_needs_review: false
 
 # ---------------------------------------------------------------------------
 # 第 5 层：训练数据合成（stage3）

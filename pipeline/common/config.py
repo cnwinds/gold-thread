@@ -83,7 +83,7 @@ DEFAULTS: Dict[str, Any] = {
         "judge_gold": True,
         "judge_min_score": 60,
         "judge_confidence_min": 0.7,
-        "hold_needs_review": True,
+        "hold_needs_review": False,
     },
     "synth": {
         "window_turns": 8,

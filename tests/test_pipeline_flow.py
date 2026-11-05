@@ -92,10 +92,51 @@ class FlowTests(unittest.TestCase):
         self.assertEqual("kept", marks[1]["action"])
 
 
+class CurationGateTests(unittest.TestCase):
+    """ADR-0001：hold_needs_review 与 needs_human → held / auto_gold。"""
+
+    def setUp(self):
+        self.cfg = copy.deepcopy(DEFAULTS)
+        self.cfg["synth"]["formats"] = {"sharegpt": True, "openai": True}
+        self.record = {
+            "session_id": "gate1",
+            "label": "positive",
+            "project_group": "game::sample",
+            "cwd": r"D:\crack\sample",
+            "dominant_model": "deepseek-v4.1-flash-1017",
+            "stats": {"raw_steps": 1, "gold_steps": 1},
+            "messages": [
+                {"id": "sys", "role": "system", "content": "system"},
+                {"id": "root", "role": "user", "content": "分析 sample.apk"},
+                assistant("a1", "用脚本验证文件头", tool_calls=[{"id": "c1", "name": "bash", "arguments": {"command": "ls"}}]),
+            ],
+        }
+        self.annotation = {
+            "review_key": "1:abc:6",
+            "model_report": {"verdict": "needs_human", "confidence": 0.5},
+        }
+
+    def test_needs_human_yields_auto_gold_when_hold_disabled(self):
+        self.cfg["review"]["hold_needs_review"] = False
+        effective = curation.resolve(self.annotation, self.cfg)
+        self.assertEqual("auto_gold", effective["state"])
+        self.assertIn(effective["state"], curation.IN_SFT)
+        out = evaluate_session_synthesis(self.record, self.annotation, self.cfg)
+        self.assertTrue(out["full_sft_allowed"])
+        self.assertGreaterEqual(len(out["windows_sgpt"]), 1)
+
+    def test_needs_human_yields_held_when_hold_enabled(self):
+        self.cfg["review"]["hold_needs_review"] = True
+        effective = curation.resolve(self.annotation, self.cfg)
+        self.assertEqual("held", effective["state"])
+        self.assertNotIn(effective["state"], curation.IN_SFT)
+        out = evaluate_session_synthesis(self.record, self.annotation, self.cfg)
+        self.assertFalse(out["full_sft_allowed"])
+
+
 class SynthesisTests(unittest.TestCase):
     def setUp(self):
         self.cfg = copy.deepcopy(DEFAULTS)
-        self.cfg["review"]["hold_needs_review"] = True
         self.cfg["synth"]["formats"] = {"sharegpt": True, "openai": True}
 
     def test_rewritten_pathological_step_is_rescued(self):
