@@ -1,5 +1,4 @@
-> **工程实现说明（2026-10 更新）**：本文档保留领域知识与提纯规范。实际执行已重构为三阶段管线
-> （`01_raw` → `02_gold` → `03_train`），并附带本地 Web 控制台；命令、目录与脚本/模型分工见 `README.md`。
+> **工程实现说明（2026-10 更新）**：本文档保留领域知识与提纯规范。管线阶段、控制台行为与术语以 [`CONTEXT.md`](CONTEXT.md) 为准；命令与目录索引见 `README.md`。
 > 旧版单文件脚本 `sync_pi_datasets.py` 与 `output/` 仅作对照保留。
 
 # GoldThread · Agent 工程分析训练数据集整理与黄金轨迹蒸馏最佳实践手册
@@ -445,23 +444,23 @@ python tools/check_thinking_shape.py --expect keep         # 改了开关后按 
 
 ### 7.1 SFT+DPO 合并模型的高速推理（vLLM）
 
-> 完整命令以线上 START_HERE §6 为准，以下是要点与踩坑。
+> 可复制命令以 `data/03_train/START_HERE.md` §8 为准。交付 zip 里再以 `FORMAT_CONTRACT.json` 的 `serve_tool_parser` 覆盖。
 
 1. **另开 conda 环境 `vllm`**，不要把 vLLM 装进训练用的 Python；首次启动需系统 `g++`（flashinfer JIT）。
 2. 权重用合并后的 `…-sft-dpo-merged`；`--served-model-name` 与交付包名保持一致。
 3. **两个 parser 都必须显式给**：
    - `--reasoning-parser qwen3`：不给则思维链混进 `content`（2026-11-01 实际踩过：客户端看到裸 `</think>`）。
-   - `--tool-call-parser hermes`：不给则模型写的 `<tool_call>` 整段落进正文，agent 无法执行工具。
+   - `--tool-call-parser qwen3_coder`：默认 27B 包是 Qwen XML（`template: qwen3_8`）。不给、或沿用旧的 `hermes`，`<tool_call>` 整段落进正文，agent 无法执行工具。Hermes JSON 包才用 `hermes`。
 
 ```bash
 conda activate vllm && export CUDA_VISIBLE_DEVICES=0
-vllm serve /cloud/cloud-ssd1/saves/Qwen3.8-27B-sft-dpo-merged \
+vllm serve /data/models/Qwen3.8-27B-dpo-merged \
   --host 0.0.0.0 --port 8000 \
   --served-model-name Qwen3.8-27B-sft-dpo \
   --dtype bfloat16 --max-model-len 32768 \
   --gpu-memory-utilization 0.90 --language-model-only \
   --enable-chunked-prefill --max-num-seqs 4 \
-  --enable-auto-tool-choice --tool-call-parser hermes \
+  --enable-auto-tool-choice --tool-call-parser qwen3_coder \
   --reasoning-parser qwen3 --performance-mode throughput
 ```
 
