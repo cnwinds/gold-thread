@@ -775,12 +775,14 @@ def get_task_api(task_id: str, offset: int = 0) -> Dict[str, Any]:
         d["logs"] = job.logs[offset:]
         d["offset"] = offset
         d["log_count"] = len(job.logs)
+        d["live"] = True
         return d
     if rec:
-        d = dict(rec)
-        d["logs"] = []
+        stored = rec.get("logs") if isinstance(rec.get("logs"), list) else []
+        d = {k: v for k, v in rec.items() if k != "logs"}
+        d["logs"] = stored[offset:]
         d["offset"] = offset
-        d["log_count"] = 0
+        d["log_count"] = len(stored)
         d["live"] = False
         return d
     raise HTTPException(404, "任务不存在")

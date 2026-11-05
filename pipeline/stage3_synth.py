@@ -636,9 +636,9 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     admit_reason_counts = Counter()
     drop_reason_counts = Counter()
 
+    # 门控 → 窗口 → 轨迹 串行记账，避免三条「开始」挤在一起
     stepcat.begin(log, "s3.gate", msg=f"共 {len(records)} 个黄金会话")
-    stepcat.begin(log, "s3.windows")
-    stepcat.begin(log, "s3.traj")
+    admitted: List[Dict[str, Any]] = []
     for sid, entry in sorted(records.items()):
         label = entry.get("label", "pending")
         project = entry.get("project_group", "unknown")
@@ -712,24 +712,19 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             "diagnostics": len(sess_diags),
         }
 
-        stepcat.emit(log, "s3.gate", None, None, f"{sid[:8]} {eval_res['effective_state']}")
+        stepcat.emit(log, "s3.gate", len(session_funnels), len(records),
+                     f"{sid[:8]} {eval_res['effective_state']}")
         if not eval_res["full_sft_allowed"] and not eval_res["subsegment_only"]:
             log(f"[stage3] {curation.EFFECTIVE_ZH.get(eff_state, eff_state)}，不进 SFT: {sid}")
             continue
 
-        if eval_res["gold_traj"]:
-            gold_trajs.append(eval_res["gold_traj"])
-            model_counts[model] += 1
-
-        for w_sgpt, w_oai in zip(eval_res["windows_sgpt"], eval_res["windows_oai"]):
-            st_name = w_sgpt["metadata"]["stage"]
-            stage_counts[st_name] += 1
-            project_counts[project] += 1
-            step_pairs.append((w_sgpt, w_oai))
-            if len(step_pairs) % 100 == 0:
-                stepcat.emit(log, "s3.windows", len(step_pairs), None, f"{len(step_pairs)} 条窗口")
-
-        stepcat.emit(log, "s3.traj", len(gold_trajs), None, f"{len(gold_trajs)} 条轨迹")
+        admitted.append({
+            "sid": sid,
+            "label": label,
+            "project": project,
+            "model": model,
+            "eval_res": eval_res,
+        })
         log(
             f"[stage3] {sid[:8]} ({label:<8} {project:<18}) -> "
             f"黄金 {eval_res['funnel']['gold_steps']} 步, 入选窗口 {eval_res['funnel']['admitted_steps']} "
@@ -737,9 +732,30 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         )
 
     stepcat.finish(log, "s3.gate", done=len(session_funnels), total=len(records) or 1,
-                   msg=f"门控 {len(session_funnels)} 会话")
+                   msg=f"门控 {len(session_funnels)} 会话，可合成 {len(admitted)} 条")
+
+    stepcat.begin(log, "s3.windows", msg=f"从 {len(admitted)} 个会话拼装单步窗口")
+    for item in admitted:
+        eval_res = item["eval_res"]
+        project = item["project"]
+        for w_sgpt, w_oai in zip(eval_res["windows_sgpt"], eval_res["windows_oai"]):
+            st_name = w_sgpt["metadata"]["stage"]
+            stage_counts[st_name] += 1
+            project_counts[project] += 1
+            step_pairs.append((w_sgpt, w_oai))
+            if len(step_pairs) % 100 == 0:
+                stepcat.emit(log, "s3.windows", len(step_pairs), None, f"{len(step_pairs)} 条窗口")
     stepcat.finish(log, "s3.windows", done=len(step_pairs), total=len(step_pairs) or 1,
                    msg=f"{len(step_pairs)} 条窗口")
+
+    stepcat.begin(log, "s3.traj", msg=f"从 {len(admitted)} 个会话产出完整轨迹")
+    for item in admitted:
+        traj = item["eval_res"].get("gold_traj")
+        if traj:
+            gold_trajs.append(traj)
+            model_counts[item["model"]] += 1
+            stepcat.emit(log, "s3.traj", len(gold_trajs), len(admitted) or 1,
+                         f"{item['sid'][:8]} 轨迹 {len(gold_trajs)}")
     stepcat.finish(log, "s3.traj", done=len(gold_trajs), total=len(gold_trajs) or 1,
                    msg=f"{len(gold_trajs)} 条轨迹")
 

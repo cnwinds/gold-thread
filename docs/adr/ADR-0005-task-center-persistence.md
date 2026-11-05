@@ -10,8 +10,8 @@
 ## 决策
 
 1. **Task 是 Job 的展示层 + 磁盘壳**，不另起执行引擎。`task.id === job.id`。
-2. **持久化**：创建与结束时双写 `data/00_state/tasks.json`（保留最近 50 条，进行中始终保留）；与 `runs.json` 摘要并存。
-3. **API**：`GET /api/tasks`、`GET /api/tasks/{id}`、`POST /api/tasks/{id}/dismiss`；元数据由 `pipeline/task_registry.py` 的 `describe_task` 生成 `title` / `affects` / `links`。
+2. **持久化**：创建与结束时双写 `data/00_state/tasks.json`（保留最近 50 条，进行中始终保留）；与 `runs.json` 摘要并存。结束时额外落盘裁剪后的执行日志（默认最多 2000 行尾部），服务重启后详情仍可回看；列表接口只返回 `log_count`，不含完整 `logs`。
+3. **API**：`GET /api/tasks`、`GET /api/tasks/{id}`、`POST /api/tasks/{id}/dismiss`；元数据由 `pipeline/task_registry.py` 的 `describe_task` 生成 `title` / `affects` / `links`；`GET /api/tasks/{id}` 在无内存 Job 时返回磁盘 `logs`。
 4. **前端 TaskHub** 轮询任务列表（有 running 1.5s / 无 15s）；完成时统一 `onTaskFinished` 按 `affects` 刷新页面；侧栏 **任务中心** 与 **梳理与交付** 分离。
 5. **Stale**：服务重启后磁盘上仍为 `running` 且无内存 Job 时标为 `stale`，UI 可 dismiss。
 

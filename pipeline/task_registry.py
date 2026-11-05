@@ -9,6 +9,8 @@ from .common.store import now_iso, read_json, write_json_atomic
 
 MAX_TASKS = 50
 LIST_HOURS = 24
+# 任务详情可回看的执行日志上限（只留尾部，避免 tasks.json 膨胀）
+MAX_TASK_LOGS = 2000
 
 
 def tasks_path(cfg: Optional[Dict[str, Any]] = None) -> Any:
@@ -38,6 +40,17 @@ def _save_store(store: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> 
 def _sid8(sid: str) -> str:
     s = str(sid or "")
     return s[:8] if len(s) >= 8 else s
+
+
+def clip_logs(logs: Optional[List[str]], limit: int = MAX_TASK_LOGS) -> List[str]:
+    """裁剪任务日志尾部，供落盘与详情回放。"""
+    if not logs:
+        return []
+    if limit <= 0:
+        return []
+    if len(logs) <= limit:
+        return list(logs)
+    return list(logs[-limit:])
 
 
 def _sids_from_job(stage: str, extra: Dict[str, Any], result: Any) -> List[str]:
@@ -143,6 +156,7 @@ def task_record_from_job(job: Any) -> Dict[str, Any]:
     sids = _sids_from_job(job.stage, job.extra, job.result)
     if sids and "sids" not in meta["links"]:
         meta["links"] = {**meta["links"], "sids": sids}
+    logs = clip_logs(getattr(job, "logs", None) or [])
     rec = {
         "id": job.id,
         "stage": job.stage,
@@ -159,6 +173,8 @@ def task_record_from_job(job: Any) -> Dict[str, Any]:
         "subtitle": meta["subtitle"],
         "affects": meta["affects"],
         "links": meta["links"],
+        "logs": logs,
+        "log_count": len(logs),
     }
     return rec
 
@@ -229,6 +245,17 @@ def get_task(task_id: str, cfg: Optional[Dict[str, Any]] = None) -> Optional[Dic
     return None
 
 
+def _public_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    """列表接口不含完整 logs，只带 log_count。"""
+    item = {k: v for k, v in task.items() if k != "logs"}
+    stored = task.get("logs")
+    if isinstance(stored, list):
+        item["log_count"] = len(stored)
+    else:
+        item["log_count"] = int(task.get("log_count") or 0)
+    return item
+
+
 def list_tasks(
     cfg: Optional[Dict[str, Any]] = None,
     limit: int = 50,
@@ -259,7 +286,7 @@ def list_tasks(
     other = [t for t in out if t.get("status") != "running"]
     other.sort(key=lambda x: x.get("finished_at") or x.get("created_at") or "", reverse=True)
     merged = running + other
-    return {"running": running_n, "tasks": merged[:limit]}
+    return {"running": running_n, "tasks": [_public_task(t) for t in merged[:limit]]}
 
 
 def enrich_with_live_job(task: Dict[str, Any], job: Any) -> Dict[str, Any]:
@@ -270,4 +297,6 @@ def enrich_with_live_job(task: Dict[str, Any], job: Any) -> Dict[str, Any]:
     if task.get("dismissed"):
         merged["dismissed"] = True
     merged["live"] = True
+    # 列表场景不需要把完整 logs 塞进每行
+    merged.pop("logs", None)
     return merged
