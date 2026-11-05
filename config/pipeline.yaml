@@ -231,9 +231,10 @@ synth:
   # strip_history_thinking=false 时，历史里每步思考压缩到多少字符（0=不压缩）。
   # 实测（cap=3000）：不压缩 +1911 tokens/条（20 条超 12K）；压到 600 → +468（0 条超）。
   history_thinking_max_chars: 600
-  # 只从这些标签的黄金会话生成 SFT 正样本
-  sft_labels: ["positive"]
-  # 允许「个别反例/混合会话内的高分成功子段」进入 SFT 单步窗口
+  # 旧配置兼容字段：sft_labels 已不再使用。
+  # 所有来源的会话统一经过质量与复核门控；合格黄金步都可生成 SFT。
+  # sft_labels: ["positive"]
+  # 允许「个别来源/混合会话内的高分成功子段」在整会话门控未通过时进入 SFT 单步窗口
   sft_allow_subsegments:
   - session_id: "01a15c80"
     start_step: 50

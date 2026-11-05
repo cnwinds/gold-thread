@@ -7,12 +7,16 @@
 - detail ：这一步到底做什么（可对到代码位置）
 - output ：产出物（用于界面显示"做完了有什么"）
 
-pipeline 各 stage 通过 `emit()` 上报实时进度（`@@STEP {json}` 行），
-server 解析后挂到 job.progress，运行界面据此显示"正在做什么"。
+pipeline 各 stage 通过：
+- `begin()` / `finish()`：写入可见执行日志（开始说明工作内容，结束带耗时），并同步 `@@STEP`
+- `emit()`：仅上报实时进度（`@@STEP {json}`），不刷可见日志（用于循环内进度）
+
+server 解析 `@@STEP` 后挂到 job.progress，运行界面据此显示"正在做什么"。
 """
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Dict, List, Optional
 
 PHASES: List[Dict[str, Any]] = [
@@ -90,9 +94,66 @@ STEPS: List[Dict[str, Any]] = [
 ]
 
 STEP_BY_ID: Dict[str, Dict[str, Any]] = {s["id"]: s for s in STEPS}
+PHASE_BY_ID: Dict[str, Dict[str, Any]] = {p["id"]: p for p in PHASES}
 STEPS_BY_PHASE: Dict[str, List[Dict[str, Any]]] = {}
 for _s in STEPS:
     STEPS_BY_PHASE.setdefault(_s["phase"], []).append(_s)
+
+# log 回调稳定键 → {step_id: monotonic 起点}
+# 注意：不能用 id(bound_method)，CPython 每次取 bound method 可能是新对象。
+_ACTIVE: Dict[Any, Dict[str, float]] = {}
+
+
+def _log_key(log) -> Any:
+    """为 log 回调生成稳定键，使 begin/finish 能对上同一计时器。
+
+    不能用 id(bound_method)：CPython 每次取绑定方法可能是新对象。
+    list.append 等 builtin method 没有 __func__，改用 (id(self), __name__)。
+    """
+    self = getattr(log, "__self__", None)
+    if self is not None:
+        name = getattr(log, "__name__", None)
+        if not name:
+            func = getattr(log, "__func__", None)
+            name = getattr(func, "__name__", None)
+        if name:
+            return (id(self), name)
+        func = getattr(log, "__func__", None)
+        if func is not None:
+            return (id(self), func)
+    return id(log)
+
+
+def format_elapsed(seconds: float) -> str:
+    """把秒数格式成一眼能懂的耗时文案。"""
+    if seconds < 0:
+        seconds = 0.0
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    if seconds < 60:
+        return f"{int(round(seconds))}s"
+    total = int(round(seconds))
+    m, s = divmod(total, 60)
+    if m < 60:
+        return f"{m}分{s:02d}秒"
+    h, m = divmod(m, 60)
+    return f"{h}小时{m:02d}分{s:02d}秒"
+
+
+def _meta(step_id: str) -> Dict[str, Any]:
+    return STEP_BY_ID.get(step_id) or {"id": step_id, "label": step_id, "detail": "", "owner": "", "phase": ""}
+
+
+def _phase_name(step_id: str) -> str:
+    phase = _meta(step_id).get("phase") or ""
+    return (PHASE_BY_ID.get(phase) or {}).get("name") or phase or "步骤"
+
+
+def _safe_log(log, msg: str) -> None:
+    try:
+        log(msg)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def emit(log, step_id: str, done: Optional[int] = None, total: Optional[int] = None,
@@ -109,3 +170,46 @@ def emit(log, step_id: str, done: Optional[int] = None, total: Optional[int] = N
         log("@@STEP " + json.dumps(payload, ensure_ascii=False))
     except Exception:  # noqa: BLE001
         pass
+
+
+def begin(log, step_id: str, msg: str = "") -> None:
+    """标记步骤开始：写可见日志（工作内容一眼能懂）+ 上报进度。"""
+    meta = _meta(step_id)
+    label = meta.get("label") or step_id
+    detail = (meta.get("detail") or "").strip()
+    owner = (meta.get("owner") or "").strip()
+    phase = _phase_name(step_id)
+
+    _ACTIVE.setdefault(_log_key(log), {})[step_id] = time.monotonic()
+
+    extra = f"（{msg}）" if msg else ""
+    _safe_log(log, f"▶ 开始 · [{phase}] {label}{extra}")
+    if detail:
+        who = f"；执行方：{owner}" if owner else ""
+        _safe_log(log, f"   要做：{detail}{who}")
+    elif msg:
+        _safe_log(log, f"   要做：{msg}")
+
+    emit(log, step_id, msg=msg or label)
+
+
+def finish(log, step_id: str, done: Optional[int] = None, total: Optional[int] = None,
+           msg: str = "") -> None:
+    """标记步骤完成：写可见日志（含耗时）+ 上报完成进度。"""
+    started = _ACTIVE.get(_log_key(log), {}).pop(step_id, None)
+    elapsed = (time.monotonic() - started) if started is not None else None
+    meta = _meta(step_id)
+    label = meta.get("label") or step_id
+    phase = _phase_name(step_id)
+
+    parts = [f"✓ 完成 · [{phase}] {label}"]
+    if msg:
+        parts.append(msg)
+    if elapsed is not None:
+        parts.append(f"耗时 {format_elapsed(elapsed)}")
+    _safe_log(log, " · ".join(parts))
+
+    # 未显式给 done/total 时，按整步完成上报，便于 runbook 勾选
+    if done is None and total is None:
+        done, total = 1, 1
+    emit(log, step_id, done=done, total=total, msg=msg or label)

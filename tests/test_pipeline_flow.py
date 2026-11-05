@@ -124,6 +124,27 @@ class CurationGateTests(unittest.TestCase):
         self.assertTrue(out["full_sft_allowed"])
         self.assertGreaterEqual(len(out["windows_sgpt"]), 1)
 
+    def test_all_source_labels_share_the_same_sft_quality_gate(self):
+        self.cfg["synth"]["sft_labels"] = []  # 旧配置即使存在，也不应再影响训练去向。
+        for label in ("negative", "pending", "positive"):
+            with self.subTest(label=label):
+                record = copy.deepcopy(self.record)
+                record["label"] = label
+                out = evaluate_session_synthesis(record, self.annotation, self.cfg)
+                self.assertTrue(out["full_sft_allowed"])
+                self.assertGreaterEqual(len(out["windows_sgpt"]), 1)
+                self.assertEqual(label, out["label"])  # 来源仍保留在血缘中。
+
+    def test_model_discard_still_blocks_every_source_label(self):
+        for label in ("negative", "pending", "positive"):
+            with self.subTest(label=label):
+                record = copy.deepcopy(self.record)
+                record["label"] = label
+                record["model_report"] = {"verdict": "discard"}
+                out = evaluate_session_synthesis(record, self.annotation, self.cfg)
+                self.assertFalse(out["full_sft_allowed"])
+                self.assertEqual(0, len(out["windows_sgpt"]))
+
     def test_low_confidence_review_round_still_auto_gold(self):
         ann = {
             "review_key": "1:abc:6",

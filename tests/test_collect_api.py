@@ -10,12 +10,13 @@ from server.app import Job, _run_job, app
 
 
 class CollectJobTests(unittest.TestCase):
+    @patch("server.app.task_registry.sync_job")
     @patch("server.app._persist_job")
     @patch("server.app.stage2_gold.run")
     @patch("pipeline.collect.ingest_selected")
     @patch("server.app.load_config")
     def test_collect_ingest_only_skips_stage2(
-        self, mock_load_cfg, mock_ingest, mock_stage2, _mock_persist
+        self, mock_load_cfg, mock_ingest, mock_stage2, _mock_persist, _mock_sync
     ):
         mock_load_cfg.return_value = {"paths": {"data_dir": "data"}}
         mock_ingest.return_value = ["sid01"]
@@ -25,12 +26,13 @@ class CollectJobTests(unittest.TestCase):
         self.assertEqual("done", job.status)
         self.assertEqual({"sessions": ["sid01"]}, job.result)
 
+    @patch("server.app.task_registry.sync_job")
     @patch("server.app._persist_job")
     @patch("server.app.stage2_gold.run")
     @patch("pipeline.collect.ingest_selected")
     @patch("server.app.load_config")
     def test_collect_with_analyze_runs_stage2(
-        self, mock_load_cfg, mock_ingest, mock_stage2, _mock_persist
+        self, mock_load_cfg, mock_ingest, mock_stage2, _mock_persist, _mock_sync
     ):
         mock_load_cfg.return_value = {"paths": {"data_dir": "data"}}
         mock_ingest.return_value = ["sid01"]

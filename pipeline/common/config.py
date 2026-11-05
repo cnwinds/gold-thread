@@ -95,7 +95,6 @@ DEFAULTS: Dict[str, Any] = {
         "strip_history_thinking": True,
         # strip_history_thinking=false 时，单步历史思考压缩到多少字符（0=不压缩）
         "history_thinking_max_chars": 600,
-        "sft_labels": ["positive"],
         "sft_allow_subsegments": [
             {"session_id": "01a15c80", "start_step": 50, "end_step": 106},
         ],

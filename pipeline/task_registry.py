@@ -41,6 +41,8 @@ def _sid8(sid: str) -> str:
 
 
 def _sids_from_job(stage: str, extra: Dict[str, Any], result: Any) -> List[str]:
+    if stage == "delete":
+        return []
     if isinstance(result, dict):
         if result.get("sessions"):
             raw = result["sessions"]
@@ -105,6 +107,13 @@ def describe_task(stage: str, force: bool, extra: Optional[Dict[str, Any]] = Non
         title = "全流程" + ("（全量重建）" if force else "")
         affects = ["overview", "raw", "gold", "train"]
         links = {"open_tab": "gold"}
+    elif stage == "delete":
+        sids = extra.get("sessions") or []
+        sid = str(sids[0]) if sids else "?"
+        title = f"删除会话 {_sid8(sid)}"
+        subtitle = sid
+        affects = ["overview", "raw", "gold", "train"]
+        links = {}
     elif stage == "package":
         title = "交付打包"
         affects = ["overview", "train"]

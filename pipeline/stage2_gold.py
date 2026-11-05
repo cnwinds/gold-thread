@@ -396,9 +396,10 @@ def purify_by_judge(
         flat.append(u["msg"])
         flat.extend(u["tools"])
     # 手册阶段 2 第 3 条「中间步骤强制静默执行」是机械规则，由程序直接执行
+    stepcat.begin(log, "s2.normalize")
+    silent_n = 0
     if gcfg.get("silent_intermediate_steps", True):
         asst_units = [u for u in units if u["type"] == "assistant_turn"]
-        silent_n = 0
         for u in asst_units:
             m = u["msg"]
             if (m.get("tool_calls") or []) and (m.get("text") or "").strip():
@@ -406,14 +407,15 @@ def purify_by_judge(
                 m["text"] = ""
                 m["flags"] = sorted(set(m.get("flags", []) + ["silent_executed"]))
                 silent_n += 1
-        stepcat.emit(log, "s2.normalize", silent_n, None, f"静默 {silent_n} 步")
-        log(f"[judge] 机械静默执行 {silent_n} 步")
+    stepcat.finish(log, "s2.normalize", msg=f"静默 {silent_n} 步")
 
+    stepcat.begin(log, "s2.judge_steps")
     jmeta: Dict[str, Any] = {}
     decisions = judge.decide_steps(flat, cfg=cfg, log=log, out_meta=jmeta)
-    stepcat.emit(log, "s2.judge_steps", len(decisions), None, f"{len(decisions)} 条决定")
-    log(f"[judge] 步级决定 {len(decisions)} 条（模型）")
+    stepcat.finish(log, "s2.judge_steps", done=len(decisions), total=len(decisions) or 1,
+                   msg=f"{len(decisions)} 条决定")
 
+    stepcat.begin(log, "s2.apply")
     asst_total = sum(1 for u in units if u["type"] == "assistant_turn")
     prune_budget = int(asst_total * judge.MAX_STEPS_KEPT)
     kept: List[Tuple[Dict[str, Any], int]] = []
@@ -504,8 +506,8 @@ def purify_by_judge(
         chosen = next(u["msg"] for (u, i) in kept if i == nxt)
         pd["chosen_msg"] = copy.deepcopy(chosen)
 
-    stepcat.emit(log, "s2.apply", pruned_n + folded, asst_total,
-                 f"剪除 {pruned_n} / 折叠 {folded} / 改写 {compressed + backfilled}")
+    stepcat.finish(log, "s2.apply", done=pruned_n + folded, total=asst_total or 1,
+                   msg=f"剪除 {pruned_n} / 折叠 {folded} / 改写 {compressed + backfilled}")
 
     gold_messages: List[Dict[str, Any]] = []
     for u, _ in kept:
@@ -513,10 +515,12 @@ def purify_by_judge(
         gold_messages.extend(u["tools"])
 
     # ---- 接缝审核（模型）----
+    stepcat.begin(log, "s2.seams_extract")
     seams = judge.extract_seams(gold_messages, pruned, turn_marks, cfg=cfg)
-    stepcat.emit(log, "s2.seams_extract", len(seams), None, f"{len(seams)} 处接缝")
+    stepcat.finish(log, "s2.seams_extract", msg=f"{len(seams)} 处接缝")
     audit = {"seams_total": len(seams), "seams_fixed": 0, "seam_issues": []}
     if seams:
+        stepcat.begin(log, "s2.judge_seams")
         verdicts = judge.audit_seams(seams, cfg=cfg, log=log, out_meta=audit)
         by_id = {m.get("id"): m for m in gold_messages if m.get("role") == "assistant"}
         for sid, v in verdicts.items():
@@ -531,9 +535,9 @@ def purify_by_judge(
                 audit["seams_fixed"] += 1
             audit["seam_issues"].append({"seam_id": sid, "issue": v.get("issue") or "",
                                          "applied": bool(tgt is not None and patch)})
-        stepcat.emit(log, "s2.judge_seams", audit["seams_fixed"], len(seams),
-                     f"不平滑 {len(verdicts) - sum(1 for v in verdicts.values() if v.get('smooth', True))} 处，修 {audit['seams_fixed']}")
-        log(f"[judge] 接缝 {len(seams)} 处，模型判定不平滑 {sum(1 for v in verdicts.values() if not v.get('smooth', True))} 处，已修 {audit['seams_fixed']} 处")
+        rough = len(verdicts) - sum(1 for v in verdicts.values() if v.get("smooth", True))
+        stepcat.finish(log, "s2.judge_seams", done=audit["seams_fixed"], total=len(seams),
+                       msg=f"不平滑 {rough} 处，修 {audit['seams_fixed']}")
 
     stats = {
         "units_in": asst_total,
@@ -780,6 +784,7 @@ def run(
         quality_report: Dict[str, Any] = {}
         _judge_failed = int(purify_stats.get("judge_failed_batches", 0))
         if judge.enabled(cfg):
+            stepcat.begin(log, "s2.judge_quality", msg=f"会话 {sid[:8]}")
             quality_report = judge.audit_quality(gold_msgs, purify_stats, cfg=cfg, log=log)
             if quality_report and _judge_failed:
                 # 判断有失败批次 -> 结论不完整，保守降级，避免漏审放行
@@ -788,13 +793,16 @@ def run(
                 quality_report.setdefault("problems", []).append(
                     f"judge 有 {_judge_failed} 个批次失败，判断不完整，需人工复核")
             if quality_report:
-                stepcat.emit(log, "s2.judge_quality", None, None,
-                             f"{sid[:8]} {quality_report['verdict']}")
-                log(
-                    f"[judge] 质量报告 {sid[:8]}: {quality_report['verdict']}"
-                    f"（高光 {len(quality_report.get('highlights') or [])} 步"
-                    f"{'，建议整条重写→按不建议训练处理' if quality_report.get('needs_wholesale_rewrite') else ''}）"
+                rewrite_note = "，建议整条重写→按不建议训练处理" if quality_report.get("needs_wholesale_rewrite") else ""
+                stepcat.finish(
+                    log, "s2.judge_quality",
+                    msg=(
+                        f"{sid[:8]} {quality_report['verdict']}"
+                        f"（高光 {len(quality_report.get('highlights') or [])} 步{rewrite_note}）"
+                    ),
                 )
+            else:
+                stepcat.finish(log, "s2.judge_quality", msg=f"{sid[:8]} 无报告")
 
         # 病态步诊断（保留原始流中的全部）
         diag_path = rejects_out / f"{sid}.diagnostics.jsonl"
@@ -905,6 +913,7 @@ def run(
         }
         write_jsonl_atomic(gold_path, [record])
 
+        stepcat.begin(log, "s2.dpo_build", msg=f"会话 {sid[:8]}")
         dpo_pairs = _dpo_from_pruned(
             pruned, sys_msg, root_msg, sid, project, dominant, window_turns
         )
@@ -930,8 +939,9 @@ def run(
                 for pd in pruned
             ],
         )
-        stepcat.emit(log, "s2.dpo_build", len(all_dpo), None, f"{len(all_dpo)} 对")
         all_dpo.extend(dpo_pairs)
+        stepcat.finish(log, "s2.dpo_build", done=len(dpo_pairs), total=len(dpo_pairs) or 1,
+                       msg=f"{sid[:8]} 本会话 {len(dpo_pairs)} 对，累计 {len(all_dpo)} 对")
 
         ann_path = annotations_out / f"{sid}.json"
         prev_ann = read_json(ann_path, default={}) or {}
@@ -1048,6 +1058,5 @@ def run(
         "diagnostics": len(all_diag),
         "gold_steps": sum(v["stats"]["gold_steps"] for v in sessions_index.values()),
     }
-    stepcat.emit(log, "s2.dpo_build", len(all_dpo), len(all_dpo), f"{len(all_dpo)} 对")
     log(f"[stage2] 完成：写入 {written} / 复用 {reused}，黄金步数 {summary['gold_steps']}，DPO 对 {len(all_dpo)}")
     return summary

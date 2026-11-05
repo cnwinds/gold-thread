@@ -254,7 +254,6 @@ def evaluate_session_synthesis(
     """计算单条黄金会话在 Stage 3 的合成门控、每步去向审计与生成的窗口样本。"""
     scfg = cfg["synth"]
     window_turns = int(scfg.get("window_turns", 8))
-    sft_labels = set(scfg.get("sft_labels", ["positive"]))
     weights = scfg.get("weights", {})
     # 并行工具调用加权：训练集里并行步占比远低于 eval（实测 5.3% vs 26.2%），
     # 不加权的话模型会退化成「一次一个调用」。多调一步就走一次工具往返，是实打实的效率能力。
@@ -294,14 +293,13 @@ def evaluate_session_synthesis(
     human_kept = set(effective.get("kept") or [])
 
     sub_ranges = _subsegment_ranges(sid, cfg)
-    in_sft_label = label in sft_labels
     blocked_by_review = eff_state not in curation.IN_SFT
     # 模型质量报告否决：需要整条重写 / 判定丢弃 -> 不值得训练，直接报告不产样本
     mrep = rec.get("model_report") or {}
     model_block = bool(mrep.get("needs_wholesale_rewrite")) or (mrep.get("verdict") == "discard")
 
-    # 完整轨迹仅在属于 sft_labels 且未被复核阻断时产出
-    full_sft_allowed = in_sft_label and not blocked_by_review and not model_block
+    # 完整轨迹只由质量与复核门控决定；label 仅是来源血缘，不再限制 SFT。
+    full_sft_allowed = not blocked_by_review and not model_block
     # 单步窗口：允许完整 SFT 会话，或命中 sft_allow_subsegments 白名单子段且未被人工显式驳回的会话
     subsegment_only = (not full_sft_allowed) and bool(sub_ranges) and (eff_state != "rejected") and not model_block
 
@@ -387,8 +385,7 @@ def evaluate_session_synthesis(
         reason = ""
 
         if not full_sft_allowed and not subsegment_only:
-            reason = ("model_discard:" + str(mrep.get("verdict") or "needs_wholesale_rewrite")) if model_block else (
-                f"session_blocked:{eff_state}" if in_sft_label else f"label_excluded:{label}")
+            reason = ("model_discard:" + str(mrep.get("verdict") or "needs_wholesale_rewrite")) if model_block else f"session_blocked:{eff_state}"
             funnel["blocked_or_subsegment_dropped"] += 1
         elif subsegment_only and not any(s <= step_no <= e for s, e in sub_ranges):
             reason = "outside_subsegment_whitelist"
@@ -639,6 +636,9 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     admit_reason_counts = Counter()
     drop_reason_counts = Counter()
 
+    stepcat.begin(log, "s3.gate", msg=f"共 {len(records)} 个黄金会话")
+    stepcat.begin(log, "s3.windows")
+    stepcat.begin(log, "s3.traj")
     for sid, entry in sorted(records.items()):
         label = entry.get("label", "pending")
         project = entry.get("project_group", "unknown")
@@ -714,8 +714,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
 
         stepcat.emit(log, "s3.gate", None, None, f"{sid[:8]} {eval_res['effective_state']}")
         if not eval_res["full_sft_allowed"] and not eval_res["subsegment_only"]:
-            if label in set(scfg.get("sft_labels", ["positive"])):
-                log(f"[stage3] {curation.EFFECTIVE_ZH.get(eff_state, eff_state)}，不进 SFT: {sid}")
+            log(f"[stage3] {curation.EFFECTIVE_ZH.get(eff_state, eff_state)}，不进 SFT: {sid}")
             continue
 
         if eval_res["gold_traj"]:
@@ -737,9 +736,17 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             f"(改写挽救 {eval_res['funnel']['rescued_steps']}, 排除 {eval_res['funnel']['excluded_steps']})"
         )
 
+    stepcat.finish(log, "s3.gate", done=len(session_funnels), total=len(records) or 1,
+                   msg=f"门控 {len(session_funnels)} 会话")
+    stepcat.finish(log, "s3.windows", done=len(step_pairs), total=len(step_pairs) or 1,
+                   msg=f"{len(step_pairs)} 条窗口")
+    stepcat.finish(log, "s3.traj", done=len(gold_trajs), total=len(gold_trajs) or 1,
+                   msg=f"{len(gold_trajs)} 条轨迹")
+
     # ---- DPO 偏好对：模型复核（多模型生成的对里，风格差异/长短偏好不算正误）----
     dpo_review_stats = {"checked": 0, "swapped": 0, "dropped": 0}
     if dpo_pairs and judge.enabled(cfg):
+        stepcat.begin(log, "s3.dpo_review", msg=f"共 {len(dpo_pairs)} 对")
         verdicts = judge.review_dpo(dpo_pairs, cfg=cfg, log=log)
         dpo_review_stats["checked"] = len(dpo_pairs)
         kept_pairs = []
@@ -759,24 +766,31 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             kept_pairs.append(p)
         # 关键：把过滤结果写回，否则 drop 的偏好对仍会进训练集
         dpo_pairs = kept_pairs
-        stepcat.emit(log, "s3.dpo_review", len(dpo_pairs), dpo_review_stats["checked"],
-                     f"调换 {dpo_review_stats['swapped']} / 丢弃 {dpo_review_stats['dropped']}")
-        log(
-            f"[judge] DPO 复核 {dpo_review_stats['checked']} 对：调换 {dpo_review_stats['swapped']}，"
-            f"丢弃 {dpo_review_stats['dropped']}，保留 {len(dpo_pairs)}"
+        stepcat.finish(
+            log, "s3.dpo_review",
+            done=len(dpo_pairs), total=dpo_review_stats["checked"] or 1,
+            msg=(
+                f"调换 {dpo_review_stats['swapped']} / 丢弃 {dpo_review_stats['dropped']}，"
+                f"保留 {len(dpo_pairs)}"
+            ),
         )
 
     # 全局打乱（跨项目混训，且保证 ShareGPT 与 OpenAI 格式严格同序）
+    stepcat.begin(log, "s3.split")
     if scfg.get("shuffle", True):
         rng = random.Random(int(scfg.get("seed", 42)))
         rng.shuffle(gold_trajs)
         rng.shuffle(step_pairs)
 
-    stepcat.emit(log, "s3.split", len(split_map), len(split_map),
-                 " / ".join(f"{k}->{v}" for k, v in list(split_map.items())[:4]))
+    stepcat.finish(
+        log, "s3.split",
+        done=len(split_map), total=len(split_map) or 1,
+        msg=" / ".join(f"{k}->{v}" for k, v in list(split_map.items())[:4]) or "无切分",
+    )
     sgpt = [p[0] for p in step_pairs] if fcfg.get("sharegpt", True) else []
     oai = [p[1] for p in step_pairs] if fcfg.get("openai", True) else []
 
+    stepcat.begin(log, "s3.manifest")
     out = {
         "sft_gold_trajectories_sharegpt.jsonl": gold_trajs if fcfg.get("sharegpt", True) else [],
         "sft_step_windows_sharegpt.jsonl": sgpt,
@@ -893,8 +907,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             dataset_info.setdefault(key, meta)
     write_json_atomic(info_path, dataset_info)
 
-    stepcat.emit(log, "s3.manifest", len(dataset_info), len(dataset_info),
-                 f"{len(dataset_info)} 个数据集登记")
+    stepcat.finish(log, "s3.manifest", done=len(dataset_info), total=len(dataset_info) or 1,
+                   msg=f"{len(dataset_info)} 个数据集登记")
 
     stats = {
         "generated_at": now_iso(),
@@ -920,9 +934,11 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
 
     # handoff：把"怎么拿这批数据训练"写成可照做的文档 + 可直接用的训练配置
     try:
+        stepcat.begin(log, "s3.handoff")
         ho = write_handoff(train_root, counts, stats, dataset_info, split_map, cfg)
         kept = ho.pop("_kept", "")
-        stepcat.emit(log, "s3.handoff", 3, 3, "handoff.md / train_sft.yaml / train_dpo.yaml")
+        stepcat.finish(log, "s3.handoff", done=3, total=3,
+                       msg="handoff.md / train_sft.yaml / train_dpo.yaml")
         log(f"[stage3] handoff 已生成: {', '.join(Path(p).name for p in ho.values()) or '无（均已存在）'}")
         if kept:
             log(f"[stage3] handoff 保留已有文件（未覆盖，HANDOFF_FORCE=1 可强制重建）: {kept}")
@@ -933,8 +949,10 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     try:
         from pipeline.package import build_delivery_zip  # noqa: PLC0415
 
+        stepcat.begin(log, "s3.package")
         pkg = build_delivery_zip(train_root, cfg, log=log)
-        stepcat.emit(log, "s3.package", 1, 1, pkg.get("zip_name", "delivery.zip"))
+        stepcat.finish(log, "s3.package", done=1, total=1,
+                       msg=pkg.get("zip_name", "delivery.zip"))
     except Exception as exc:  # noqa: BLE001
         log(f"[stage3] 交付包生成失败: {exc}")
 

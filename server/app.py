@@ -147,9 +147,17 @@ def _run_job(job: Job) -> None:
             job.log("[analyze] 开始（单会话提纯，会调模型 judge，耗时取决于步数）")
         elif job.stage == "collect":
             job.log(f"[collect] 开始（analyze={bool(job.extra.get('analyze'))}）")
+        elif job.stage == "delete":
+            job.log("[delete] 开始（删除当前数据集及下游产物，保留源会话与冻结交付包）")
         else:
             job.log(f"[{job.stage}] 开始（force={job.force}）")
-        if job.stage == "stage1":
+        if job.stage == "delete":
+            from pipeline.session_delete import delete_session
+
+            sid = str((job.extra.get("sessions") or [""])[0])
+            job.result = delete_session(sid, cfg=cfg, log=job.log)
+            _ROW_CACHE.clear()
+        elif job.stage == "stage1":
             job.result = stage1_extract.run(force=job.force, log=job.log, cfg=cfg)
         elif job.stage == "stage2":
             job.result = stage2_gold.run(force=job.force, log=job.log, cfg=cfg)
@@ -271,6 +279,7 @@ def _start(stage: str, force: bool, extra: Optional[Dict[str, Any]] = None) -> J
         for j in JOBS.values():
             clash = (
                 j.stage == stage or stage == "all" or j.stage == "all"
+                or stage == "delete" or j.stage == "delete"
                 or (j.stage in gold_write and stage in gold_write)
             )
             if j.status == "running" and clash:
@@ -283,6 +292,14 @@ def _start(stage: str, force: bool, extra: Optional[Dict[str, Any]] = None) -> J
         pass
     threading.Thread(target=_run_job, args=(job,), daemon=True).start()
     return job
+
+
+def _assert_no_delete_running() -> None:
+    """同步写接口与后台级联删除互斥，避免旧索引覆盖删除结果。"""
+    with JOBS_LOCK:
+        running = next((j for j in JOBS.values() if j.stage == "delete" and j.status == "running"), None)
+    if running:
+        raise HTTPException(409, f"正在删除会话，请稍后再试: {running.id}")
 
 
 # ---------------------------------------------------------------------------
@@ -815,6 +832,7 @@ def overview() -> Dict[str, Any]:
     }
 
     labels = Counter()
+    source_models = Counter()
     projects: Dict[str, Dict[str, Any]] = {}
     models = Counter()
     raw_turns_total = 0
@@ -826,6 +844,7 @@ def overview() -> Dict[str, Any]:
     for sid, e in raw_index["sessions"].items():
         label = e.get("label", "pending")
         labels[label] += 1
+        source_models[_dominant_model(e) or "unknown"] += 1
         proj = e.get("project_group", "unknown")
         p = projects.setdefault(
             proj,
@@ -924,6 +943,7 @@ def overview() -> Dict[str, Any]:
             },
         },
         "labels": dict(labels),
+        "source_models": dict(source_models),
         "raw_steps": raw_steps,
         "gold_steps": gold_steps,
         "projects": sorted(projects.values(), key=lambda x: -x["sessions"]),
@@ -965,12 +985,22 @@ def _session_lineage(sid: str, entry: Dict[str, Any], funnels: Dict[str, Any]) -
     }
 
 
+def _dominant_model(entry: Dict[str, Any]) -> str:
+    if entry.get("dominant_model"):
+        return str(entry["dominant_model"])
+    models = entry.get("models") or {}
+    if not isinstance(models, dict) or not models:
+        return ""
+    return max(models.items(), key=lambda item: int(item[1] or 0))[0]
+
+
 @app.get("/api/raw/sessions")
 def raw_sessions(
     label: str = "",
     project: str = "",
     q: str = "",
     adopted: str = "",
+    model: str = "",
     limit: int = 500,
 ) -> Dict[str, Any]:
     cfg = load_config()
@@ -982,6 +1012,8 @@ def raw_sessions(
     adopted_n = 0
     pool = 0
     for sid, e in index["sessions"].items():
+        if model and _dominant_model(e) != model:
+            continue
         if label and e.get("label") != label:
             continue
         if project and e.get("project_group") != project:
@@ -1031,6 +1063,7 @@ def raw_sessions(
         "total": len(rows),
         "pool": pool,
         "adopted": adopted_n,
+        "source_models": sorted({_dominant_model(e) for e in index["sessions"].values() if _dominant_model(e)}),
         "sessions": rows[:limit],
         "audit": {
             "skipped": index.get("skipped", {}),
@@ -1089,6 +1122,7 @@ class RelabelBody(BaseModel):
 
 @app.post("/api/raw/session/{sid}/relabel")
 def relabel(sid: str, body: RelabelBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
     if body.label not in ("positive", "negative", "pending"):
         raise HTTPException(400, "label 必须是 positive|negative|pending")
     cfg = load_config()
@@ -1107,6 +1141,7 @@ class TurnOverridesBody(BaseModel):
 
 @app.put("/api/raw/session/{sid}/turns")
 def save_turn_overrides(sid: str, body: TurnOverridesBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
     cfg = load_config()
     try:
         res = stage1_extract.update_turn_overrides(
@@ -1141,6 +1176,25 @@ def analyze_one(sid: str) -> Dict[str, Any]:
     if sid not in (index.get("sessions") or {}):
         raise HTTPException(404, "会话不存在")
     job = _start("analyze", True, {"sessions": [sid]})
+    return {"job_id": job.id}
+
+
+@app.delete("/api/session/{sid}")
+def delete_session_api(sid: str) -> Dict[str, Any]:
+    """从原始、黄金与当前训练工作区联动删除一条会话。"""
+    from pipeline.session_delete import validate_sid
+
+    try:
+        sid = validate_sid(sid)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    cfg = load_config()
+    dirs = stage_dirs(cfg)
+    raw_index = load_index(dirs["raw"] / "index.json")
+    gold_index = load_index(dirs["gold"] / "index.json")
+    if sid not in (raw_index.get("sessions") or {}) and sid not in (gold_index.get("sessions") or {}):
+        raise HTTPException(404, "会话不存在")
+    job = _start("delete", False, {"sessions": [sid]})
     return {"job_id": job.id}
 
 
@@ -1203,7 +1257,7 @@ def raw_to_gold(sid: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/gold/sessions")
-def gold_sessions(label: str = "", project: str = "", status: str = "", q: str = "") -> Dict[str, Any]:
+def gold_sessions(label: str = "", project: str = "", status: str = "", q: str = "", model: str = "", output: str = "") -> Dict[str, Any]:
     cfg = load_config()
     dirs = stage_dirs(cfg)
     idx = load_index(dirs["gold"] / "index.json")
@@ -1211,6 +1265,8 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
     session_funnels = train_stats.get("session_funnels") or {}
     rows = []
     for sid, e in idx["sessions"].items():
+        if model and _dominant_model(e) != model:
+            continue
         if label and e.get("label") != label:
             continue
         if project and e.get("project_group") != project:
@@ -1223,6 +1279,13 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
         eff = curation.resolve(ann, cfg)
         rnd = curation.latest_round(ann)
         funnel_info = (session_funnels.get(sid) or {}).get("funnel") or {}
+        lineage = _session_lineage(sid, e, session_funnels)
+        if output == "sft" and not (lineage["train_written"] and (lineage["sft_windows"] or 0) > 0):
+            continue
+        if output == "dpo" and not (lineage["train_written"] and (lineage["dpo_train"] or 0) > 0):
+            continue
+        if output == "unwritten" and lineage["train_written"]:
+            continue
         rows.append(
             {
                 **{k: v for k, v in e.items() if k != "annotation_file"},
@@ -1236,11 +1299,15 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
                 "review_round": rnd.get("round"),
                 "review_progress": curation.progress(ann),
                 "funnel": funnel_info,
-                "lineage": _session_lineage(sid, e, session_funnels),
+                "lineage": lineage,
             }
         )
     rows.sort(key=lambda r: (r.get("label", ""), r.get("project_group", ""), r["session_id"]))
-    return {"total": len(rows), "sessions": rows}
+    return {
+        "total": len(rows),
+        "source_models": sorted({_dominant_model(e) for e in idx["sessions"].values() if _dominant_model(e)}),
+        "sessions": rows,
+    }
 
 
 @app.get("/api/gold/session/{sid}")
@@ -1312,6 +1379,7 @@ def _load_ann(sid: str) -> tuple:
 
 @app.put("/api/gold/session/{sid}/review/items")
 def save_review_items(sid: str, body: ReviewItemsBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
     cfg = load_config()
     path, ann = _load_ann(sid)
     try:
@@ -1334,6 +1402,7 @@ def save_review_items(sid: str, body: ReviewItemsBody) -> Dict[str, Any]:
 
 @app.post("/api/gold/session/{sid}/review/batch")
 def batch_review_items(sid: str, body: ReviewBatchBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
     cfg = load_config()
     path, ann = _load_ann(sid)
     hr = curation.human(ann)
@@ -1389,6 +1458,7 @@ def batch_review_items(sid: str, body: ReviewBatchBody) -> Dict[str, Any]:
 
 @app.post("/api/gold/session/{sid}/review/decision")
 def review_decision(sid: str, body: ReviewDecisionBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
     cfg = load_config()
     path, ann = _load_ann(sid)
     try:
@@ -1413,6 +1483,7 @@ def review_decision(sid: str, body: ReviewDecisionBody) -> Dict[str, Any]:
 
 @app.post("/api/gold/session/{sid}/review/refine")
 def review_refine(sid: str, body: ReviewItemsBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
     path, ann = _load_ann(sid)
     try:
         curation.update_items(ann, body.items, body.note)
@@ -1432,6 +1503,7 @@ class FinalizeBody(BaseModel):
 
 @app.post("/api/gold/session/{sid}/finalize")
 def gold_finalize(sid: str, body: FinalizeBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
     cfg = load_config()
     path, ann = _load_ann(sid)
     try:

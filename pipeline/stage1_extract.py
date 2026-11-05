@@ -204,6 +204,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
 
     dedupe_n = 0
     if sessions_dir.exists():
+        stepcat.begin(log, "s1.scan")
         for path in sorted(sessions_dir.rglob("*.jsonl")):
             rel = path.relative_to(sessions_dir).as_posix()
             folder = rel.split("/")[0]
@@ -220,12 +221,14 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                     rejected_samples.append({"rel_path": rel, "folder": folder, "reason": reason_tag})
                 continue
             candidates.append({"path": path, "rel": rel})
-        stepcat.emit(log, "s1.scan", sum(folder_stats.values()), sum(folder_stats.values()),
-                     f"扫描 {sum(folder_stats.values())} 个文件")
-        stepcat.emit(log, "s1.admit", len(candidates), sum(folder_stats.values()),
-                     f"准入 {len(candidates)} 个")
+        scanned_n = sum(folder_stats.values())
+        stepcat.finish(log, "s1.scan", done=scanned_n, total=scanned_n or 1,
+                       msg=f"扫描 {scanned_n} 个文件")
+        stepcat.begin(log, "s1.admit")
+        stepcat.finish(log, "s1.admit", done=len(candidates), total=scanned_n or 1,
+                       msg=f"准入 {len(candidates)} 个")
         log(
-            f"[stage1] 扫描 {sum(folder_stats.values())} 个会话文件，准入 {len(candidates)} 个"
+            f"[stage1] 扫描 {scanned_n} 个会话文件，准入 {len(candidates)} 个"
             f"（忽略 {skipped['non_crack_folder']} 个非项目目录，排除 {skipped['excluded_folder']} 个根目录）"
         )
     else:
@@ -275,9 +278,11 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
                 if dup["line_count"] < keeper["line_count"] * 0.5:
                     duplicate_of[dup["session_id"]] = keeper["session_id"]
 
+    stepcat.begin(log, "s1.dedupe")
     if duplicate_of:
         dedupe_n = len(duplicate_of)
-    stepcat.emit(log, "s1.dedupe", dedupe_n, dedupe_n, f"去重 {dedupe_n} 个副本")
+    stepcat.finish(log, "s1.dedupe", done=dedupe_n, total=dedupe_n or 1,
+                   msg=f"去重 {dedupe_n} 个副本")
 
     sessions_index: Dict[str, Any] = {}
     state_files: Dict[str, Any] = {}
@@ -287,6 +292,10 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     label_counts = Counter()
 
     total_parsed = len(parsed)
+    use_model_classify = bool(cfg.get("turns", {}).get("use_model", False))
+    if use_model_classify:
+        stepcat.begin(log, "s1.classify", msg=f"最多 {total_parsed} 个会话")
+    stepcat.begin(log, "s1.flow", msg=f"最多 {total_parsed} 个会话")
     for done_i, s in enumerate(parsed, 1):
         sid = s["session_id"]
         src = Path(s["source_path"])
@@ -326,7 +335,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         existing_meta_path = Path(prev_entry["meta_file"]) if prev_entry and prev_entry.get("meta_file") else None
         existing_meta = read_json(existing_meta_path, default={}) if existing_meta_path and existing_meta_path.exists() else {}
         annotations = (existing_meta or {}).get("turn_annotations")
-        if cfg.get("turns", {}).get("use_model", False) and (force or not annotations):
+        if use_model_classify and (force or not annotations):
             stepcat.emit(log, "s1.classify", done_i, total_parsed, f"分类 {sid[:8]}")
             try:
                 annotations = classify_session(s, cfg=cfg, log=log)
@@ -435,7 +444,11 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         "skipped": skipped,
         "duplicates": duplicate_of,
     }
-    stepcat.emit(log, "s1.flow", total_parsed, total_parsed, f"写入 {written} / 复用 {reused}")
+    if use_model_classify:
+        stepcat.finish(log, "s1.classify", done=total_parsed, total=total_parsed or 1,
+                       msg=f"分类完成（写入 {written} / 复用 {reused}）")
+    stepcat.finish(log, "s1.flow", done=total_parsed, total=total_parsed or 1,
+                   msg=f"写入 {written} / 复用 {reused}")
     log(
         f"[stage1] 完成：写入 {written} / 复用 {reused} / 清理 {removed_stale}；"
         f"正例 {label_counts.get('positive', 0)}，反例 {label_counts.get('negative', 0)}，待定 {label_counts.get('pending', 0)}"
