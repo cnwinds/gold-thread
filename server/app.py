@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from pipeline import curation, stage1_extract, stage2_gold, stage3_synth
 from pipeline import steps as stepcat
+from pipeline import task_registry
 from pipeline.common import pilog
 from pipeline.common.config import (
     CONFIG_PATH,
@@ -142,7 +143,12 @@ JOBS_LOCK = threading.Lock()
 def _run_job(job: Job) -> None:
     cfg = load_config()
     try:
-        job.log(f"[{job.stage}] 开始（force={job.force}）")
+        if job.stage == "analyze":
+            job.log("[analyze] 开始（单会话提纯，会调模型 judge，耗时取决于步数）")
+        elif job.stage == "collect":
+            job.log(f"[collect] 开始（analyze={bool(job.extra.get('analyze'))}）")
+        else:
+            job.log(f"[{job.stage}] 开始（force={job.force}）")
         if job.stage == "stage1":
             job.result = stage1_extract.run(force=job.force, log=job.log, cfg=cfg)
         elif job.stage == "stage2":
@@ -233,6 +239,10 @@ def _run_job(job: Job) -> None:
     finally:
         job.finished_at = now_iso()
         _persist_job(job)
+        try:
+            task_registry.sync_job(job, cfg)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _persist_job(job: Job) -> None:
@@ -267,6 +277,10 @@ def _start(stage: str, force: bool, extra: Optional[Dict[str, Any]] = None) -> J
                 raise HTTPException(409, f"已有作业在运行: {j.stage} ({j.id})")
         job = Job(stage, force, extra)
         JOBS[job.id] = job
+    try:
+        task_registry.register_job(job, load_config())
+    except Exception:  # noqa: BLE001
+        pass
     threading.Thread(target=_run_job, args=(job,), daemon=True).start()
     return job
 
@@ -706,6 +720,60 @@ def get_job(job_id: str, offset: int = 0) -> Dict[str, Any]:
     if not job:
         raise HTTPException(404, "作业不存在")
     return job.as_dict(with_logs=True, offset=offset)
+
+
+@app.get("/api/tasks")
+def list_tasks_api(limit: int = Query(50, ge=1, le=100)) -> Dict[str, Any]:
+    cfg = load_config()
+    with JOBS_LOCK:
+        active = set(JOBS.keys())
+    task_registry.reconcile_stale(active, cfg)
+    data = task_registry.list_tasks(cfg, limit=limit)
+    enriched: List[Dict[str, Any]] = []
+    with JOBS_LOCK:
+        for t in data["tasks"]:
+            rec = dict(t)
+            job = JOBS.get(t["id"])
+            if job:
+                rec = task_registry.enrich_with_live_job(rec, job)
+            enriched.append(rec)
+    running_live = sum(1 for t in enriched if t.get("status") == "running")
+    return {"running": running_live, "tasks": enriched}
+
+
+@app.get("/api/tasks/{task_id}")
+def get_task_api(task_id: str, offset: int = 0) -> Dict[str, Any]:
+    cfg = load_config()
+    with JOBS_LOCK:
+        job = JOBS.get(task_id)
+        active = set(JOBS.keys())
+    task_registry.reconcile_stale(active, cfg)
+    rec = task_registry.get_task(task_id, cfg)
+    if not rec and not job:
+        raise HTTPException(404, "任务不存在")
+    if job:
+        base = rec or {}
+        merged = task_registry.enrich_with_live_job({**base, **task_registry.task_record_from_job(job)}, job)
+        d = dict(merged)
+        d["logs"] = job.logs[offset:]
+        d["offset"] = offset
+        d["log_count"] = len(job.logs)
+        return d
+    if rec:
+        d = dict(rec)
+        d["logs"] = []
+        d["offset"] = offset
+        d["log_count"] = 0
+        d["live"] = False
+        return d
+    raise HTTPException(404, "任务不存在")
+
+
+@app.post("/api/tasks/{task_id}/dismiss")
+def dismiss_task_api(task_id: str) -> Dict[str, Any]:
+    if not task_registry.dismiss_task(task_id, load_config()):
+        raise HTTPException(404, "任务不存在")
+    return {"ok": True}
 
 
 @app.get("/api/runs")

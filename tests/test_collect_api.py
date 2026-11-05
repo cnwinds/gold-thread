@@ -68,5 +68,29 @@ class CollectApiTests(unittest.TestCase):
         )
 
 
+class CollectConflictTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        import server.app as sa
+
+        with sa.JOBS_LOCK:
+            sa.JOBS.clear()
+
+    def test_second_collect_while_running_returns_409(self) -> None:
+        import server.app as sa
+
+        running = Job("collect", False, {"source": "cursor", "ids": ["34c2f50a"]})
+        with sa.JOBS_LOCK:
+            sa.JOBS[running.id] = running
+        client = TestClient(app)
+        res = client.post(
+            "/api/collect",
+            json={"source": "pi", "ids": ["other"], "analyze": False},
+        )
+        self.assertEqual(409, res.status_code)
+        detail = res.json().get("detail") or ""
+        self.assertIn("已有作业在运行", detail)
+        self.assertIn(running.id, detail)
+
+
 if __name__ == "__main__":
     unittest.main()

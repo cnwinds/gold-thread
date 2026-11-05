@@ -770,6 +770,21 @@
   .pick-preview-head{padding:12px 16px 0;border-bottom:1px solid var(--line-soft);background:var(--ink-1)}
   .collect-main .flow{border:none;border-radius:0;margin:0}
   .collect-main .flow .flow-h{position:sticky;top:0;z-index:3;background:var(--ink-1)}
+  #tabs button em#navTasksBadge{font-style:normal;font-size:10px;min-width:0;padding:0 6px;border-radius:10px;margin-left:6px;background:transparent;color:var(--text-3)}
+  #tabs button em#navTasksBadge.on{background:var(--gold);color:var(--ink-0);font-weight:600}
+  .task-strip{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--ink-1)}
+  .task-strip .chip{cursor:pointer;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tasks-shell{display:grid;grid-template-columns:minmax(260px,36%) minmax(0,1fr);gap:12px;min-height:460px}
+  @media (max-width:900px){.tasks-shell{grid-template-columns:1fr}}
+  .tasks-list{border:1px solid var(--line);border-radius:10px;background:var(--ink-1);overflow:auto;max-height:calc(100vh - 220px)}
+  .task-row{padding:10px 12px;border-bottom:1px solid var(--line-soft);cursor:pointer}
+  .task-row:hover{background:rgba(255,255,255,.02)}
+  .task-row.on{background:rgba(217,180,103,.07);border-left:3px solid var(--gold);padding-left:9px}
+  .task-detail{border:1px solid var(--line);border-radius:10px;background:var(--ink-1);display:flex;flex-direction:column;min-height:360px}
+  .task-log{flex:1;overflow:auto;font-family:var(--f-mono);font-size:12px;padding:10px 12px;max-height:50vh}
+  .task-log div{padding:1px 0;white-space:pre-wrap;word-break:break-word}
+  .task-log .err{color:var(--neg)}
+  .task-log .ok{color:var(--mint)}
   .pick-row{display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;align-items:start;
     padding:8px 10px;border-bottom:1px solid var(--line-soft);cursor:pointer}
   .pick-row:hover{background:rgba(255,255,255,.03)}
@@ -928,6 +943,9 @@
         <button data-tab="train" class="s-train"><span class="node"></span>训练数据<em id="navTrain"></em></button>
       </div>
       <div class="nav-cap">操作</div>
+      <button data-tab="tasks">
+        <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg>
+        任务中心<em id="navTasksBadge"></em></button>
       <button data-tab="runs">
         <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5 3.5v9l7-4.5z" stroke-linejoin="round"/></svg>
         梳理与交付</button>
@@ -950,6 +968,7 @@
       <section id="view-raw" class="hidden"></section>
       <section id="view-gold" class="hidden"></section>
       <section id="view-train" class="hidden"></section>
+      <section id="view-tasks" class="hidden"></section>
       <section id="view-config" class="hidden"></section>
       <section id="view-runs" class="hidden"></section>
     </main>
@@ -977,7 +996,7 @@ const COLORS = {ore:"#8d9ab2", gold:"#d9b467", mint:"#5fb9c4", pos:"#8fc47f", ne
 const LABEL_ZH = {positive:"正例", negative:"反例", pending:"待定"};
 const VERDICT_ZH = {gold:"入选黄金", reject:"剔除", revise:"需修订", maybe:"存疑", needs_review:"待人工复核"};
 const SCRIPT_ZH = {gold:"黄金", negative_source:"反例素材", raw_only:"仅保留原始", needs_review:"待复核", discard_recommended:"不建议训练", rejected:"步数不足"};
-const RUN_ZH = {done:"完成", failed:"失败", running:"运行中"};
+const RUN_ZH = {done:"完成", failed:"失败", running:"运行中", stale:"已中断"};
 const PATHO_ZH = {
   missing_thinking_block:"缺失思考块", tool_execution_error:"工具执行报错", over_rumination_length:"思考过长",
   over_rumination_doubt_loop:"反复自我怀疑", mental_hex_checkmark:"心算十六进制自证", tool_logical_failure:"工具逻辑失败",
@@ -988,14 +1007,15 @@ const DPO_SRC_ZH = {stage2_pruned:"剪掉的弯路", negative_step:"反例中的
 const SKIP_ZH = {non_crack_folder:"非目标目录", excluded_folder:"排除目录", empty:"空会话"};
 const PAGES = {
   overview: ["数据精炼工作台", "从源会话准入、回合清洗、黄金提纯到 SFT / DPO 生成：看清每一层的输入、损耗与最终产出。"],
-  raw:      ["Stage 1 · 采集与清洗", "先从 pi 或 Cursor 里预览会话，勾选后采集整段内容并自动分析。下面的列表是已经加入分析的会话。"],
-  gold:     ["Stage 2 · 黄金提纯", "每一行都是一条会话的去向：有用步变成 SFT 窗口，弯路变成这条会话的 DPO。"],
+  raw:      ["Stage 1 · 采集与清洗", "点会话行打开抽屉：正文浏览，底部统一设角色 / 分析 / 跳转。"],
+  gold:     ["Stage 2 · 黄金提纯", "点会话行打开抽屉：正文看提纯结果，底部与原始页相同布局（角色 + 操作）。"],
   train:    ["Stage 3 · 训练样本", "默认只看将要生成的数据集。点开一条样本，能回到产出它的黄金会话。"],
   runs:     ["数据梳理 · 运行与交付", "选定导出格式后打包。每一次打出来的 zip 都留在历史里，可以再下载。"],
+  tasks:    ["任务中心", "采集、分析、管线阶段与打包的进度与日志；完成后相关页面会自动刷新。"],
   config:   ["配置", "直接编辑 pipeline.yaml，保存后重跑管线生效。"],
 };
 
-let STATE = { tab: "overview", overview: null, raw: {label:"", project:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {label:"", project:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", fileq:"", scope:"in"}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
+let STATE = { tab: "overview", overview: null, tasksSelectedId: "", raw: {label:"", project:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {label:"", project:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", fileq:"", scope:"in"}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
 /** 交付打包作业 UI 状态（独立于 pipeline stage jobs） */
 let PACK = { running: false, jobId: null, startedAt: null, elapsed: 0, phase: "", error: null, result: null, timer: null,
   profile: localStorage.getItem("gt.exportProfile") || "", profileChosen: !!localStorage.getItem("gt.exportProfile") };
@@ -1003,6 +1023,304 @@ const REV = {active:false, sid:null, items:{}, note:"", originals:{}, scripts:{}
 const RAW_DRAWER = {sid:null, label:null, adopted:false, relabelBusy:false, relabelTarget:null, feedback:null, analyzeJobId:null, analyzeStarted:0, analyzeTimer:null};
 const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模型通过", auto_reject:"模型剔除", held:"待人工复核", stale:"过期待确认", unreviewed:"未评审", finalized:"定稿"};
 const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold"||s==="finalized", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
+
+const TASK_HUB = { tasks: [], running: 0, pollTimer: null, notified: new Set(), watched: new Map(), logTimers: new Map() };
+
+function updateTasksBadge() {
+  const em = $("#navTasksBadge");
+  if (!em) return;
+  if (TASK_HUB.running > 0) {
+    em.textContent = String(TASK_HUB.running);
+    em.classList.add("on");
+  } else {
+    em.textContent = "";
+    em.classList.remove("on");
+  }
+}
+
+function onTaskFinished(t) {
+  if (!t || !t.id || TASK_HUB.notified.has(t.id)) return;
+  TASK_HUB.notified.add(t.id);
+  const cb = TASK_HUB.watched.get(t.id);
+  if (cb && cb.onDone) try { cb.onDone(t); } catch (_) {}
+  TASK_HUB.watched.delete(t.id);
+  refreshMeta().catch(() => {});
+  const aff = t.affects || [];
+  if (aff.includes("overview") && STATE.tab === "overview") loadOverview().catch(() => {});
+  if (aff.includes("raw") && STATE.tab === "raw") loadRaw().catch(() => {});
+  if (aff.includes("gold") && STATE.tab === "gold") loadGold().catch(() => {});
+  if (aff.includes("train") && STATE.tab === "train") loadTrain().catch(() => {});
+  if (t.stage === "package" || t.kind === "package") {
+    if (STATE.tab === "runs") loadRuns().catch(() => {});
+  }
+  if (t.status === "done" && t.stage !== "package") {
+    STATE.poured = true;
+    toast(`${t.title || t.stage} 已完成`, "ok");
+  }
+  else if (t.status === "failed") toast(`${t.title || t.stage} 失败：${t.error || ""}`, "err");
+  else if (t.status === "stale") toast(`${t.title || t.stage} 已中断`, "err");
+}
+
+async function taskHubPoll() {
+  try {
+    const prevRun = new Set(TASK_HUB.tasks.filter(x => x.status === "running").map(x => x.id));
+    const d = await api("/api/tasks");
+    TASK_HUB.tasks = d.tasks || [];
+    TASK_HUB.running = d.running || 0;
+    updateTasksBadge();
+    paintOverviewTaskStrip();
+    if (STATE.tab === "tasks") {
+      refreshTasksListStatusChips();
+      refreshTaskDetailChrome();
+    }
+    for (const t of TASK_HUB.tasks) {
+      if ((t.status === "done" || t.status === "failed" || t.status === "stale") && prevRun.has(t.id)) {
+        onTaskFinished(t);
+      }
+    }
+    const polled = new Set();
+    for (const t of TASK_HUB.tasks) {
+      if (t.status !== "running") continue;
+      if (polled.has(t.id)) continue;
+      if (STATE.tab === "tasks" && STATE.tasksSelectedId === t.id) {
+        polled.add(t.id);
+        pollTaskLogs(t.id);
+      } else if (TASK_HUB.watched.has(t.id)) {
+        polled.add(t.id);
+      }
+    }
+  } catch (_) { /* ignore */ }
+  clearTimeout(TASK_HUB.pollTimer);
+  TASK_HUB.pollTimer = setTimeout(taskHubPoll, TASK_HUB.running > 0 ? 1500 : 15000);
+}
+
+function taskHubEnsure() {
+  if (!TASK_HUB.pollTimer) taskHubPoll();
+}
+
+function paintOverviewTaskStrip() {
+  const host = $("#overviewTaskStrip");
+  if (!host) return;
+  const running = TASK_HUB.tasks.filter(t => t.status === "running").slice(0, 3);
+  if (!running.length) { host.innerHTML = ""; host.classList.add("hidden"); return; }
+  host.classList.remove("hidden");
+  host.innerHTML = `<div class="task-strip"><span class="faint" style="font-size:12px">进行中</span>
+    ${running.map(t => `<button type="button" class="chip" onclick="jumpToTasks('${esc(t.id)}')">${esc(t.title)}</button>`).join("")}
+    <button type="button" class="ghost" style="font-size:12px" onclick="jumpToTasks('')">查看全部 →</button></div>`;
+}
+
+function taskStatusTag(st) {
+  const cls = st === "done" ? "train" : st === "failed" || st === "stale" ? "neg" : "";
+  return `<span class="chip ${cls}">${esc(RUN_ZH[st] || st)}</span>`;
+}
+
+function taskOpenAction(t) {
+  const st = taskEffectiveStatus(t);
+  const sids = (t.links && t.links.sids) || (t.result && t.result.sessions) || (t.extra && t.extra.sessions) || [];
+  const sid = Array.isArray(sids) ? sids[0] : null;
+  const tab = (t.links && t.links.open_tab) || "gold";
+  const dis = st !== "done" ? " disabled" : "";
+  const tip = st === "running" ? " title=\"任务进行中，完成后可打开\"" : (st === "failed" ? " title=\"任务失败\"" : "");
+  if (!sid && tab !== "train" && tab !== "runs") return st === "running" ? `<span class="faint" style="font-size:12px">分析完成后可查看黄金</span>` : "";
+  if (tab === "gold" && sid) {
+    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;closeDrawer();STATE.pendingGold='${esc(sid)}';setTab('gold')">打开黄金</button>`;
+  }
+  if (tab === "raw" && sid) {
+    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;closeDrawer();setTab('raw');openRaw('${esc(sid)}')">打开原始</button>`;
+  }
+  if (tab === "train") {
+    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;setTab('train')">训练数据</button>`;
+  }
+  if (tab === "runs") {
+    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;setTab('runs')">梳理与交付</button>`;
+  }
+  return "";
+}
+
+function taskEffectiveStatus(t) {
+  if (!t) return "";
+  if (TASK_DETAIL_LOG.id === t.id && TASK_DETAIL_LOG.status) return TASK_DETAIL_LOG.status;
+  return t.status || "";
+}
+
+let TASK_DETAIL_LOG = { id: "", lines: [], offset: 0, status: "", logInflight: false };
+
+async function pollTaskLogs(taskId) {
+  const forTasksUi = STATE.tab === "tasks" && STATE.tasksSelectedId === taskId;
+  const forDrawer = RAW_DRAWER.analyzeJobId === taskId;
+  if (!forTasksUi && !forDrawer) return;
+  if (TASK_DETAIL_LOG.logInflight) return;
+  if (forTasksUi && TASK_DETAIL_LOG.id !== taskId) {
+    TASK_DETAIL_LOG = { id: taskId, lines: [], offset: 0, status: "", logInflight: false };
+    paintTaskLogPanel();
+    refreshTaskDetailChrome();
+  }
+  TASK_DETAIL_LOG.logInflight = true;
+  try {
+    const off = TASK_DETAIL_LOG.id === taskId ? TASK_DETAIL_LOG.offset : 0;
+    const j = await api(`/api/tasks/${encodeURIComponent(taskId)}?offset=${off}`);
+    if (forTasksUi && STATE.tasksSelectedId !== taskId) return;
+    if (TASK_DETAIL_LOG.id !== taskId) {
+      TASK_DETAIL_LOG = { id: taskId, lines: [], offset: 0, status: j.status || "", logInflight: false };
+    }
+    TASK_DETAIL_LOG.status = j.status || TASK_DETAIL_LOG.status;
+    const chunk = j.logs || [];
+    if (off === 0) TASK_DETAIL_LOG.lines = chunk.slice();
+    else if (chunk.length) TASK_DETAIL_LOG.lines.push(...chunk);
+    TASK_DETAIL_LOG.offset = off + chunk.length;
+    const idx = TASK_HUB.tasks.findIndex(x => x.id === taskId);
+    if (idx >= 0 && j.status) {
+      TASK_HUB.tasks[idx] = { ...TASK_HUB.tasks[idx], status: j.status, progress: j.progress || TASK_HUB.tasks[idx].progress };
+      if (j.status === "running") TASK_HUB.running = Math.max(TASK_HUB.running, 1);
+    }
+    if (forTasksUi) {
+      refreshTaskDetailChrome();
+      paintTaskLogPanel();
+    }
+    if (forDrawer) paintRawDrawerAnalyze();
+  } catch (_) { /* ignore */ }
+  finally {
+    TASK_DETAIL_LOG.logInflight = false;
+  }
+}
+
+function refreshTasksListStatusChips() {
+  if (STATE.tab !== "tasks") return;
+  $$(".task-row[data-tid]").forEach(row => {
+    const t = TASK_HUB.tasks.find(x => x.id === row.dataset.tid);
+    if (!t) return;
+    const st = t.status || "";
+    const chip = row.querySelector(".chip");
+    if (chip) {
+      chip.className = `chip ${st === "done" ? "train" : st === "failed" || st === "stale" ? "neg" : ""}`;
+      chip.textContent = RUN_ZH[st] || st;
+    }
+  });
+}
+
+function refreshTaskDetailChrome() {
+  const sel = TASK_HUB.tasks.find(t => t.id === STATE.tasksSelectedId);
+  if (!sel || STATE.tab !== "tasks") return;
+  const st = taskEffectiveStatus(sel);
+  const stEl = $("#taskDetailStatus");
+  const actEl = $("#taskDetailActions");
+  const progEl = $("#taskDetailProgress");
+  if (stEl) stEl.innerHTML = `${taskStatusTag(st)} <b>${esc(sel.title)}</b>`;
+  if (progEl) {
+    const p = sel.progress || {};
+    progEl.innerHTML = p.label ? `<div class="faint" style="font-size:12px;margin-bottom:8px">${esc(p.label)}</div>` : (st === "running" ? `<div class="faint" style="font-size:12px;margin-bottom:8px">运行中…</div>` : "");
+  }
+  if (actEl) {
+    actEl.innerHTML = `${taskOpenAction({ ...sel, status: st })}${st === "stale" ? `<button class="ghost" onclick="dismissTask('${esc(sel.id)}')">从列表移除</button>` : ""}`;
+  }
+  const row = document.querySelector(`.task-row.on[data-tid="${sel.id}"]`);
+  if (row) {
+    const chip = row.querySelector(".chip");
+    if (chip) {
+      chip.className = `chip ${st === "done" ? "train" : st === "failed" || st === "stale" ? "neg" : ""}`;
+      chip.textContent = RUN_ZH[st] || st;
+    }
+  }
+  updateTasksBadge();
+}
+
+function paintTaskLogPanel() {
+  const el = $("#taskLogBox");
+  if (!el) return;
+  const deduped = [];
+  for (const l of TASK_DETAIL_LOG.lines) {
+    if (deduped.length && deduped[deduped.length - 1] === l) continue;
+    deduped.push(l);
+  }
+  el.innerHTML = deduped.length
+    ? deduped.map(l => {
+        const cls = /失败|error|Traceback/i.test(l) ? "err" : /\] 完成$/.test(l.trim()) ? "ok" : "";
+        return `<div class="${cls}">${esc(l.replace(/^\d{2}:\d{2}:\d{2}\s*/, ""))}</div>`;
+      }).join("")
+    : `<span class="faint">暂无日志</span>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function loadTasks() {
+  taskHubEnsure();
+  try {
+    const d = await api("/api/tasks");
+    TASK_HUB.tasks = d.tasks || [];
+    TASK_HUB.running = d.running || 0;
+    updateTasksBadge();
+  } catch (e) {
+    const msg = String(e.message || e);
+    const hint = /not found/i.test(msg)
+      ? "当前控制台进程仍是旧版本，未加载任务中心 API。请在本机项目根目录重新运行：python serve.py，然后刷新浏览器（Ctrl+F5）。"
+      : msg;
+    $("#view-tasks").innerHTML = `<div class="panel"><div class="panel-b"><div class="error-box"><b>任务中心不可用</b><div class="muted" style="margin:8px 0 12px">${esc(hint)}</div><button onclick="setTab('tasks')">重试</button></div></div></div>`;
+    return;
+  }
+  if (!STATE.tasksSelectedId && TASK_HUB.tasks.length) {
+    STATE.tasksSelectedId = TASK_HUB.tasks[0].id;
+  }
+  paintTasksView();
+}
+
+function paintTasksView() {
+  const tasks = TASK_HUB.tasks;
+  const sel = tasks.find(t => t.id === STATE.tasksSelectedId) || tasks[0];
+  if (sel) STATE.tasksSelectedId = sel.id;
+  else TASK_DETAIL_LOG = { id: "", lines: [], offset: 0 };
+  $("#view-tasks").innerHTML = `
+    <div class="tasks-shell">
+      <div class="tasks-list">
+        ${tasks.length ? tasks.map(t => `<div class="task-row ${t.id === STATE.tasksSelectedId ? "on" : ""}" data-tid="${esc(t.id)}">
+          <div class="row" style="gap:8px;margin-bottom:4px">${taskStatusTag(t.status)} <b style="font-size:13px">${esc(t.title)}</b></div>
+          <div class="faint" style="font-size:11.5px">${esc(t.subtitle || t.stage || "")} · ${esc(t.created_at || "")}</div>
+        </div>`).join("") : `<div class="empty" style="padding:24px">暂无任务。采集、分析或运行管线后会出现在这里。</div>`}
+      </div>
+      <div class="task-detail">
+        ${sel ? `<div class="panel-b" style="border-bottom:1px solid var(--line-soft)">
+          <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px" id="taskDetailStatus">${taskStatusTag(taskEffectiveStatus(sel))} <b>${esc(sel.title)}</b></div>
+          <div class="muted" style="font-size:12.5px;margin-bottom:8px">${esc(sel.subtitle || "")}</div>
+          <div id="taskDetailProgress">${sel.progress && sel.progress.label ? `<div class="faint" style="font-size:12px;margin-bottom:8px">${esc(sel.progress.label)}</div>` : (sel.status === "running" ? `<div class="faint" style="font-size:12px;margin-bottom:8px">运行中…</div>` : "")}</div>
+          ${sel.error ? `<div class="note" style="color:var(--neg)">${esc(sel.error)}</div>` : ""}
+          <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap" id="taskDetailActions">
+            ${taskOpenAction(sel)}
+            ${sel.status === "stale" ? `<button class="ghost" onclick="dismissTask('${esc(sel.id)}')">从列表移除</button>` : ""}
+          </div>
+        </div>
+        <div class="task-log" id="taskLogBox"></div>` : `<div class="empty" style="padding:24px">选择左侧任务查看详情</div>`}
+      </div>
+    </div>`;
+  $$(".task-row[data-tid]").forEach(row => {
+    row.onclick = () => {
+      STATE.tasksSelectedId = row.dataset.tid;
+      TASK_DETAIL_LOG = { id: row.dataset.tid, lines: [], offset: 0, status: "", logInflight: false };
+      paintTasksView();
+    };
+  });
+  if (sel) {
+    if (TASK_DETAIL_LOG.id !== sel.id) {
+      TASK_DETAIL_LOG = { id: sel.id, lines: [], offset: 0, status: sel.status || "", logInflight: false };
+    }
+    pollTaskLogs(sel.id);
+  }
+}
+
+async function dismissTask(id) {
+  try {
+    await api(`/api/tasks/${encodeURIComponent(id)}/dismiss`, { method: "POST" });
+    toast("已移除", "ok");
+    await loadTasks();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function jumpToTasks(id) {
+  if (id) STATE.tasksSelectedId = id;
+  setTab("tasks");
+}
+
+function registerJobWatch(jobId, onDone) {
+  if (jobId) TASK_HUB.watched.set(jobId, { onDone });
+  taskHubEnsure();
+}
 
 async function api(path, opts={}) {
   const res = await fetch(path, {cache: "no-store", headers: {"Content-Type":"application/json"}, ...opts});
@@ -1062,7 +1380,7 @@ function setTab(tab) {
   $("#pageDesc").textContent = PAGES[tab][1];
   document.title = PAGES[tab][0] + " · GoldThread";
   for (const t of Object.keys(PAGES)) $("#view-"+t).classList.toggle("hidden", t !== tab);
-  const loaders = {overview: loadOverview, raw: loadRaw, gold: loadGold, train: loadTrain, config: loadConfig, runs: loadRuns};
+  const loaders = {overview: loadOverview, raw: loadRaw, gold: loadGold, train: loadTrain, config: loadConfig, runs: loadRuns, tasks: loadTasks};
   const view = $("#view-"+tab);
   if (!view.innerHTML.trim()) view.innerHTML = `<div class="loading">加载中…</div>`;
   loaders[tab]().catch(e => {
@@ -1141,6 +1459,7 @@ async function loadOverview() {
 
   $("#view-overview").innerHTML = `
     ${d.sync_dirty ? `<div class="sync-banner"><span class="tag t-failed">存在未同步变更</span><span class="grow">上游数据晚于训练集。运行全流程后，Stage 3 才会反映最新结果。</span><button onclick="runStage('all',false)">立即同步</button></div>` : ""}
+    <div id="overviewTaskStrip" class="hidden"></div>
     <div class="workflow-head">
       <button type="button" class="wf-stage go" style="--c:${COLORS.ore}" onclick="jumpToRaw()">
         <div class="wf-top"><span class="wf-no">1</span><span class="mono">COLLECT & CLEAN</span><span class="grow"></span><span>${ago(d.stages.stage1.last_run)}</span></div>
@@ -1254,6 +1573,7 @@ async function loadOverview() {
       </div>
     </div>`;
   STATE.poured = true;
+  paintOverviewTaskStrip();
 }
 
 /* ------------------------------ 原始数据 ------------------------------ */
@@ -1263,7 +1583,10 @@ function adoptCell(s) {
   }
   const st = SCRIPT_ZH[s.gold_status] || "已分析";
   const when = s.analyzed_at ? ` title="分析于 ${esc(stamp(s.analyzed_at))}"` : "";
-  return `<div class="adopt"${when}><span class="chip train">已采用</span><span class="faint" style="font-size:11px">${esc(st)}</span><button class="slim" data-analyze="${esc(s.session_id)}">重新分析</button></div>`;
+  const roleChip = s.label === "pending"
+    ? `<span class="chip">未采用</span>`
+    : `<span class="chip train">已采用</span>`;
+  return `<div class="adopt"${when}>${roleChip}<span class="faint" style="font-size:11px">${esc(st)}</span><button class="slim" data-analyze="${esc(s.session_id)}">重新分析</button></div>`;
 }
 function kb(n) {
   n = Number(n) || 0;
@@ -1412,7 +1735,7 @@ async function collectChosen(analyze) {
     STATE.raw.pickIds = [];
     syncPickButtons();
     toast(analyze ? `正在采集 ${ids.length} 条并分析` : `正在采集 ${ids.length} 条`, "ok");
-    setTab("runs");
+    toast("已提交，可在任务中心查看进度", "ok");
     watchJob(job_id);
   } catch (e) { toast(e.message, "err"); }
 }
@@ -1489,8 +1812,8 @@ async function loadRaw() {
     <div class="audit-strip">
       <div class="audit-metric"><span>磁盘扫描</span><b>${fmt(sum(aud.folder_stats||{}))}</b></div>
       <div class="audit-metric"><span>领域准入</span><b>${fmt(d.pool ?? d.total)}</b></div>
-      <div class="audit-metric"><span>已采用</span><b>${fmt(d.adopted||0)}</b></div>
-      <div class="audit-metric"><span>未采用</span><b>${fmt(Math.max(0, (d.pool ?? d.total) - (d.adopted||0)))}</b></div>
+      <div class="audit-metric"><span>已分析</span><b>${fmt(d.adopted||0)}</b></div>
+      <div class="audit-metric"><span>未分析</span><b>${fmt(Math.max(0, (d.pool ?? d.total) - (d.adopted||0)))}</b></div>
     </div>
     ${aud.replay_mode ? `<div class="banner">源会话目录当前不可达，正在使用 <span class="mono">01_raw</span> 不可变副本重放。可以重新分析已有会话，但不会采集新会话。</div>` : ""}
     <div class="panel">
@@ -1502,11 +1825,12 @@ async function loadRaw() {
         <input type="text" id="rawSearch" placeholder="搜索会话 ID、根任务或目录，回车确认" value="${esc(f.q)}">
         <span class="grow"></span>
         <span class="count"><b>${d.total}</b> 个会话，已分析 <b>${fmt(d.adopted||0)}</b></span>
+        <span class="faint" style="font-size:12px">点行 → 抽屉底部操作</span>
         <button id="rawPick" class="primary">采集会话</button>
         <button id="rawReload" class="ghost">刷新</button>
       </div>
       <div class="scroll"><table><thead><tr>
-        <th>会话</th><th>标签</th><th>采用</th><th>项目</th><th>模型</th><th class="n" title="助手步数 / 其中干净步数">步数 / 干净</th><th class="n" title="保留回合 / 总回合">回合</th><th>根任务</th>
+        <th>会话</th><th>标签</th><th title="已定数据集角色（正例/反例）为已采用；标签仍为待定则未采用。右侧小字为分析产物状态。">采用</th><th>项目</th><th>模型</th><th class="n" title="助手步数 / 其中干净步数">步数 / 干净</th><th class="n" title="保留回合 / 总回合">回合</th><th>根任务</th>
       </tr></thead><tbody>
       ${d.sessions.map(s => `<tr class="clickable" data-sid="${esc(s.session_id)}" tabindex="0">
         <td class="sid">${esc(s.session_id.slice(0,8))}${s.origin==="cursor"?` <span class="chip">Cursor</span>`:""}</td>
@@ -1542,10 +1866,12 @@ function bindRows(scope, fn) {
 async function openRaw(sid) {
   REV.active = false;
   RAW_DRAWER.sid = sid;
+  RAW_DRAWER.kind = "raw";
   openDrawer(`原始会话 ${sid.slice(0,8)}`, "stage1 视图，已应用回合过滤");
   $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
   const d = await api(`/api/raw/session/${sid}`);
   const meta = d.meta || {}, st = meta.stats || {};
+  RAW_DRAWER.label = meta.label || "pending";
   $("#drawerSub").innerHTML = `${labelBadge(meta.label)} <span class="faint" style="margin-left:6px">${esc(meta.project_group)}</span>`;
   $("#drawerBody").innerHTML = `
     <div class="panel"><div class="panel-h"><h3>会话信息</h3></div><div class="panel-b kv">
@@ -1586,7 +1912,8 @@ async function openRaw(sid) {
   RAW_DRAWER.adopted = adopted;
   RAW_DRAWER.projectGroup = meta.project_group || "";
   RAW_DRAWER.label = meta.label || "pending";
-  renderRawDrawerFoot(sid, meta);
+  $("#drawerSub").innerHTML = `${labelBadge(meta.label)} <span class="faint" style="margin-left:6px">${esc(meta.project_group)}</span>`;
+  renderDrawerFoot("raw", sid, meta);
 }
 
 function labelSwitchBtn(label, cur, saving, target) {
@@ -1594,6 +1921,107 @@ function labelSwitchBtn(label, cur, saving, target) {
   const cls = ["pick-" + label, on ? "on" : "", saving && target === label ? "pending-pick" : ""].filter(Boolean).join(" ");
   const dis = saving ? " disabled" : "";
   return `<button type="button" data-label="${label}" class="${cls}"${dis} aria-pressed="${on}">${esc(LABEL_ZH[label])}</button>`;
+}
+
+function renderSessionLabelFootPane(curLabel, { locked = false } = {}) {
+  const cur = curLabel || RAW_DRAWER.label || "pending";
+  const saving = RAW_DRAWER.relabelBusy;
+  const target = RAW_DRAWER.relabelTarget;
+  const fb = RAW_DRAWER.feedback;
+  const fbText = fb ? fb.text : `当前 ${LABEL_ZH[cur]} · 点按钮保存（labels.json）`;
+  return `<div class="foot-pane foot-role${locked ? " foot-role--locked" : ""}">
+      <div class="foot-pane-title">数据集角色<span>正例→SFT · 反例→DPO · 改后重跑 Stage 3</span></div>
+      <div class="label-switch" id="sessionLabelSwitch">
+        ${labelSwitchBtn("positive", cur, saving, target)}
+        ${labelSwitchBtn("negative", cur, saving, target)}
+        ${labelSwitchBtn("pending", cur, saving, target)}
+      </div>
+      <div class="foot-status ${fb ? fb.kind : ""} ${fb ? "flash" : ""}" id="sessionLabelFeedback">${esc(fbText)}</div>
+    </div>`;
+}
+
+function buildRawAnalyzeFootBody(sid) {
+  const job = rawAnalyzeJobMeta();
+  const jobHere = !!(job && RAW_DRAWER.sid === sid);
+  const running = jobHere && job.status === "running";
+  const done = jobHere && job.status === "done";
+  const failed = jobHere && job.status === "failed";
+  const prog = job?.progress || {};
+  const pct = prog.total > 0 ? Math.min(100, Math.round(100 * (prog.done || 0) / prog.total)) : null;
+  const logTail = (JOB_LINES || []).slice(-2).map(l => `<div class="line">${esc(l.replace(/^\d{2}:\d{2}:\d{2}\s*/, ""))}</div>`).join("");
+  if (running) {
+    return `<div class="foot-analyze-run ${pct == null ? "indeterminate" : ""}">
+      <div class="run-meta"><span class="rb-live"></span><b>分析中</b>
+        <span id="rawAnalyzeElapsed">${formatAnalyzeElapsed(Date.now() - (RAW_DRAWER.analyzeStarted || Date.now()))}</span>
+        ${prog.msg ? `<span class="faint">· ${esc(short(prog.msg, 40))}</span>` : ""}
+      </div>
+      <div class="run-bar"><i style="width:${pct != null ? pct : 32}%"></i></div>
+      <div class="run-log">${logTail || `<div class="line faint">等待日志…</div>`}</div>
+      <button type="button" class="ghost slim" style="align-self:flex-start;padding:2px 0;font-size:11px" onclick="jumpToTasks('${esc(RAW_DRAWER.analyzeJobId || "")}')">任务中心日志 →</button>
+    </div>`;
+  }
+  if (done) {
+    return `<div class="foot-analyze-done"><b>已完成</b><span class="faint">有用步→黄金，弯路→DPO</span>
+      <span class="grow"></span>
+      <button type="button" class="ghost slim" id="rawViewGoldBtn">黄金页</button>
+      <button type="button" class="primary slim" id="rawAnalyzeBtn">重新分析</button></div>`;
+  }
+  if (failed) {
+    return `<div class="foot-analyze-idle"><p style="color:var(--neg)">${esc(short(job?.error || "分析失败", 80))}</p>
+      <button type="button" class="primary" id="rawAnalyzeBtn">重试</button></div>`;
+  }
+  const btn = RAW_DRAWER.adopted ? "重新分析" : "开始分析";
+  return `<div class="foot-analyze-idle"><p>有用步进黄金，弯路进 DPO；会调模型逐步判断，通常要几分钟。</p>
+      <button type="button" class="primary" id="rawAnalyzeBtn">${btn}</button></div>`;
+}
+
+function renderGoldActionsFootPane(sid) {
+  const job = rawAnalyzeJobMeta();
+  const running = !!(job && RAW_DRAWER.sid === sid && job.status === "running");
+  if (running) {
+    return `<div class="foot-pane foot-analyze">
+      <div class="foot-pane-title">分析提纯<span>进行中</span></div>
+      <div class="foot-analyze-body">${buildRawAnalyzeFootBody(sid)}</div>
+    </div>`;
+  }
+  return `<div class="foot-pane foot-actions">
+      <div class="foot-pane-title">会话操作<span>提纯、跳转、导出</span></div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;padding-top:4px">
+        <button type="button" class="primary slim" id="rawAnalyzeBtn">重新分析</button>
+        <button type="button" class="ghost slim" id="rawOpenRawBtn">原始数据</button>
+        <button type="button" class="ghost slim" id="drawerJsonBtn">标注 JSON</button>
+      </div>
+    </div>`;
+}
+
+function renderDrawerFoot(kind, sid, meta) {
+  const foot = $("#drawerFoot");
+  if (!foot) return;
+  foot.className = "df drawer-foot-col";
+  RAW_DRAWER.kind = kind;
+  const cur = RAW_DRAWER.label || meta?.label || "pending";
+  RAW_DRAWER.label = cur;
+  const job = rawAnalyzeJobMeta();
+  const running = !!(job && RAW_DRAWER.sid === sid && job.status === "running");
+  const rolePane = renderSessionLabelFootPane(cur, { locked: running });
+  const second = kind === "gold"
+    ? renderGoldActionsFootPane(sid)
+    : `<div class="foot-pane foot-analyze">
+      <div class="foot-pane-title">分析提纯<span>${running ? "进行中，请勿关抽屉" : "Stage 2 · 有用步→黄金"}</span></div>
+      <div class="foot-analyze-body">${buildRawAnalyzeFootBody(sid)}</div>
+    </div>`;
+  foot.innerHTML = `<div class="drawer-foot-stack">${rolePane}${second}</div>`;
+}
+
+function onSessionLabelPick(e) {
+  const lb = e.target.closest("#sessionLabelSwitch button[data-label]");
+  if (!lb) return false;
+  const sid = RAW_DRAWER.sid;
+  const next = lb.dataset.label;
+  if (!sid || !next || next === RAW_DRAWER.label || RAW_DRAWER.relabelBusy) return true;
+  if (lb.closest(".foot-role--locked")) { toast("分析进行中，请稍后再改角色"); return true; }
+  relabelFromDrawer(sid, next);
+  return true;
 }
 function formatAnalyzeElapsed(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -1616,97 +2044,46 @@ function startRawAnalyzeTimer() {
   }, 500);
 }
 function renderRawDrawerFoot(sid, meta) {
-  const foot = $("#drawerFoot");
-  if (!foot) return;
-  foot.className = "df drawer-foot-col";
-  const cur = RAW_DRAWER.label || meta.label || "pending";
-  RAW_DRAWER.label = cur;
-  const fb = RAW_DRAWER.feedback;
-  const job = rawAnalyzeJobMeta();
-  const jobHere = !!(job && RAW_DRAWER.sid === sid);
-  const running = jobHere && job.status === "running";
-  const done = jobHere && job.status === "done";
-  const failed = jobHere && job.status === "failed";
-  const labelSaving = RAW_DRAWER.relabelBusy;
-  const roleLocked = running;
-  const prog = job?.progress || {};
-  const pct = prog.total > 0 ? Math.min(100, Math.round(100 * (prog.done || 0) / prog.total)) : null;
-  const logTail = (JOB_LINES || []).slice(-2).map(l => `<div class="line">${esc(l.replace(/^\d{2}:\d{2}:\d{2}\s*/, ""))}</div>`).join("");
-  let analyzeHtml;
-  if (running) {
-    analyzeHtml = `<div class="foot-analyze-run ${pct == null ? "indeterminate" : ""}">
-      <div class="run-meta"><span class="rb-live"></span><b>分析中</b>
-        <span id="rawAnalyzeElapsed">${formatAnalyzeElapsed(Date.now() - (RAW_DRAWER.analyzeStarted || Date.now()))}</span>
-        ${prog.msg ? `<span class="faint">· ${esc(short(prog.msg, 40))}</span>` : ""}
-      </div>
-      <div class="run-bar"><i style="width:${pct != null ? pct : 32}%"></i></div>
-      <div class="run-log">${logTail || `<div class="line faint">等待日志…</div>`}</div>
-      <button type="button" class="ghost slim" style="align-self:flex-start;padding:2px 0;font-size:11px" onclick="setTab('runs')">完整日志 →</button>
-    </div>`;
-  } else if (done) {
-    analyzeHtml = `<div class="foot-analyze-done"><b>已完成</b><span class="faint">有用步→黄金，弯路→DPO</span>
-      <span class="grow"></span>
-      <button type="button" class="ghost slim" id="rawViewGoldBtn">黄金页</button>
-      <button type="button" class="primary slim" id="rawAnalyzeBtn">重新分析</button></div>`;
-  } else if (failed) {
-    analyzeHtml = `<div class="foot-analyze-idle"><p style="color:var(--neg)">${esc(short(job?.error || "分析失败", 80))}</p>
-      <button type="button" class="primary" id="rawAnalyzeBtn">重试</button></div>`;
-  } else {
-    const btn = RAW_DRAWER.adopted ? "重新分析" : "开始分析";
-    analyzeHtml = `<div class="foot-analyze-idle"><p>有用步进黄金，弯路进 DPO；会调模型逐步判断，通常要几分钟。</p>
-      <button type="button" class="primary" id="rawAnalyzeBtn">${btn}</button></div>`;
-  }
-  const fbText = fb ? fb.text : `当前 ${LABEL_ZH[cur]} · 点其它项即保存`;
-  foot.innerHTML = `<div class="drawer-foot-stack">
-    <div class="foot-pane foot-role${roleLocked ? " foot-role--locked" : ""}">
-      <div class="foot-pane-title">数据集角色<span>决定 SFT / DPO 怎么用</span></div>
-      <div class="label-switch" id="rawLabelSwitch">
-        ${labelSwitchBtn("positive", cur, labelSaving, RAW_DRAWER.relabelTarget)}
-        ${labelSwitchBtn("negative", cur, labelSaving, RAW_DRAWER.relabelTarget)}
-        ${labelSwitchBtn("pending", cur, labelSaving, RAW_DRAWER.relabelTarget)}
-      </div>
-      <div class="foot-status ${fb ? fb.kind : ""} ${fb ? "flash" : ""}" id="rawLabelFeedback">${esc(fbText)}</div>
-    </div>
-    <div class="foot-pane foot-analyze">
-      <div class="foot-pane-title">分析并采用<span>${running ? "进行中，请勿关抽屉" : "进度显示在本栏"}</span></div>
-      <div class="foot-analyze-body">${analyzeHtml}</div>
-    </div></div>`;
+  renderDrawerFoot(RAW_DRAWER.kind || "raw", sid, meta);
 }
-function bindRawDrawerFoot(_sid) {}
-function onRawDrawerFootClick(e) {
-  const lb = e.target.closest("#rawLabelSwitch button[data-label]");
-  if (lb) {
-    const sid = RAW_DRAWER.sid;
-    const next = lb.dataset.label;
-    if (!sid || !next || next === RAW_DRAWER.label || RAW_DRAWER.relabelBusy) return;
-    if (lb.closest(".foot-role--locked")) { toast("分析进行中，请稍后再改角色"); return; }
-    relabelFromDrawer(sid, next);
-    return;
-  }
+function onDrawerFootClick(e) {
+  if (onSessionLabelPick(e)) return;
   const ab = e.target.closest("#rawAnalyzeBtn");
   if (ab && RAW_DRAWER.sid) { startAnalyzeJob(RAW_DRAWER.sid, true); return; }
   const gb = e.target.closest("#rawViewGoldBtn");
-  if (gb && RAW_DRAWER.sid) { closeDrawer(); setTab("gold"); openGold(RAW_DRAWER.sid); }
+  if (gb && RAW_DRAWER.sid) {
+    if (RAW_DRAWER.kind === "gold") return;
+    closeDrawer(); setTab("gold"); openGold(RAW_DRAWER.sid);
+    return;
+  }
+  const rb = e.target.closest("#rawOpenRawBtn");
+  if (rb && RAW_DRAWER.sid) { closeDrawer(); setTab("raw"); openRaw(RAW_DRAWER.sid); return; }
+  const jb = e.target.closest("#drawerJsonBtn");
+  if (jb && STATE.drawerData) { showJson(STATE.drawerData.annotation); return; }
+}
+function paintSessionDrawerFoot() {
+  if (!RAW_DRAWER.sid || !$("#drawer").classList.contains("open")) return;
+  renderDrawerFoot(RAW_DRAWER.kind || "raw", RAW_DRAWER.sid, { label: RAW_DRAWER.label });
 }
 function paintRawDrawerAnalyze() {
-  if (!RAW_DRAWER.sid || !$("#drawer").classList.contains("open")) return;
-  const meta = { label: RAW_DRAWER.label };
-  renderRawDrawerFoot(RAW_DRAWER.sid, meta);
+  paintSessionDrawerFoot();
 }
 async function relabelFromDrawer(sid, label) {
   const prev = RAW_DRAWER.label;
   RAW_DRAWER.relabelBusy = true;
   RAW_DRAWER.relabelTarget = label;
   RAW_DRAWER.feedback = { kind: "busy", text: `正在改为${LABEL_ZH[label]}…` };
-  renderRawDrawerFoot(sid, { label: prev });
+  renderDrawerFoot(RAW_DRAWER.kind || "raw", sid, { label: prev });
   try {
     await api(`/api/raw/session/${sid}/relabel`, {method:"POST", body: JSON.stringify({label, auto_sync: false})});
     RAW_DRAWER.label = label;
     RAW_DRAWER.feedback = { kind: "ok", text: prev === label ? `当前为${LABEL_ZH[label]}` : `已从 ${LABEL_ZH[prev]} 调整为 ${LABEL_ZH[label]} · 已同步索引` };
-    toast(RAW_DRAWER.feedback.text, "ok");
+    toast(RAW_DRAWER.feedback.text + " · 重跑 Stage 3 后训练集才会更新", "ok");
     $("#drawerSub").innerHTML = `${labelBadge(label)} <span class="faint" style="margin-left:6px">${esc(RAW_DRAWER.projectGroup || "")}</span>`;
     loadRaw().catch(() => {});
+    if (STATE.tab === "gold") loadGold().catch(() => {});
     refreshMeta().catch(() => {});
+    if (STATE.drawerData?.record?.session_id === sid) STATE.drawerData.record.label = label;
   } catch (e) {
     RAW_DRAWER.feedback = { kind: "err", text: e.message };
     toast(e.message, "err");
@@ -1714,7 +2091,7 @@ async function relabelFromDrawer(sid, label) {
     RAW_DRAWER.relabelBusy = false;
     RAW_DRAWER.relabelTarget = null;
     if (RAW_DRAWER.sid === sid && $("#drawer").classList.contains("open")) {
-      renderRawDrawerFoot(sid, { label: RAW_DRAWER.label || prev });
+      renderDrawerFoot(RAW_DRAWER.kind || "raw", sid, { label: RAW_DRAWER.label || prev });
     }
   }
 }
@@ -1752,7 +2129,6 @@ async function startAnalyzeJob(sid, stayInDrawer = false) {
       toast(`已开始分析 ${sid.slice(0, 8)}，下方可看进度`, "ok");
     } else {
       toast(`正在分析 ${sid.slice(0, 8)}`, "ok");
-      setTab("runs");
     }
   } catch (e) { toast(e.message, "err"); }
 }
@@ -2104,6 +2480,7 @@ async function loadGold() {
   STATE.gold.ids = rows.map(s => s.session_id);
   $("#view-gold").innerHTML = `
     <div class="panel">
+      <div class="note" style="margin:0 0 10px;font-size:12.5px;line-height:1.55">「分析」跑 Stage 2 提纯，与标签是否待定无关。点会话行 → 顶部 <b>数据集角色</b> 设正例/反例；改标签后重跑 Stage 3。</div>
       <div class="toolbar">
         ${labelSeg_ctl("goldLabel", f.label)}
         <input type="text" id="goldSearch" placeholder="搜索会话 ID 或根任务，回车确认" value="${esc(f.q)}">
@@ -2124,9 +2501,11 @@ async function loadGold() {
           : `<span class="faint">训练集还没生成</span>`;
         const parts = lin.dpo_parts;
         const partTxt = parts ? `剪枝 ${fmt(parts.pruned)} · 反例 ${fmt(parts.negative)} · 复核 ${fmt(parts.review)}` : "";
+        const pendingHint = s.label === "pending"
+          ? `<div class="faint" style="font-size:11px;margin-top:2px">待定：已提纯预览，定标签后进 SFT/反例 DPO</div>` : "";
         return `<tr class="clickable" data-sid="${esc(s.session_id)}" tabindex="0">
         <td class="sid">${esc(s.session_id.slice(0,8))}</td>
-        <td>${labelBadge(s.label)}</td>
+        <td>${labelBadge(s.label)}${pendingHint}</td>
         <td class="sid muted">${esc(s.project_group||"")}</td>
         <td><div class="num">${fmt(lin.gold_steps)} 步</div><div>→ ${sftInto}</div></td>
         <td><div class="num">${fmt(lin.dpo_made)} 对</div><div>→ ${dpoInto}</div>${partTxt?`<div class="faint" style="font-size:11px">${esc(partTxt)}</div>`:""}</td>
@@ -2188,11 +2567,16 @@ async function openGold(sid) {
   REV.active = false;
   REV.dirty = false;
   REV.sid = sid;
+  RAW_DRAWER.sid = sid;
+  RAW_DRAWER.kind = "gold";
+  RAW_DRAWER.feedback = null;
   openDrawer(`黄金会话 ${sid.slice(0, 8)}`, "");
   $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
   const d = await api(`/api/gold/session/${sid}`);
   if (REV.sid !== sid) return;
   const rec = d.record, st = rec.stats || {}, ann = d.annotation || {};
+  RAW_DRAWER.label = rec.label || "pending";
+  RAW_DRAWER.projectGroup = rec.project_group || "";
   const mrep = ann.model_report || rec.model_report || null;
   STATE.drawerData = d;
   const verdictZh = {trainable:"可训练", needs_human:"需再看", discard:"不建议训练"};
@@ -2238,7 +2622,8 @@ async function openGold(sid) {
     </div></details>` : ""}
     ${renderGoldStepGate(rec.messages || [], ann)}
     ${renderMessages(rec.messages || [])}`;
-  $("#drawerFoot").innerHTML = `<button class="ghost" onclick="showJson(STATE.drawerData.annotation)">标注 JSON</button>`;
+  RAW_DRAWER.adopted = true;
+  renderDrawerFoot("gold", sid, { label: rec.label });
   $$("#drawerBody [data-gold-mid]").forEach(btn => {
     btn.onclick = () => goldSetStepGate(btn.getAttribute("data-gold-mid"), "exclude");
   });
@@ -3810,6 +4195,7 @@ async function exportPackage() {
     const profile = currentExportProfile(STATE.runbook || {});
     const { job_id } = await api("/api/export/package", { method: "POST", body: JSON.stringify({ profile }) });
     PACK.jobId = job_id;
+    toast("已提交打包，可在任务中心查看进度", "ok");
     watchJob(job_id, (j) => {
       stopPackTimer();
       PACK.running = false;
@@ -3858,7 +4244,9 @@ async function openHandoff() {
 async function runStage(stage, force) {
   try {
     const {job_id} = await api("/api/run", {method:"POST", body: JSON.stringify({stage, force})});
-    toast(`已启动 ${stage}${force ? "（全量重建）" : ""}`, "ok"); setTab("runs"); watchJob(job_id);
+    toast(`已启动 ${stage}${force ? "（全量重建）" : ""}`, "ok");
+    toast("已提交，可在任务中心查看进度", "ok");
+    watchJob(job_id);
   } catch (e) { toast(e.message, "err"); }
 }
 
@@ -3880,6 +4268,7 @@ function paintJob() {
   if (stEl && st) stEl.innerHTML = `${runTag(st.status)} <span class="mono faint" style="margin-left:8px">${esc(st.stage)}${st.force?"，全量":""}，作业 ${esc(st.id)}</span>`;
 }
 function watchJob(jobId, onDone) {
+  registerJobWatch(jobId, onDone);
   if (JOB_TIMER) clearInterval(JOB_TIMER);
   if (RB_TIMER) clearInterval(RB_TIMER);
   JOB_ID = jobId; JOB_LINES = []; JOB_META = null;
@@ -3891,7 +4280,7 @@ function watchJob(jobId, onDone) {
       JOB_LINES.push(...(j.logs||[]));
       offset += (j.logs||[]).length;
       JOB_META = j;
-      paintJob();
+      if (STATE.tab === "runs") paintJob();
       if (RAW_DRAWER.analyzeJobId === jobId) paintRawDrawerAnalyze();
       // 运行中每 2 秒刷新 runbook，使步骤状态与 @@STEP 上报同步
       if (STATE.tab === "runs" && ++rbTick % 2 === 0) {
@@ -3903,18 +4292,7 @@ function watchJob(jobId, onDone) {
       if (j.status !== "running") {
         clearInterval(JOB_TIMER); JOB_TIMER = null;
         if (RB_TIMER) { clearInterval(RB_TIMER); RB_TIMER = null; }
-        if (j.status === "done") {
-          const stageZh = jobStageZh(j);
-          if (j.stage !== "package") toast(`${stageZh} 已完成`, "ok");
-          STATE.poured = true;
-          refreshMeta().catch(() => {});
-          if (STATE.tab === "runs" && j.stage !== "package") loadRuns();
-          if (onDone) onDone(j);
-        } else if (j.stage === "package") {
-          if (onDone) onDone(j);
-        } else {
-          toast(`${j.stage} 失败：${j.error||""}`, "err");
-        }
+        if (STATE.tab === "runs" && j.stage !== "package") loadRuns();
       }
     } catch (e) { /* job may not be registered yet */ }
   };
@@ -3955,7 +4333,8 @@ window.addEventListener("hashchange", () => {
 });
 
 $("#btnRunAll").onclick = () => runStage("all", false);
-$("#drawerFoot").addEventListener("click", onRawDrawerFootClick);
+$("#drawerFoot").addEventListener("click", onDrawerFootClick);
+taskHubEnsure();
 setTab(location.hash.slice(1) || "overview");
 if (STATE.tab !== "overview") refreshMeta().catch(() => {});
 </script>
