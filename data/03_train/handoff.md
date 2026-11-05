@@ -327,12 +327,7 @@ python train_monitor.py --timeout-hours 8 --log logs/27b_sft.log -- \
 CUDA_VISIBLE_DEVICES=0 python train_monitor.py --timeout-hours 3 --log logs/27b_eval.log -- \
   python train_lowmem.py eval_sft.yaml
 
-llamafactory-cli export \
-  --model_name_or_path /data/models/Qwen3.8-27B \
-  --adapter_name_or_path /data/saves/qwen38-27b-goldthread-sft \
-  --template qwen3_8 --finetuning_type lora \
-  --export_dir /data/models/Qwen3.8-27B-merged \
-  --export_size 5
+llamafactory-cli export merge_lora.yaml    # 参数：base / adapter / export_dir 都在 merge_lora.yaml 里
 
 python smoke_infer_merged.py --model /data/models/Qwen3.8-27B-merged \
   --n 5 --max-new-tokens 1024 --sample
@@ -372,12 +367,7 @@ CUDA_VISIBLE_DEVICES=0 python train_monitor.py --timeout-hours 1 --log logs/27b_
 CUDA_VISIBLE_DEVICES=0 python train_monitor.py --timeout-hours 3 --log logs/27b_dpo.log -- \
   python train_lowmem.py train_dpo.yaml
 
-llamafactory-cli export \
-  --model_name_or_path /data/models/Qwen3.8-27B-merged \
-  --adapter_name_or_path /data/saves/qwen38-27b-goldthread-dpo \
-  --template qwen3_8 --finetuning_type lora \
-  --export_dir /data/models/Qwen3.8-27B-dpo-merged \
-  --export_size 5
+llamafactory-cli export merge_dpo.yaml     # base = SFT 合并模型，adapter = train_dpo.yaml 的 output_dir
 ```
 
 导出时的底座是 SFT 合并目录，不是 `/data/models/Qwen3.8-27B`。
@@ -402,15 +392,16 @@ conda create -n vllm python=3.12 -y
 conda activate vllm
 pip install "vllm>=0.11"
 
-# 8B
+# 8B（Hermes JSON，template qwen3）
 bash serve_vllm.sh /data/models/qwen3-8b-merged 8000 gt-2026 qwen3-8b-goldthread-sft
 
-# 27B。上下文用实测过的 32K；64K 仅在训练机冒烟通过后再开
-MAX_LEN=32768 GPU_UTIL=0.90 \
+# 27B 默认包是 Qwen XML。serve_vllm.sh 不写 TOOL_PARSER 时是 hermes，这里必须改掉。
+# 交付 zip 以 FORMAT_CONTRACT.json 的 serve_tool_parser 为准。
+MAX_LEN=32768 GPU_UTIL=0.90 TOOL_PARSER=qwen3_coder \
   bash serve_vllm.sh /data/models/Qwen3.8-27B-dpo-merged 8000 gt-2026 Qwen3.8-27B-sft-dpo
 ```
 
-两个 parser 都要有：`--reasoning-parser qwen3`（旧 vLLM 没有这项时脚本会退到 `deepseek_r1`），`--tool-call-parser hermes`。脚本已经带上。XML 工具格式的模型把 `TOOL_PARSER` 换成 `qwen3_coder`。
+两个 parser 都要有：`--reasoning-parser qwen3`（旧 vLLM 没有这项时脚本会退到 `deepseek_r1`），以及与训练格式相同的 `--tool-call-parser`。默认 27B 是 `qwen3_coder`。8B 和 Hermes JSON 包是 `hermes`。
 
 加载视觉塔失败或因此 OOM 时，在 `vllm serve` 上加 `--language-model-only`。
 

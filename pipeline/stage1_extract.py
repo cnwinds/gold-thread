@@ -382,9 +382,16 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             f"(直留={st['turns_direct']} 折叠={st['turns_folded']} 剥离={st['turns_dropped']})"
         )
 
-    # 清理已删除的源会话
+    # 手工采集进来的会话不在自动扫描范围内，重跑 stage1 时保留。
+    collected_ids = set(_read_collected(cfg).get("ids") or [])
     for sid, entry in list((prev_index.get("sessions") or {}).items()):
         if sid in sessions_index:
+            continue
+        if sid in collected_ids:
+            sessions_index[sid] = entry
+            if sid in prev_files:
+                state_files[sid] = prev_files[sid]
+            label_counts[entry.get("label") or "pending"] += 1
             continue
         for p in (entry.get("raw_file"), entry.get("meta_file")):
             if p:
@@ -524,11 +531,10 @@ def relabel_session(sid: str, new_label: str, cfg: Optional[Dict[str, Any]] = No
 def update_turn_overrides(
     sid: str,
     turns_patch: Optional[Dict[str, Any]] = None,
-    root_prompt: Optional[str] = None,
     reset: bool = False,
     cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """人工更新某条会话的回合分类或根任务指令，并立即重算该会话的清洗流与元数据。"""
+    """人工更新某条会话的回合分类，并立即重算该会话的清洗流与元数据。"""
     cfg = cfg or load_config()
     dirs = stage_dirs(cfg)
     ov_path = _turn_overrides_path(cfg)
@@ -545,9 +551,7 @@ def update_turn_overrides(
             else:
                 cur_turns[str(k)] = v if isinstance(v, dict) else {"kind": str(v)}
         cur["turns"] = cur_turns
-        if root_prompt is not None:
-            cur["root_prompt"] = root_prompt.strip()
-        if not cur.get("turns") and not cur.get("root_prompt"):
+        if not cur.get("turns"):
             all_ov.pop(sid, None)
         else:
             all_ov[sid] = cur
@@ -595,3 +599,116 @@ def update_turn_overrides(
         "turns": new_meta["turns"],
         "manual_turn_overrides": manual_turn_ov,
     }
+
+
+def collected_path(cfg: Optional[Dict[str, Any]] = None) -> Path:
+    cfg = cfg or load_config()
+    return stage_dirs(cfg)["state"] / "collected.json"
+
+
+def _read_collected(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    data = read_json(collected_path(cfg), default={}) or {}
+    if not isinstance(data, dict):
+        return {"ids": [], "items": {}}
+    data.setdefault("ids", [])
+    data.setdefault("items", {})
+    return data
+
+
+def remember_collected(sid: str, item: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> None:
+    data = _read_collected(cfg)
+    ids = [x for x in data.get("ids") or [] if x != sid]
+    ids.append(sid)
+    items = dict(data.get("items") or {})
+    items[sid] = item
+    write_json_atomic(collected_path(cfg), {"ids": ids, "items": items})
+
+
+def adopt_file(
+    src: Path,
+    rel: str,
+    *,
+    origin: str,
+    catalog_id: str,
+    cfg: Optional[Dict[str, Any]] = None,
+    log=print,
+) -> str:
+    """把一份 pi 格式 jsonl 写入 01_raw，并合并进现有索引。不删除其他会话。"""
+    cfg = cfg or load_config()
+    dirs = stage_dirs(cfg)
+    raw_root = dirs["raw"]
+    raw_root.mkdir(parents=True, exist_ok=True)
+    dirs["state"].mkdir(parents=True, exist_ok=True)
+    src = Path(src)
+    max_tool_chars = int(cfg["synth"].get("max_tool_output_chars", 12000))
+    session = pilog.parse_session(src, max_tool_output_chars=max_tool_chars)
+    if not session.get("messages"):
+        raise RuntimeError(f"会话没有可采集的消息: {rel}")
+    session["rel"] = rel
+    session["source_path"] = str(src)
+    sid = session["session_id"]
+
+    overrides = read_json(dirs["state"] / "labels.json", default={}) or {}
+    turn_overrides_all = read_json(_turn_overrides_path(cfg), default={}) or {}
+    manual_turn_ov = turn_overrides_all.get(sid) or {}
+    label, reason, ratio = label_for(session["models"], cfg)
+    if sid in overrides and overrides[sid] in ("positive", "negative", "pending"):
+        label, reason = overrides[sid], "manual_override"
+
+    index_path = raw_root / "index.json"
+    prev_index = load_index(index_path)
+    prev_entry = (prev_index.get("sessions") or {}).get(sid) or {}
+    existing_meta_path = Path(prev_entry["meta_file"]) if prev_entry.get("meta_file") else None
+    existing_meta = read_json(existing_meta_path, default={}) if existing_meta_path and existing_meta_path.exists() else {}
+    annotations = (existing_meta or {}).get("turn_annotations")
+    fp = fingerprint(src)
+    same_src = fingerprint_equal((existing_meta or {}).get("fingerprint"), fp)
+    if cfg.get("turns", {}).get("use_model", False) and not (annotations and same_src):
+        try:
+            from .turnclassify import classify_session
+            annotations = classify_session(session, cfg=cfg, log=log)
+        except Exception as exc:  # noqa: BLE001
+            log(f"[collect] 回合分类失败 {sid[:8]}: {exc}（回退规则）")
+
+    project = infer_project_group(session.get("cwd") or "", rel)
+    if origin == "cursor":
+        parts = rel.replace("\\", "/").split("/")
+        slug = parts[1] if len(parts) >= 3 and parts[0] == "cursor" else "session"
+        project = "cursor::" + slug
+    dest_dir = raw_root / label / safe_name(project)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    raw_file = dest_dir / f"{sid}.jsonl"
+    if src.resolve() != raw_file.resolve():
+        shutil.copyfile(src, raw_file)
+    meta_path = dest_dir / f"{sid}.meta.json"
+    meta = _compute_meta_from_flow(
+        s=session,
+        sid=sid,
+        label=label,
+        reason=reason,
+        ratio=ratio,
+        project=project,
+        fp=fp,
+        raw_file=raw_file,
+        meta_path=meta_path,
+        cfg=cfg,
+        annotations=annotations,
+        manual_turn_ov=manual_turn_ov,
+    )
+    meta["origin"] = origin
+    meta["catalog_id"] = catalog_id
+    write_json_atomic(meta_path, meta)
+
+    sessions = dict(prev_index.get("sessions") or {})
+    sessions[sid] = meta
+    extra = {k: v for k, v in prev_index.items() if k not in ("sessions", "generated_at")}
+    extra["counts"] = dict(Counter((e.get("label") or "pending") for e in sessions.values()))
+    dump_index(index_path, sessions, extra)
+    remember_collected(sid, {
+        "origin": origin,
+        "catalog_id": catalog_id,
+        "rel": rel,
+        "at": now_iso(),
+    }, cfg)
+    log(f"[collect] 已采集 {origin} {sid[:8]} → {project} / {label}")
+    return sid

@@ -1,7 +1,7 @@
 """流水线步骤目录：运行界面与实际执行的一一对应关系（唯一事实源）。
 
 每个步骤都对应代码里真实做的一件事，顺序即执行顺序。
-- phase  ：所属阶段（stage1 / stage2 / human / stage3）
+- phase  ：所属阶段（stage1 / stage2 / stage3）
 - owner  ：谁在执行（程序 / 模型 / 人工）
 - label  ：界面上显示的名字
 - detail ：这一步到底做什么（可对到代码位置）
@@ -18,8 +18,7 @@ from typing import Any, Dict, List, Optional
 PHASES: List[Dict[str, Any]] = [
     {"id": "stage1", "name": "① 采集与清洗", "desc": "把 pi 会话变成 01_raw 里带回合标注的不可变副本"},
     {"id": "stage2", "name": "② 黄金提纯", "desc": "模型决定删/折/改/排，程序执行并留血缘，再接缝修复 + 质量报告"},
-    {"id": "human", "name": "③ 人工复核", "desc": "逐条浏览模型判断，采纳/不采纳/手改，最后定稿"},
-    {"id": "stage3", "name": "④ 训练集合成", "desc": "门控、窗口拼装、DPO 复核、切分、生成 handoff"},
+    {"id": "stage3", "name": "③ 训练集合成", "desc": "门控、窗口拼装、DPO 复核、切分、生成 handoff"},
 ]
 
 STEPS: List[Dict[str, Any]] = [
@@ -62,14 +61,6 @@ STEPS: List[Dict[str, Any]] = [
     {"id": "s2.dpo_build", "phase": "stage2", "owner": "程序", "label": "构造 DPO 对",
      "detail": "把剪掉的弯路配成 chosen/rejected；反例会话的病态步另起来源",
      "output": "dpo_pairs.jsonl"},
-
-    # ---------------- human ----------------
-    {"id": "h.review", "phase": "human", "owner": "人工", "label": "逐条复核",
-     "detail": "黄金数据页浏览改写/问题步，采纳/不采纳/手改/排除；可写意见让模型重做",
-     "output": "annotations.human_review.items"},
-    {"id": "h.finalize", "phase": "human", "owner": "人工", "label": "定稿",
-     "detail": "确认无误后标记定稿，未处置项按模型结果默认生效；定稿态才允许稳定入库",
-     "output": "human_review.finalized"},
 
     # ---------------- stage3 ----------------
     {"id": "s3.gate", "phase": "stage3", "owner": "程序", "label": "入库门控",

@@ -8,6 +8,7 @@
     goldthread-delivery-<package_hash>.zip
         START_HERE.md / README.txt / handoff.md
         train_*.yaml          dataset_dir=./data，dataset 键为 gt_*_lf
+        merge_lora.yaml / merge_dpo.yaml  SFT / DPO 权重合并（llamafactory-cli export）
         train_lowmem.py / lowmem_dpo.py / check_data.py / check_env.py
         data/dataset_info.json 键与 YAML 一致，file_name 相对 dataset_dir
         data/sft.train.lf.jsonl 等规范文件（不再打包未重切的 stage3 原名）
@@ -57,6 +58,13 @@ _YAML_FILES = (
     "train_sft_smoke_qwen3_8b.yaml",
     "train_dpo_smoke_qwen3_8b.yaml",
     "eval_sft_qwen3_8b.yaml",
+)
+
+# 合并配置没有 dataset 键，不参与 _patch_yaml；只锁 template 后原样打包，
+# 让“训练 → 合并 → DPO → 合并”整条链在包内自洽（不用手敲 export 命令）。
+_MERGE_YAML_FILES = (
+    "merge_lora.yaml",   # SFT LoRA -> /data/models/Qwen3.8-27B-merged（train_dpo.yaml 的底座）
+    "merge_dpo.yaml",    # DPO LoRA -> /data/models/Qwen3.8-27B-dpo-merged
 )
 
 _DS_FILES = ("ds_z2_config.json", "ds_z3_config.json")
@@ -246,8 +254,12 @@ def _readme(
 2. 27B SFT（不要用 llamafactory-cli train，16K 全词表 logits 在单卡 80G 上会 OOM）：
    CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_sft.yaml
 3. 显存不够时：CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_sft_qlora.yaml
-4. SFT 合并之后的 DPO：CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_dpo.yaml
-5. 训完单独评测：CUDA_VISIBLE_DEVICES=0 python train_lowmem.py eval_sft.yaml
+4. SFT 合并出 DPO 的底座：llamafactory-cli export merge_lora.yaml
+   （产出 /data/models/Qwen3.8-27B-merged，就是 train_dpo.yaml 的 model_name_or_path）
+5. DPO：CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_dpo.yaml
+6. DPO 合并：llamafactory-cli export merge_dpo.yaml
+   （产出 /data/models/Qwen3.8-27B-dpo-merged，推理直接用这个目录）
+7. 训完单独评测：CUDA_VISIBLE_DEVICES=0 python train_lowmem.py eval_sft.yaml
 
 包内结构：
   START_HERE.md         解压后的最短路径（以本文件布局为准）
@@ -259,6 +271,8 @@ def _readme(
   check_env.py          环境检查
   train_sft.yaml        dataset: gt_sft_train_lf / gt_sft_eval_lf
   train_dpo.yaml        dataset: gt_dpo_train_lf / gt_dpo_eval_lf
+  merge_lora.yaml       SFT 合并（LoRA -> /data/models/Qwen3.8-27B-merged）
+  merge_dpo.yaml        DPO 合并（LoRA -> /data/models/Qwen3.8-27B-dpo-merged）
   data/dataset_info.json
   data/sft.train.lf.jsonl  data/sft.eval.lf.jsonl
   data/dpo.train.lf.jsonl  data/dpo.eval.lf.jsonl
@@ -284,14 +298,20 @@ def _start_here(counts: Dict[str, int], has_dpo: bool, contract: Dict[str, Any])
     dpo_block = ""
     if has_dpo:
         dpo_block = f"""
-## 4. DPO（可选，SFT 合并之后）
+## 4. DPO（可选，需先合并 SFT）
 
-`train_dpo.yaml` 的 `model_name_or_path` 要改成 SFT 合并目录。数据集已是 `gt_dpo_train_lf` / `gt_dpo_eval_lf`（{dpo} / {dpo_eval} 条）。
+`train_dpo.yaml` 的 `model_name_or_path` 已经是 SFT 合并目录 `/data/models/Qwen3.8-27B-merged`，
+用包内的 `merge_lora.yaml` 生成它（不用改 YAML 里的路径）：
 
 ```bash
 cd <解压目录>
+llamafactory-cli export merge_lora.yaml          # SFT LoRA -> /data/models/Qwen3.8-27B-merged
 CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_dpo.yaml
+llamafactory-cli export merge_dpo.yaml           # DPO LoRA -> /data/models/Qwen3.8-27B-dpo-merged
 ```
+
+数据集已是 `gt_dpo_train_lf` / `gt_dpo_eval_lf`（{dpo} / {dpo_eval} 条）。
+合并走 `export_device: cpu`，不占 GPU；内存需 ≥ 64GB（`export_size: 5`）。
 """
     else:
         dpo_block = """
@@ -331,8 +351,15 @@ llamafactory-cli train train_sft_smoke_qwen3_8b.yaml
     ops_block = f"""
 ## 6. 训完之后：合并权重的高速推理（速查）
 
-1. 另开 conda 环境 `vllm`（不要装进训练 Python）；首次启动需系统 `g++`（flashinfer JIT）
-2. 两个 parser 必须显式给：`--reasoning-parser qwen3`（否则思维链混进 content）+
+1. 先合并（SFT/DPO 的 LoRA 都走包内的 export 配置，产物目录名与各 YAML 里的路径一致）：
+
+```bash
+llamafactory-cli export merge_lora.yaml     # -> /data/models/Qwen3.8-27B-merged
+llamafactory-cli export merge_dpo.yaml      # -> /data/models/Qwen3.8-27B-dpo-merged
+```
+
+2. 另开 conda 环境 `vllm`（不要装进训练 Python）；首次启动需系统 `g++`（flashinfer JIT）
+3. 两个 parser 必须显式给：`--reasoning-parser qwen3`（否则思维链混进 content）+
    `--tool-call-parser {parser}`（与本包的数据和 YAML template 是一套）
 
 ```bash
@@ -342,7 +369,7 @@ vllm serve <SFT+DPO 合并目录> --served-model-name <交付包同名模型> \\
 ```
 
 完整命令与排障（CUDA 驱动 vs toolkit、flash-attn/causal-conv1d 轮子选型）见仓库
-`DATASET_BEST_PRACTICES.md` §七与 `START_HERE.md` §6。
+`DATASET_BEST_PRACTICES.md` §七与仓库 `data/03_train/START_HERE.md` §8。parser 以本包 `FORMAT_CONTRACT.json` 为准。
 """
     return f"""# START HERE · GoldThread 交付 zip
 
@@ -375,6 +402,8 @@ python check_data.py
 ├── train_sft.yaml            # dataset: gt_sft_train_lf
 ├── train_sft_qlora.yaml
 ├── train_dpo.yaml            # dataset: gt_dpo_train_lf（有 DPO 数据时才在）
+├── merge_lora.yaml           # SFT LoRA -> /data/models/Qwen3.8-27B-merged
+├── merge_dpo.yaml            # DPO LoRA -> /data/models/Qwen3.8-27B-dpo-merged（有 DPO 时才在）
 ├── eval_sft.yaml
 ├── train_lowmem.py  lowmem_dpo.py  check_data.py  check_env.py
 └── data/
@@ -457,12 +486,15 @@ def compute_package_hash(
     prepared_files: Dict[str, List[Dict[str, Any]]],
     length_gate_fp: str,
     profile: str = "",
+    extras: Optional[Dict[str, str | bytes]] = None,
 ) -> str:
     """8-hex fingerprint of delivery payload (post-gate lf bytes + config + gate version).
 
     Soft-compress / data rebuilds that change packed jsonl bytes, or a
     LENGTH_GATE_VERSION bump, produce a new zip filename even when
-    pipeline.yaml config_hash is unchanged.
+    pipeline.yaml config_hash is unchanged. `extras` covers the packed YAML /
+    scripts, so editing a config or script also yields a new filename instead of
+    silently reusing it under the old name.
     """
     parts: List[str] = [cfg_h]
     if profile:
@@ -471,6 +503,9 @@ def compute_package_hash(
         content = dumps_jsonl(rows)
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         parts.append(f"{name}:{digest}")
+    for name, content in sorted((extras or {}).items()):
+        raw = content if isinstance(content, bytes) else content.encode("utf-8")
+        parts.append(f"{name}:{hashlib.sha256(raw).hexdigest()}")
     parts.append(length_gate_fp)
     blob = "\n".join(parts)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
@@ -518,8 +553,55 @@ def build_delivery_zip(
     style_stats = _apply_tool_style(prepared.files, spec["style"])
     _emit(f"[package] 已按该格式改写 {style_stats['blocks_converted']} 处工具调用")
 
+    # YAML / 脚本先定下来（既用于指纹，也用于写包）：改了配置或脚本也要换 zip 名，
+    # 否则会出现"同名不同内容"的包。
+    packed_yaml_texts: Dict[str, str] = {}
+    skipped_yaml: List[str] = []
+    for name in _YAML_FILES:
+        src = root / name
+        if not src.is_file():
+            continue
+        if not profile_includes_yaml(name, spec):
+            skipped_yaml.append(name)
+            _emit(f"[package] 跳过 {name}：{spec['label']} 只带 template {spec['template']} 的配置")
+            continue
+        patched = _patch_yaml(src.read_text(encoding="utf-8"), name, available)
+        if patched is None:
+            skipped_yaml.append(name)
+            continue
+        packed_yaml_texts[name] = _force_template(patched, spec["template"])
+
+    if "train_sft.yaml" not in packed_yaml_texts:
+        raise FileNotFoundError("train_sft.yaml 未能打进交付包（缺少 gt_sft_*_lf 数据）")
+
+    packed_merge_texts: Dict[str, str] = {}
+    for name in _MERGE_YAML_FILES:
+        src = root / name
+        if not src.is_file():
+            continue
+        # merge_dpo 依赖 DPO 产物，没 DPO 数据时不留悬空指令
+        if name == "merge_dpo.yaml" and not has_dpo:
+            _emit("[package] 跳过 merge_dpo.yaml：本包没有 DPO 数据")
+            continue
+        packed_merge_texts[name] = _force_template(src.read_text(encoding="utf-8"), spec["template"])
+
+    script_blobs: Dict[str, bytes] = {}
+    for name in _REPO_SCRIPTS + _OPTIONAL_SCRIPTS:
+        blob = _read_script(name, root)
+        if blob is None:
+            if name in ("train_lowmem.py", "lowmem_dpo.py", "check_data.py"):
+                raise FileNotFoundError(f"交付包缺少脚本 {name}")
+            continue
+        script_blobs[name] = blob
+
     lg_fp = length_gate_mod.length_gate_fingerprint()
-    pkg_h = compute_package_hash(cfg_h, prepared.files, lg_fp, spec["id"])
+    pkg_h = compute_package_hash(
+        cfg_h,
+        prepared.files,
+        lg_fp,
+        spec["id"],
+        extras={**packed_yaml_texts, **packed_merge_texts, **script_blobs},
+    )
     zip_name = f"goldthread-delivery-{pkg_h}.zip"
     zip_path = delivery_dir / zip_name
 
@@ -556,37 +638,20 @@ def build_delivery_zip(
         if (root / "stats.json").is_file():
             _add(zf, "stats.json", (root / "stats.json").read_text(encoding="utf-8"))
 
-        packed_yaml: List[str] = []
-        skipped_yaml: List[str] = []
-        for name in _YAML_FILES:
-            src = root / name
-            if not src.is_file():
-                continue
-            if not profile_includes_yaml(name, spec):
-                skipped_yaml.append(name)
-                _emit(f"[package] 跳过 {name}：{spec['label']} 只带 template {spec['template']} 的配置")
-                continue
-            patched = _patch_yaml(src.read_text(encoding="utf-8"), name, available)
-            if patched is None:
-                skipped_yaml.append(name)
-                continue
-            _add(zf, name, _force_template(patched, spec["template"]))
-            packed_yaml.append(name)
+        packed_yaml = list(packed_yaml_texts)
+        for name, text in packed_yaml_texts.items():
+            _add(zf, name, text)
 
-        if "train_sft.yaml" not in packed_yaml:
-            raise FileNotFoundError("train_sft.yaml 未能打进交付包（缺少 gt_sft_*_lf 数据）")
+        packed_merge_yaml = list(packed_merge_texts)
+        for name, text in packed_merge_texts.items():
+            _add(zf, name, text)
 
         for name in _DS_FILES:
             src = root / name if (root / name).is_file() else _REPO_TOOLS / name
             if src.is_file():
                 _add(zf, name, src.read_bytes())
 
-        for name in _REPO_SCRIPTS + _OPTIONAL_SCRIPTS:
-            blob = _read_script(name, root)
-            if blob is None:
-                if name in ("train_lowmem.py", "lowmem_dpo.py", "check_data.py"):
-                    raise FileNotFoundError(f"交付包缺少脚本 {name}")
-                continue
+        for name, blob in script_blobs.items():
             _add(zf, name, blob)
 
         for name, rows in prepared.files.items():
@@ -614,6 +679,7 @@ def build_delivery_zip(
             "counts": prepared.counts,
             "length_gate": prepared.length_gate,
             "yaml": packed_yaml,
+            "merge_yaml": packed_merge_yaml,
             "yaml_skipped": skipped_yaml,
             "format_contract": format_contract,
             "files": manifest_files,

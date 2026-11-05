@@ -2,7 +2,7 @@
 """环境自检：无 GPU 也能跑的检查 + 有 GPU 后才做的清单。
 
 用法：
-    python check_env.py --model /root/models/Qwen3.8-27B --data /root/data/03_train
+    python check_env.py --model /data/models/Qwen3.8-27B --data ./data
     python check_env.py                       # 只查软件栈与依赖版本
 
 设计：每项检查独立 try，输出 [PASS] / [FAIL] / [SKIP]（无 GPU 时跳过）。

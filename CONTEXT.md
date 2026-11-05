@@ -101,7 +101,7 @@
 **产品决策（2026-11）**：
 
 - **去掉**独立「审核」侧栏、工作台待办、黄金页 **通过 / 驳回 / 定稿** UI；梳理流程 **不再** 以人工复核为卡点。
-- **保留**模型质量报告、黄金浏览、训练去向预览、**标注 JSON** 只读查看。
+- **保留**模型质量报告、黄金浏览、训练去向预览；**步级排除**在黄金抽屉（无通过/驳回/定稿）。
 
 **遗留**：历史 `annotations` 里的人工通过/驳回 **仍可能被 Stage 3 门控读取**；新结论应依赖 **模型报告 + 用户在黄金/训练页的手工剔除**（见 §6）。README 流程图若仍写「人工复核页」，以 **本文与 `pipeline/steps.py`** 为准。
 
@@ -162,7 +162,7 @@
 - **工具输出乱码**：Windows 控制台 GBK → UTF-8 误解码导致 observation 内 **U+FFFD**（约一成量级）；`system`/`human`/`gpt` 基本无。训练可接受但应知悉；清洗策略未默认开启。
 - **无执行级回放**：训练依据会话内可观测证据，不验证磁盘产物是否真跑通。
 - **长会话**：模型分类/评审可能均匀抽样，极端情况漏局部问题。
-- **文档漂移**：`README.md` 部分段落仍描述旧「人工复核页」；以 **CONTEXT + steps + 当前 UI** 为准。`START_HERE.md` §6 与默认 export profile 的 parser 组合需对照 `FORMAT_CONTRACT` / 交付页说明。
+- **文档漂移**：`START_HERE.md` §6 与默认 export profile 的 parser 组合需对照 `FORMAT_CONTRACT` / 交付页说明（`README.md` 已与 `CONTEXT` 对齐）。
 
 ---
 
@@ -184,10 +184,13 @@
 | observation 乱码 | **默认不修**；若做则 stage1 转码 + 可选 stage3 阈值门控 | [ADR-0003](docs/adr/ADR-0003-observation-encoding-deferred.md) |
 | Unsloth | **非目标**，除非显式立项 | [ADR-0004](docs/adr/ADR-0004-no-unsloth-migration.md) |
 
-**代码尚未完全对齐 ADR 的实现**（本地 ticket，blocker-first）：
+**本地 backlog**（`.scratch/goldthread-backlog/issues/`）：
 
-- `.scratch/goldthread-backlog/issues/001-align-hold-needs-review.md`
-- `.scratch/goldthread-backlog/issues/002-split-collect-analyze.md`
-- `.scratch/goldthread-backlog/issues/003-readme-human-review-legacy.md`
+| Ticket | 状态 |
+|--------|------|
+| 001 hold_needs_review | 已完成 |
+| 002 采集/分析拆分 | 已完成 |
+| 003 README 对齐 | 已完成 |
+| 004 黄金步级排除 | 已完成 |
 
 新冲突以 **ADR + 本表** 为准；变更决策时先改 ADR 再改代码。

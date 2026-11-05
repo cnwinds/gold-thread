@@ -9,9 +9,13 @@
 环境变量：
     GT_SKIP_LENGTH_FILTER=1  跳过过滤（train_lowmem 也认）
     GT_LENGTH_FILTER_SOFT=0  关闭软压缩（默认开启：先压 observation 再量）
+    GT_LENGTH_TOKENIZER     长度过滤用的 tokenizer。默认 Qwen/Qwen2.5-0.5B。
+                             训练机访问不了 HuggingFace 时设成本机目录，例如
+                             /model/ModelScope/Qwen/Qwen2.5-0.5B-Instruct。
+                             命令行 --tokenizer 优先于该变量。
 
 口径与 pipeline/length_gate.py 对齐：
-- tokenizer：Qwen/Qwen2.5-0.5B；加载失败则明确退出，绝不静默用字符估算。
+- tokenizer：默认 Qwen/Qwen2.5-0.5B；加载失败则明确退出，绝不静默用字符估算。
 - 软压缩只动 observation/tool/function；最后一条 assistant/gpt 不改。
 - 仍超 cutoff → 从本次训练用的 jsonl 中移除（包内原文件可被就地改写；
   会先写 .prefilter.bak 备份，同一次运行只备份一次）。
@@ -26,7 +30,18 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-TOKENIZER_ID = "Qwen/Qwen2.5-0.5B"
+_DEFAULT_TOKENIZER_ID = "Qwen/Qwen2.5-0.5B"
+TOKENIZER_ID = _DEFAULT_TOKENIZER_ID
+
+
+def resolve_tokenizer_id(explicit: Optional[str] = None) -> str:
+    """--tokenizer 优先，其次 GT_LENGTH_TOKENIZER，默认 HuggingFace ID。"""
+    if explicit is not None and explicit.strip():
+        return explicit.strip()
+    raw = os.environ.get("GT_LENGTH_TOKENIZER", "").strip()
+    return raw or _DEFAULT_TOKENIZER_ID
+
+
 OBS_ROLES = frozenset({"observation", "tool", "function"})
 ASSISTANT_ROLES = frozenset({"gpt", "assistant"})
 SOFT_LIMIT_NORMAL = 500
@@ -83,7 +98,8 @@ def _yaml_simple_value(text: str, key: str) -> Optional[str]:
     return None
 
 
-def load_gate_tokenizer(model_id: str = TOKENIZER_ID) -> Tuple[Any, str]:
+def load_gate_tokenizer(model_id: Optional[str] = None) -> Tuple[Any, str]:
+    model_id = resolve_tokenizer_id(model_id)
     try:
         from transformers import AutoTokenizer  # type: ignore
     except Exception as exc:  # noqa: BLE001
@@ -96,7 +112,8 @@ def load_gate_tokenizer(model_id: str = TOKENIZER_ID) -> Tuple[Any, str]:
     except Exception as exc:  # noqa: BLE001
         raise SystemExit(
             f"[filter_by_cutoff] 无法加载 tokenizer {model_id}（{type(exc).__name__}: {exc}）。"
-            f"拒绝静默估算；请确保可访问该模型或设置 GT_SKIP_LENGTH_FILTER=1。"
+            f"拒绝静默估算；请把 GT_LENGTH_TOKENIZER 或 --tokenizer 设成本机目录，"
+            f"或设置 GT_SKIP_LENGTH_FILTER=1。"
         ) from exc
     return tok, model_id
 
@@ -503,6 +520,7 @@ def filter_datasets_for_yaml(
     *,
     soft_compress: bool = True,
     prefix: str = "",
+    tokenizer: Optional[str] = None,
 ) -> Dict[str, Any]:
     """供 train_lowmem 调用：按 yaml cutoff 过滤对应 jsonl（就地改写，带 .prefilter.bak）。"""
     if os.environ.get("GT_SKIP_LENGTH_FILTER", "").strip() in ("1", "true", "True", "yes"):
@@ -518,7 +536,7 @@ def filter_datasets_for_yaml(
         soft_compress = False
 
     cutoff = read_cutoff_len(yaml_path)
-    tok, tok_label = load_gate_tokenizer()
+    tok, tok_label = load_gate_tokenizer(tokenizer)
     files = resolve_dataset_files(yaml_path)
     if not files:
         raise SystemExit(f"{yaml_path.name} 未解析到任何数据集文件")
@@ -564,11 +582,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("yaml", help="train_*.yaml / eval_*.yaml")
     p.add_argument("--no-soft-compress", action="store_true", help="不做 observation 软压缩，直接按长度丢弃")
     p.add_argument("--prefix", default="", help="ChatML 模板前缀（一般留空）")
+    p.add_argument(
+        "--tokenizer",
+        default="",
+        help="长度过滤 tokenizer（本机目录或 HuggingFace ID）。未给时读 GT_LENGTH_TOKENIZER，再默认 Qwen/Qwen2.5-0.5B。",
+    )
     args = p.parse_args(list(argv) if argv is not None else None)
     filter_datasets_for_yaml(
         args.yaml,
         soft_compress=not args.no_soft_compress,
         prefix=args.prefix or "",
+        tokenizer=args.tokenizer or None,
     )
     return 0
 

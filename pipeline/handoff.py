@@ -1061,11 +1061,8 @@ vllm serve /data/models/Qwen3.8-27B-merged-4bit   --tensor-parallel-size 2 --max
 
 ```bash
 # 1) 合并 LoRA（训练机上做，输出到数据盘）
-llamafactory-cli export \
-  --model_name_or_path /data/models/Qwen3.8-27B \
-  --adapter_name_or_path /data/saves/qwen38-27b-goldthread-sft \
-  --template qwen3_8 --finetuning_type lora \
-  --export_dir /data/models/Qwen3.8-27B-merged
+#    base / adapter / export_dir 全在 merge_lora.yaml 里（adapter = train_sft.yaml 的 output_dir）
+llamafactory-cli export merge_lora.yaml
 
 # 2a) 方案①：不转换，直接动态 4-bit（最省事，先试这个）
 python - <<'PY'

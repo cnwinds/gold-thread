@@ -20,6 +20,7 @@
     单卡：  CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_sft.yaml
     多卡：  torchrun --nproc_per_node 2 train_lowmem.py train_sft.yaml
     开训前自动按 YAML cutoff_len 过滤超长样本（跳过：GT_SKIP_LENGTH_FILTER=1）。
+    长度 tokenizer 用 GT_LENGTH_TOKENIZER，默认 Qwen/Qwen2.5-0.5B；访问不了 HuggingFace 时设成本机目录。
     配合监控：
         python train_monitor.py --timeout-hours 5 --log logs/27b_sft.log -- \\
           python train_lowmem.py train_sft.yaml

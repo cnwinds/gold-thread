@@ -336,31 +336,31 @@ OOM 时按顺序：`LOWMEM_DPO_CHUNK=512` → `cutoff_len 8192 → 6144 → 4096
 
 **深入阅读**：`handoff.md`（安装、27B 启动、DPO、推理与排障）。本文件只保留最短命令。
 
-## 6. 80G 卡高速推理（SFT+DPO 合并后）
+## 8. 80G 卡高速推理（SFT+DPO 合并后）
 
-> 来源：2026-11-01 线上实跑（goldthread-delivery-aef7ae45）；排障细节见仓库根
-> `DATASET_BEST_PRACTICES.md` §七。
+默认 27B 交付包是 Qwen XML：`template: qwen3_8`，工具调用是 `<function=…><parameter=…>`，推理 parser 是 `qwen3_coder`。交付 zip 里以 `FORMAT_CONTRACT.json` 的 `serve_tool_parser` 为准；下面这条是没有这份文件时的默认命令。
 
-1. **另开 conda 环境 `vllm`**，不要往训练用的 Python 里装 vLLM；首次启动需系统 `g++`（flashinfer JIT）
-2. 权重用合并后的 `…-sft-dpo-merged`；`--served-model-name` 与交付包名保持一致
-3. **两个 parser 都必须显式给**：
-   - `--reasoning-parser qwen3`：不给则思维链混进 `content`（踩过：客户端看到裸 `</think>`）
-   - `--tool-call-parser hermes`：不给则 `<tool_call>` 整段落进正文，agent 无法执行工具
+8B 冒烟和显式选择 Hermes JSON 的包用 `hermes`，不要套到默认 27B 包上。
+
+1. 另开 conda 环境 `vllm`，不要往训练用的 Python 里装 vLLM。首次启动需要系统 `g++`（flashinfer JIT）。
+2. 权重用合并后的目录。`--served-model-name` 与客户端请求的 `model` 一致。
+3. 两个 parser 都要写上：
+   - `--reasoning-parser qwen3`：否则思维链进 `content`，客户端会看到裸的 `</think>`
+   - `--tool-call-parser qwen3_coder`：否则 `<tool_call>` 整段留在正文里，agent 调不了工具
 
 ```bash
 conda activate vllm && export CUDA_VISIBLE_DEVICES=0
-vllm serve /cloud/cloud-ssd1/saves/Qwen3.8-27B-sft-dpo-merged \
+vllm serve /data/models/Qwen3.8-27B-dpo-merged \
   --host 0.0.0.0 --port 8000 \
   --served-model-name Qwen3.8-27B-sft-dpo \
   --dtype bfloat16 --max-model-len 32768 \
   --gpu-memory-utilization 0.90 --language-model-only \
   --enable-chunked-prefill --max-num-seqs 4 \
-  --enable-auto-tool-choice --tool-call-parser hermes \
+  --enable-auto-tool-choice --tool-call-parser qwen3_coder \
   --reasoning-parser qwen3 --performance-mode throughput
 ```
 
 远程 OpenAI 兼容：`http://<host>:8000/v1`，model=`Qwen3.8-27B-sft-dpo`。
-A800 80G / 32K 实测约 **28 tok/s**；reasoning 字段名取 `message.reasoning`（vLLM 0.32）。
+A800 80G / 32K 的实测吞吐约 28 tok/s。reasoning 字段名取 `message.reasoning`（vLLM 0.32）。
 
-> 注意：若按 XML 路线重训部署（coder-xml 数据 + `template: qwen3_8`），上面的
-> `--tool-call-parser` 必须换成 `qwen3_coder`，见 `DATASET_BEST_PRACTICES.md` §5.5/§七。
+Hermes JSON 包把上面的 `--tool-call-parser qwen3_coder` 换成 `hermes`，并确认训练 YAML 的 `template` 是 `qwen3`。排障见仓库根 `DATASET_BEST_PRACTICES.md` §七。

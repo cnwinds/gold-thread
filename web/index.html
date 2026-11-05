@@ -2145,6 +2145,45 @@ async function loadGold() {
   }
 }
 
+async function goldSetStepGate(mid, step) {
+  const sid = STATE.drawerData?.record?.session_id;
+  if (!sid || !mid) return;
+  const items = (STATE.drawerData?.annotation?.human_review?.items) || {};
+  const cur = { ...(items[mid] || {}) };
+  if (cur.step === "exclude") delete cur.step;
+  else if (step === "exclude") cur.step = "exclude";
+  try {
+    await api(`/api/gold/session/${encodeURIComponent(sid)}/review/items`, {
+      method: "PUT",
+      body: JSON.stringify({ items: { [mid]: cur }, note: null }),
+    });
+    toast(cur.step === "exclude" ? "已排除该步（生成训练集时不计入）" : "已取消排除", "ok");
+    openGold(sid);
+    refreshMeta().catch(() => {});
+  } catch (e) { toast(e.message, "err"); }
+}
+function renderGoldStepGate(messages, annotation) {
+  const items = (annotation?.human_review?.items) || {};
+  const asst = (messages || []).filter(m => m && m.role === "assistant" && m.id);
+  if (!asst.length) return "";
+  const rows = asst.map((m, i) => {
+    const excluded = items[m.id]?.step === "exclude";
+    const hint = short(m.thinking || m.text || "", 72);
+    return `<tr>
+      <td class="n">${i + 1}</td>
+      <td class="mono faint">${esc(String(m.id).slice(0, 8))}</td>
+      <td class="muted">${esc(hint || "—")}</td>
+      <td>${excluded ? `<span class="lb no">已排除</span>` : `<span class="faint">保留</span>`}</td>
+      <td><button type="button" class="ghost" style="padding:2px 8px;font-size:11.5px" data-gold-mid="${esc(m.id)}">${excluded ? "取消排除" : "排除此步"}</button></td>
+    </tr>`;
+  }).join("");
+  return `<div class="panel"><div class="panel-h"><h3>步级门控</h3>
+    <span class="hint">排除的步不会进入 SFT 窗口；血缘仍保留</span></div>
+    <div class="panel-b scroll" style="max-height:200px;padding-top:0"><table><thead><tr>
+      <th class="n">#</th><th>步</th><th>摘要</th><th>状态</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
 async function openGold(sid) {
   REV.active = false;
   REV.dirty = false;
@@ -2197,8 +2236,12 @@ async function openGold(sid) {
         <span class="mono faint" style="font-size:11px">${esc(p.dropped_msg_id || "")}</span></div>
         <div class="muted" style="white-space:pre-wrap;font-size:12.5px;margin-top:6px">${esc(short(p.rejected_thinking, 240))}</div></div>`).join("")}
     </div></details>` : ""}
+    ${renderGoldStepGate(rec.messages || [], ann)}
     ${renderMessages(rec.messages || [])}`;
   $("#drawerFoot").innerHTML = `<button class="ghost" onclick="showJson(STATE.drawerData.annotation)">标注 JSON</button>`;
+  $$("#drawerBody [data-gold-mid]").forEach(btn => {
+    btn.onclick = () => goldSetStepGate(btn.getAttribute("data-gold-mid"), "exclude");
+  });
 }
 
 /* ------------------------------ 消息渲染 ------------------------------ */

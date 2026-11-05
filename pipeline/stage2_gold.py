@@ -615,12 +615,27 @@ def _dpo_from_pruned(
     return pairs
 
 
-def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def run(
+    force: bool = False,
+    log=print,
+    cfg: Optional[Dict[str, Any]] = None,
+    only: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """``only`` 给出时只重算这些会话，其余黄金会话原样保留。
+
+    单条重算仍会重写聚合的 ``dpo_pairs.jsonl`` / ``diagnostics.jsonl``，
+    内容是「这次重算的会话 + 其余会话已有文件」，不会把别的会话丢掉。
+    """
     cfg = cfg or load_config()
     dirs = stage_dirs(cfg)
     raw_index = load_index(dirs["raw"] / "index.json")
     if not raw_index["sessions"]:
         raise RuntimeError("stage1 未产出数据，请先运行 stage1")
+    only_set = {s for s in (only or []) if s}
+    if only_set:
+        unknown = sorted(only_set - set(raw_index["sessions"]))
+        if unknown:
+            raise RuntimeError(f"原始会话不存在: {unknown[0]}")
 
     gold_root = dirs["gold"]
     sessions_out = gold_root / "sessions"
@@ -653,6 +668,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     if judge.enabled(cfg):
         warm: List[Dict[str, Any]] = []
         for _sid, _e in sorted(raw_index["sessions"].items()):
+            if only_set and _sid not in only_set:
+                continue
             _label = _e.get("label", "pending")
             if not judge.enabled(cfg, _label):
                 continue
@@ -664,7 +681,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             _mfp = fingerprint(_mp) if _mp and _mp.exists() else None
             _prev = prev_files.get(_sid)
             _skip = (
-                not force and _prev
+                not force and not (only_set and _sid in only_set) and _prev
                 and fingerprint_equal(_prev.get("fingerprint"), _fp)
                 and fingerprint_equal(_prev.get("meta_fingerprint"), _mfp)
                 and _prev.get("flow_version") == pilog.FLOW_VERSION
@@ -684,9 +701,25 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         if warm:
             judge.prewarm(warm, cfg=cfg, log=log)
 
+    if only_set:
+        for sid, prev_entry in (prev_index.get("sessions") or {}).items():
+            if sid in only_set or not isinstance(prev_entry, dict):
+                continue
+            sessions_index[sid] = prev_entry
+            if sid in prev_files:
+                state_files[sid] = prev_files[sid]
+            dpo_file = prev_entry.get("dpo_file") or ""
+            diag_file = prev_entry.get("diag_file") or ""
+            if dpo_file:
+                all_dpo.extend(read_jsonl(Path(dpo_file)))
+            if diag_file:
+                all_diag.extend(read_jsonl(Path(diag_file)))
+
     for sid, entry in sorted(raw_index["sessions"].items()):
         label = entry.get("label", "pending")
         counts[label] += 1
+        if only_set and sid not in only_set:
+            continue
         raw_file = Path(entry["raw_file"])
         if not raw_file.exists():
             log(f"[stage2] 缺失原始文件，跳过 {sid}")
@@ -699,6 +732,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
 
         unchanged = (
             not force
+            and not (only_set and sid in only_set)
             and prev
             and fingerprint_equal(prev.get("fingerprint"), fp)
             and fingerprint_equal(prev.get("meta_fingerprint"), meta_fp)
@@ -984,6 +1018,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     for sid in list((prev_index.get("sessions") or {}).keys()):
         if sid not in sessions_index:
             state_files.pop(sid, None)
+    if only_set:
+        counts = Counter((v.get("label") or "pending") for v in sessions_index.values())
 
     write_jsonl_atomic(gold_root / "dpo_pairs.jsonl", all_dpo)
     write_jsonl_atomic(gold_root / "diagnostics.jsonl", all_diag)

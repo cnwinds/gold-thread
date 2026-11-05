@@ -133,6 +133,35 @@ class CurationGateTests(unittest.TestCase):
         self.assertEqual("auto_gold", effective["state"])
         self.assertNotEqual("held", effective["state"])
 
+    def test_human_step_exclude_drops_from_synthesis(self):
+        msg = assistant(
+            "a1",
+            "验证头",
+            tool_calls=[{"id": "c1", "name": "bash", "arguments": {"command": "ls"}}],
+        )
+        record = {
+            "session_id": "gate2",
+            "label": "positive",
+            "project_group": "game::sample",
+            "cwd": r"D:\crack\sample",
+            "dominant_model": "deepseek-v4.1-flash-1017",
+            "stats": {"raw_steps": 1, "gold_steps": 1},
+            "messages": [
+                {"id": "sys", "role": "system", "content": "system"},
+                {"id": "root", "role": "user", "content": "分析 sample.apk"},
+                msg,
+            ],
+        }
+        ann = {
+            "review_key": "1:abc:6",
+            "model_report": {"verdict": "trainable", "confidence": 0.9},
+            "human_review": {"items": {"a1": {"step": "exclude"}}, "history": []},
+        }
+        out = evaluate_session_synthesis(record, ann, self.cfg)
+        self.assertTrue(out["full_sft_allowed"])
+        self.assertEqual(0, out["funnel"]["admitted_steps"])
+        self.assertEqual(0, len(out["windows_sgpt"]))
+
 
 class SynthesisTests(unittest.TestCase):
     def setUp(self):

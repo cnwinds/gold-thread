@@ -203,6 +203,102 @@ class DeliveryZipTests(unittest.TestCase):
             )
             self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
+    def test_merge_yaml_chain_is_packed(self):
+        """训练→合并→DPO 的链路要能只靠包内的 yaml 跑完。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _scaffold(root)
+            (root / "merge_lora.yaml").write_text(
+                "model_name_or_path: /data/models/Qwen3.8-27B\n"
+                "adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft-ab56c1d1-lf\n"
+                "template: qwen3_8\nfinetuning_type: lora\n"
+                "export_dir: /data/models/Qwen3.8-27B-merged\nexport_size: 5\n",
+                encoding="utf-8",
+            )
+            (root / "merge_dpo.yaml").write_text(
+                "model_name_or_path: /data/models/Qwen3.8-27B-merged\n"
+                "adapter_name_or_path: /data/saves/qwen38-27b-goldthread-dpo-lf\n"
+                "template: qwen3_8\nfinetuning_type: lora\n"
+                "export_dir: /data/models/Qwen3.8-27B-dpo-merged\nexport_size: 5\n",
+                encoding="utf-8",
+            )
+            _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [_sft("sft")])
+            _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", [_sft("sft-eval")])
+            _write_jsonl(root / "dpo_preference_pairs.train.v2.jsonl", [_dpo("dpo")])
+            _write_jsonl(root / "dpo_preference_pairs.eval.v2.jsonl", [_dpo("dpo-eval")])
+
+            result = self._build(root)
+            names = set(zipfile.ZipFile(result["zip_path"]).namelist())
+            self.assertIn("merge_lora.yaml", names)
+            self.assertIn("merge_dpo.yaml", names)
+
+            unzipped = root / "out"
+            _unzip(Path(result["zip_path"]), unzipped)
+            sft_merge = (unzipped / "merge_lora.yaml").read_text(encoding="utf-8")
+            dpo_merge = (unzipped / "merge_dpo.yaml").read_text(encoding="utf-8")
+            train_sft = (unzipped / "train_sft.yaml").read_text(encoding="utf-8")
+            self.assertIn("export_dir: /data/models/Qwen3.8-27B-merged", sft_merge)
+            # DPO 底座 = SFT 合并产物；DPO 合并底座 = SFT 合并产物
+            self.assertIn("model_name_or_path: /data/models/Qwen3.8-27B-merged", dpo_merge)
+            self.assertIn("export_dir: /data/models/Qwen3.8-27B-dpo-merged", dpo_merge)
+            # 合并 yaml 的 template 必须与数据/训练 yaml 同一套
+            want_template = next(ln for ln in train_sft.splitlines() if ln.startswith("template:"))
+            self.assertIn(want_template, sft_merge)
+            self.assertIn(want_template, dpo_merge)
+            self.assertNotIn("dataset:", sft_merge)
+            start = (unzipped / "START_HERE.md").read_text(encoding="utf-8")
+            self.assertIn("llamafactory-cli export merge_lora.yaml", start)
+            self.assertIn("llamafactory-cli export merge_dpo.yaml", start)
+
+    def test_merge_dpo_skipped_without_dpo_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _scaffold(root)
+            (root / "merge_lora.yaml").write_text(
+                "model_name_or_path: /data/models/Qwen3.8-27B\ntemplate: qwen3_8\n"
+                "export_dir: /data/models/Qwen3.8-27B-merged\n",
+                encoding="utf-8",
+            )
+            (root / "merge_dpo.yaml").write_text(
+                "model_name_or_path: /data/models/Qwen3.8-27B-merged\ntemplate: qwen3_8\n"
+                "export_dir: /data/models/Qwen3.8-27B-dpo-merged\n",
+                encoding="utf-8",
+            )
+            _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [_sft("sft")])
+            _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", [_sft("sft-eval")])
+
+            result = self._build(root)
+            names = set(zipfile.ZipFile(result["zip_path"]).namelist())
+            self.assertIn("merge_lora.yaml", names)
+            self.assertNotIn("merge_dpo.yaml", names)
+            man = json.loads(zipfile.ZipFile(result["zip_path"]).read("MANIFEST.json").decode("utf-8"))
+            self.assertEqual(["merge_lora.yaml"], man["merge_yaml"])
+
+    def test_package_hash_covers_packed_yaml(self):
+        """改包内 YAML（不改数据）也要换 zip 名，避免同名不同内容。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _scaffold(root)
+            _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [_sft("sft")])
+            _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", [_sft("sft-eval")])
+            (root / "merge_lora.yaml").write_text(
+                "model_name_or_path: /data/models/Qwen3.8-27B\ntemplate: qwen3_8\n"
+                "export_dir: /data/models/Qwen3.8-27B-merged\n",
+                encoding="utf-8",
+            )
+            first = self._build(root)
+            again = self._build(root)
+            self.assertEqual(first["package_hash"], again["package_hash"])
+
+            # 只改合并配置的 export_dir
+            (root / "merge_lora.yaml").write_text(
+                "model_name_or_path: /data/models/Qwen3.8-27B\ntemplate: qwen3_8\n"
+                "export_dir: /data/models/Qwen3.8-27B-merged-b\n",
+                encoding="utf-8",
+            )
+            changed = self._build(root)
+            self.assertNotEqual(first["package_hash"], changed["package_hash"])
+
     def test_stage3_only_drops_illegal_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -565,8 +565,7 @@ def build_flow(
 
         if root_idx is not None and idx == root_idx:
             raw_root_prompt = text
-            custom_root = (manual_overrides.get("root_prompt") or "").strip()
-            root_prompt = custom_root or rules.normalize_root_text(text, cwd)
+            root_prompt = rules.normalize_root_text(text, cwd)
             user["raw_content"] = text
             user["content"] = root_prompt
             mark.update(
@@ -677,7 +676,7 @@ def build_flow(
         "constraints": constraints,
         "has_root": bool(root_prompt),
         "model_classified": bool(annotations),
-        "manual_overridden": bool(manual_turns or manual_overrides.get("root_prompt")),
+        "manual_overridden": bool(manual_turns),
         "flow_messages": len(flow),
     }
     return flow, marks, stats
