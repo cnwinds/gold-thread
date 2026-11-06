@@ -1,0 +1,49 @@
+### 27B SFT 基础配置。不要直接拿去 llamafactory-cli train。
+### autotrain.py 会按方案和 settings.yaml 覆盖带 [auto] 的键，生成 runs/<run>/attempt-N.yaml 再启动。
+### 其余键是固定约定，改之前先看 docs/TROUBLESHOOTING.md 里对应条目。
+
+### model
+model_name_or_path: null                             # [auto] settings.yaml: base_model
+trust_remote_code: true
+flash_attn: fa2                                      # 只作用于 16 层 full_attention；flash-attn 装不上时 autotrain 会改 sdpa
+enable_liger_kernel: false                           # qwen3_5 不在 Liger 支持列表
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 32
+lora_target: gate_proj,up_proj,down_proj             # 写 mlp 会被 peft 拒绝（Qwen3_5MLP 是容器模块）
+
+### dataset
+dataset_dir: null                                    # [auto] <work_dir>/<run>/data_<cutoff>（按 cutoff 过滤后的副本）
+dataset: null                                        # [auto] settings.yaml: project.datasets.<阶段>.train
+eval_dataset: null                                   # [auto] settings.yaml: project.datasets.<阶段>.eval
+template: null                                       # [auto] settings.yaml: project.template
+cutoff_len: null                                     # [auto] 方案决定
+packing: false                                       # 打开会把目标步从样本末尾拆走
+mask_history: true                                   # 只训练最后一轮 assistant
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: null                                     # [auto] <work_dir>/<run>/output
+logging_steps: 5
+save_steps: 100
+save_total_limit: 2
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4                       # [auto] 方案决定
+learning_rate: 1.0e-4
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+
+### eval：训练中关闭（会额外占激活导致 OOM），训完用 autotrain.py eval 单独跑
+per_device_eval_batch_size: 1
+eval_strategy: "no"

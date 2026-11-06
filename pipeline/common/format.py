@@ -195,7 +195,7 @@ EXPORT_PROFILES: Dict[str, Dict[str, Any]] = {
     "Qwen3.8-27B": {
         "label": "Qwen XML",
         "habit": "Qwen3-Coder / Qwen3.8-27B",
-        "summary": "Qwen3-Coder 与 Qwen3.8-27B 的工具调用是整段 XML。打包时只改写 assistant 侧的调用，并把 27B 配置的 template 锁成 qwen3_8。8B 的 yaml 留在仓库里，不进这个包。",
+        "summary": "工具调用是 Qwen XML。打进 goldthread-train 时，settings.yaml 的 project.template 写成 qwen3_8，推理用 --tool-call-parser qwen3_coder。用 autotrain.py 开训。",
         "style": "coder-xml",
         "template": "qwen3_8",
         "parser": "qwen3_coder",
@@ -214,11 +214,11 @@ EXPORT_PROFILES: Dict[str, Dict[str, Any]] = {
     "Qwen3.8-8B": {
         "label": "Hermes JSON",
         "habit": "Qwen3 / 8B",
-        "summary": "Qwen3 与 8B 在 <tool_call> 里写 JSON。选这个格式时，27B 配置的 template 会锁成 qwen3，和数据同一套协议。8B 配置会一起打进包。",
+        "summary": "工具调用是 Hermes JSON。打进 goldthread-train 时，settings.yaml 的 project.template 写成 qwen3，推理用 --tool-call-parser hermes。用 autotrain.py 开训。",
         "style": "hermes-json",
         "template": "qwen3",
         "parser": "hermes",
-        "pack_8b_yaml": True,
+        "pack_8b_yaml": False,
         "default": False,
         "example": (
             "<tool_call>\n"

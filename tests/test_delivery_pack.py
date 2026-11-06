@@ -13,7 +13,7 @@ from pathlib import Path
 from pipeline import dataset_build
 
 from pipeline.common.config import load_config
-from pipeline.common.format import _parse_tc_block, convert_toolcall_text
+from pipeline.common.format import _parse_tc_block, convert_toolcall_text, export_profiles_public
 from pipeline.lf_normalize import TOOL_RESPONSE_JOIN, normalize_messages, prepare_datasets
 from pipeline.package import build_delivery_zip, compute_package_hash
 from pipeline import length_gate as length_gate_mod
@@ -93,9 +93,27 @@ def _scaffold(root: Path) -> None:
     )
 
 
+PACK = "goldthread-train"
+
+
+def _at(root: Path, *parts: str) -> Path:
+    return root.joinpath(PACK, *parts)
+
+
 def _unzip(zip_path: Path, dest: Path) -> None:
     with zipfile.ZipFile(zip_path) as zf:
         zf.extractall(dest)
+
+
+def _check_data(pack_root: Path):
+    return subprocess.run(
+        [sys.executable, str(pack_root / "tools" / "check_data.py")],
+        cwd=pack_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 def _load_jsonl(path: Path):
@@ -149,11 +167,11 @@ class DeliveryZipTests(unittest.TestCase):
             )
             unzipped = Path(tmp) / "out"
             _unzip(Path(result["zip_path"]), unzipped)
-            rows = _load_jsonl(unzipped / "data" / "sft.train.lf.jsonl")
+            rows = _load_jsonl(_at(unzipped, "data") / "sft.train.lf.jsonl")
             self.assertEqual(["from-stage3"], [row["sample_id"] for row in rows])
-            eval_rows = _load_jsonl(unzipped / "data" / "sft.eval.lf.jsonl")
+            eval_rows = _load_jsonl(_at(unzipped, "data") / "sft.eval.lf.jsonl")
             self.assertEqual(["from-stage3-eval"], [row["sample_id"] for row in eval_rows])
-            manifest = json.loads((unzipped / "MANIFEST.json").read_text(encoding="utf-8"))
+            manifest = json.loads((_at(unzipped, "data", "MANIFEST.json")).read_text(encoding="utf-8"))
             self.assertEqual("a" * 16, manifest["build_id"])
             self.assertEqual("a" * 16, result["build_id"])
 
@@ -163,7 +181,8 @@ class DeliveryZipTests(unittest.TestCase):
 
     def test_prefers_v2_and_locks_yaml_to_lf_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             _scaffold(root)
             _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [_sft("from-v2")])
             _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", [_sft("from-v2-eval")])
@@ -182,27 +201,29 @@ class DeliveryZipTests(unittest.TestCase):
             _unzip(Path(result["zip_path"]), unzipped)
 
             names = {n for n in zipfile.ZipFile(result["zip_path"]).namelist()}
-            self.assertIn("data/sft.train.lf.jsonl", names)
-            self.assertIn("data/dpo.train.lf.jsonl", names)
-            self.assertIn("data/dataset_info.json", names)
+            self.assertIn(f"{PACK}/data/sft.train.lf.jsonl", names)
+            self.assertIn(f"{PACK}/data/dpo.train.lf.jsonl", names)
+            self.assertIn(f"{PACK}/data/dataset_info.json", names)
             self.assertNotIn("dataset_info.json", names)
-            self.assertNotIn("data/sft_step_windows_sharegpt.train.jsonl", names)
-            self.assertNotIn("data/sft_step_windows_openai.train.jsonl", names)
-            self.assertIn("train_lowmem.py", names)
-            self.assertIn("lowmem_dpo.py", names)
-            self.assertIn("START_HERE.md", names)
-            self.assertIn("check_data.py", names)
-            self.assertIn("filter_by_cutoff.py", names)
+            self.assertNotIn(f"{PACK}/data/sft_step_windows_sharegpt.train.jsonl", names)
+            self.assertNotIn(f"{PACK}/data/sft_step_windows_openai.train.jsonl", names)
+            self.assertIn(f"{PACK}/autotrain.py", names)
+            self.assertIn(f"{PACK}/tools/train_lowmem.py", names)
+            self.assertIn(f"{PACK}/tools/lowmem_dpo.py", names)
+            self.assertIn(f"{PACK}/README.md", names)
+            self.assertIn(f"{PACK}/tools/check_data.py", names)
+            self.assertIn(f"{PACK}/tools/filter_by_cutoff.py", names)
+            self.assertNotIn("START_HERE.md", names)
 
             # zip stem is package_hash (content fingerprint), not config_hash[:8]
             self.assertIn("package_hash", result)
             self.assertIn("config_hash", result)
             self.assertEqual(
                 result["zip_name"],
-                f"goldthread-delivery-{result['package_hash']}.zip",
+                f"goldthread-train-{result['package_hash']}.zip",
             )
             self.assertEqual(8, len(result["package_hash"]))
-            man = json.loads((unzipped / "MANIFEST.json").read_text(encoding="utf-8"))
+            man = json.loads((_at(unzipped, "data", "MANIFEST.json")).read_text(encoding="utf-8"))
             self.assertEqual(result["package_hash"], man["package_hash"])
             self.assertEqual(result["config_hash"], man["config_hash"])
             self.assertIn("length_gate_version", man)
@@ -210,16 +231,16 @@ class DeliveryZipTests(unittest.TestCase):
                 str(man["length_gate_version"]).startswith(length_gate_mod.LENGTH_GATE_VERSION)
             )
 
-            info = json.loads((unzipped / "data" / "dataset_info.json").read_text(encoding="utf-8"))
+            info = json.loads((_at(unzipped, "data") / "dataset_info.json").read_text(encoding="utf-8"))
             self.assertEqual("sft.train.lf.jsonl", info["gt_sft_train_lf"]["file_name"])
             self.assertEqual("dpo.train.lf.jsonl", info["gt_dpo_train_lf"]["file_name"])
             self.assertFalse(info["gt_sft_train_lf"]["file_name"].startswith("data/"))
             self.assertTrue(info["gt_dpo_train_lf"]["ranking"])
 
-            sft_rows = _load_jsonl(unzipped / "data" / "sft.train.lf.jsonl")
+            sft_rows = _load_jsonl(_at(unzipped, "data") / "sft.train.lf.jsonl")
             self.assertEqual(["from-v2"], [r["sample_id"] for r in sft_rows])
             self.assertNotIn("tool_response", json.dumps(sft_rows, ensure_ascii=False))
-            dpo_rows = _load_jsonl(unzipped / "data" / "dpo.train.lf.jsonl")
+            dpo_rows = _load_jsonl(_at(unzipped, "data") / "dpo.train.lf.jsonl")
             self.assertEqual(["dpo-v2"], [r["sample_id"] for r in dpo_rows])
             self.assertIsInstance(dpo_rows[0]["chosen"], dict)
             self.assertEqual(
@@ -227,46 +248,25 @@ class DeliveryZipTests(unittest.TestCase):
                 [m["from"] for m in dpo_rows[0]["conversations"]],
             )
 
-            for name in ("train_sft.yaml", "train_sft_qlora.yaml", "train_dpo.yaml", "eval_sft.yaml"):
-                text = (unzipped / name).read_text(encoding="utf-8")
-                self.assertIn("dataset_dir: ./data", text)
-                self.assertNotIn("pi_sft", text)
-                self.assertNotIn("pi_dpo", text)
-            self.assertIn("dataset: gt_sft_train_lf", (unzipped / "train_sft.yaml").read_text(encoding="utf-8"))
-            self.assertIn("eval_dataset: gt_sft_eval_lf", (unzipped / "train_sft_qlora.yaml").read_text(encoding="utf-8"))
-            self.assertIn("dataset: gt_dpo_train_lf", (unzipped / "train_dpo.yaml").read_text(encoding="utf-8"))
-            self.assertIn("CUDA_VISIBLE_DEVICES=0 python train_lowmem.py train_sft.yaml", (unzipped / "START_HERE.md").read_text(encoding="utf-8"))
-            self.assertIn("gt_sft_train_lf", (unzipped / "handoff.md").read_text(encoding="utf-8")[:600])
+            settings = _at(unzipped, "settings.yaml").read_text(encoding="utf-8")
+            self.assertRegex(settings, r"(?m)^  template: qwen3_8\b")
+            self.assertIn("gt_sft_train_lf", settings)
+            self.assertIn("gt_dpo_train_lf", settings)
+            readme = _at(unzipped, "README.md").read_text(encoding="utf-8")
+            self.assertIn("python autotrain.py sft", readme)
+            self.assertIn("qwen3_coder", readme)
+            self.assertIn("| 1 |", readme)
 
-            proc = subprocess.run(
-                [sys.executable, str(unzipped / "check_data.py")],
-                cwd=unzipped,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
+            proc = _check_data(_at(unzipped))
             self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
-    def test_merge_yaml_chain_is_packed(self):
-        """训练→合并→DPO 的链路要能只靠包内的 yaml 跑完。"""
+    def test_template_trains_through_autotrain_not_workspace_yaml(self):
+        """工作区里的旧 merge/train yaml 不进包；训练入口是模板里的 autotrain。"""
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             _scaffold(root)
-            (root / "merge_lora.yaml").write_text(
-                "model_name_or_path: /data/models/Qwen3.8-27B\n"
-                "adapter_name_or_path: /data/saves/qwen38-27b-goldthread-sft-ab56c1d1-lf\n"
-                "template: qwen3_8\nfinetuning_type: lora\n"
-                "export_dir: /data/models/Qwen3.8-27B-merged\nexport_size: 5\n",
-                encoding="utf-8",
-            )
-            (root / "merge_dpo.yaml").write_text(
-                "model_name_or_path: /data/models/Qwen3.8-27B-merged\n"
-                "adapter_name_or_path: /data/saves/qwen38-27b-goldthread-dpo-lf\n"
-                "template: qwen3_8\nfinetuning_type: lora\n"
-                "export_dir: /data/models/Qwen3.8-27B-dpo-merged\nexport_size: 5\n",
-                encoding="utf-8",
-            )
+            (root / "merge_lora.yaml").write_text("export_dir: /should/not/pack\n", encoding="utf-8")
             _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [_sft("sft")])
             _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", [_sft("sft-eval")])
             _write_jsonl(root / "dpo_preference_pairs.train.v2.jsonl", [_dpo("dpo")])
@@ -274,79 +274,61 @@ class DeliveryZipTests(unittest.TestCase):
 
             result = self._build(root)
             names = set(zipfile.ZipFile(result["zip_path"]).namelist())
-            self.assertIn("merge_lora.yaml", names)
-            self.assertIn("merge_dpo.yaml", names)
+            self.assertIn(f"{PACK}/autotrain.py", names)
+            self.assertIn(f"{PACK}/configs/sft.yaml", names)
+            self.assertIn(f"{PACK}/configs/dpo.yaml", names)
+            self.assertNotIn(f"{PACK}/merge_lora.yaml", names)
+            self.assertFalse(any("should/not/pack" in zipfile.ZipFile(result["zip_path"]).read(n).decode("utf-8", "ignore") for n in names if n.endswith((".yaml", ".yml", ".md"))))
 
             unzipped = root / "out"
             _unzip(Path(result["zip_path"]), unzipped)
-            sft_merge = (unzipped / "merge_lora.yaml").read_text(encoding="utf-8")
-            dpo_merge = (unzipped / "merge_dpo.yaml").read_text(encoding="utf-8")
-            train_sft = (unzipped / "train_sft.yaml").read_text(encoding="utf-8")
-            self.assertIn("export_dir: /data/models/Qwen3.8-27B-merged", sft_merge)
-            # DPO 底座 = SFT 合并产物；DPO 合并底座 = SFT 合并产物
-            self.assertIn("model_name_or_path: /data/models/Qwen3.8-27B-merged", dpo_merge)
-            self.assertIn("export_dir: /data/models/Qwen3.8-27B-dpo-merged", dpo_merge)
-            # 合并 yaml 的 template 必须与数据/训练 yaml 同一套
-            want_template = next(ln for ln in train_sft.splitlines() if ln.startswith("template:"))
-            self.assertIn(want_template, sft_merge)
-            self.assertIn(want_template, dpo_merge)
-            self.assertNotIn("dataset:", sft_merge)
-            start = (unzipped / "START_HERE.md").read_text(encoding="utf-8")
-            self.assertIn("llamafactory-cli export merge_lora.yaml", start)
-            self.assertIn("llamafactory-cli export merge_dpo.yaml", start)
+            sft_cfg = _at(unzipped, "configs", "sft.yaml").read_text(encoding="utf-8")
+            dpo_cfg = _at(unzipped, "configs", "dpo.yaml").read_text(encoding="utf-8")
+            self.assertIn("stage: sft", sft_cfg)
+            self.assertIn("learning_rate: 1.0e-5", dpo_cfg)
+            self.assertIn("template: null", sft_cfg)
+            readme = _at(unzipped, "README.md").read_text(encoding="utf-8")
+            self.assertIn("python autotrain.py sft", readme)
+            self.assertIn("python autotrain.py dpo", readme)
 
-    def test_merge_dpo_skipped_without_dpo_data(self):
+    def test_settings_omit_dpo_keys_without_dpo_data(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             _scaffold(root)
-            (root / "merge_lora.yaml").write_text(
-                "model_name_or_path: /data/models/Qwen3.8-27B\ntemplate: qwen3_8\n"
-                "export_dir: /data/models/Qwen3.8-27B-merged\n",
-                encoding="utf-8",
-            )
-            (root / "merge_dpo.yaml").write_text(
-                "model_name_or_path: /data/models/Qwen3.8-27B-merged\ntemplate: qwen3_8\n"
-                "export_dir: /data/models/Qwen3.8-27B-dpo-merged\n",
-                encoding="utf-8",
-            )
             _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [_sft("sft")])
             _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", [_sft("sft-eval")])
 
             result = self._build(root)
             names = set(zipfile.ZipFile(result["zip_path"]).namelist())
-            self.assertIn("merge_lora.yaml", names)
-            self.assertNotIn("merge_dpo.yaml", names)
-            man = json.loads(zipfile.ZipFile(result["zip_path"]).read("MANIFEST.json").decode("utf-8"))
-            self.assertEqual(["merge_lora.yaml"], man["merge_yaml"])
+            self.assertNotIn(f"{PACK}/data/dpo.train.lf.jsonl", names)
+            man = json.loads(zipfile.ZipFile(result["zip_path"]).read(f"{PACK}/data/MANIFEST.json").decode("utf-8"))
+            self.assertNotIn("gt_dpo_train_lf", man["datasets"])
+            unzipped = root / "out"
+            _unzip(Path(result["zip_path"]), unzipped)
+            settings = _at(unzipped, "settings.yaml").read_text(encoding="utf-8")
+            self.assertNotIn("gt_dpo_train_lf", settings)
+            proc = _check_data(_at(unzipped))
+            self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
-    def test_package_hash_covers_packed_yaml(self):
-        """改包内 YAML（不改数据）也要换 zip 名，避免同名不同内容。"""
+    def test_workspace_yaml_does_not_change_package_hash(self):
+        """模板外的工作区 YAML 不再决定包内容。"""
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             _scaffold(root)
             _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [_sft("sft")])
             _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", [_sft("sft-eval")])
-            (root / "merge_lora.yaml").write_text(
-                "model_name_or_path: /data/models/Qwen3.8-27B\ntemplate: qwen3_8\n"
-                "export_dir: /data/models/Qwen3.8-27B-merged\n",
-                encoding="utf-8",
-            )
+            (root / "merge_lora.yaml").write_text("export_dir: /data/models/a\n", encoding="utf-8")
             first = self._build(root)
-            again = self._build(root)
-            self.assertEqual(first["package_hash"], again["package_hash"])
-
-            # 只改合并配置的 export_dir
-            (root / "merge_lora.yaml").write_text(
-                "model_name_or_path: /data/models/Qwen3.8-27B\ntemplate: qwen3_8\n"
-                "export_dir: /data/models/Qwen3.8-27B-merged-b\n",
-                encoding="utf-8",
-            )
+            (root / "merge_lora.yaml").write_text("export_dir: /data/models/b\n", encoding="utf-8")
             changed = self._build(root)
-            self.assertNotEqual(first["package_hash"], changed["package_hash"])
+            self.assertEqual(first["package_hash"], changed["package_hash"])
 
     def test_stage3_only_drops_illegal_row(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             _scaffold(root)
             _write_jsonl(
                 root / "sft_step_windows_sharegpt.train.jsonl",
@@ -361,19 +343,13 @@ class DeliveryZipTests(unittest.TestCase):
             self.assertTrue(any("drop-me" in item for item in prepared.dropped["sft.train"]))
             unzipped = root / "out"
             _unzip(Path(result["zip_path"]), unzipped)
-            proc = subprocess.run(
-                [sys.executable, str(unzipped / "check_data.py")],
-                cwd=unzipped,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
+            proc = _check_data(_at(unzipped))
             self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
     def test_existing_aligned_lf_is_kept(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             _scaffold(root)
             kept = _sft("hand-tuned")
             kept["conversations"] = normalize_messages(kept["conversations"])
@@ -388,12 +364,13 @@ class DeliveryZipTests(unittest.TestCase):
             result = self._build(root)
             unzipped = root / "out"
             _unzip(Path(result["zip_path"]), unzipped)
-            ids = [r["sample_id"] for r in _load_jsonl(unzipped / "data" / "sft.train.lf.jsonl")]
+            ids = [r["sample_id"] for r in _load_jsonl(_at(unzipped, "data") / "sft.train.lf.jsonl")]
             self.assertEqual(["hand-tuned"], ids)
 
     def test_unaligned_existing_lf_is_rebuilt_from_v2(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             _scaffold(root)
             _write_jsonl(root / "sft.train.lf.jsonl", [_sft("broken", illegal=True)])
             _write_jsonl(root / "sft.eval.lf.jsonl", [_sft("broken-eval", illegal=True)])
@@ -404,22 +381,16 @@ class DeliveryZipTests(unittest.TestCase):
             result = self._build(root)
             unzipped = root / "out"
             _unzip(Path(result["zip_path"]), unzipped)
-            ids = [r["sample_id"] for r in _load_jsonl(unzipped / "data" / "sft.train.lf.jsonl")]
+            ids = [r["sample_id"] for r in _load_jsonl(_at(unzipped, "data") / "sft.train.lf.jsonl")]
             self.assertEqual(["from-v2"], ids)
-            proc = subprocess.run(
-                [sys.executable, str(unzipped / "check_data.py")],
-                cwd=unzipped,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
+            proc = _check_data(_at(unzipped))
             self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
 
     def test_stale_subset_lf_is_rebuilt_from_v2(self):
         """盘上 lf 条数明显少于 v2（旧 release 子集）时必须按 v2 重生成。"""
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             _scaffold(root)
             v2 = [_sft(f"s{i}") for i in range(10)]
             _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", v2)
@@ -475,17 +446,19 @@ class ExportFormatTests(unittest.TestCase):
 
     def test_qwen_xml_rewrites_assistant_and_locks_template(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             self._seed(root)
             result = build_delivery_zip(root, self.cfg, log=lambda *_: None, profile="Qwen3.8-27B")
             unzipped = root / "out"
             _unzip(Path(result["zip_path"]), unzipped)
 
             names = set(zipfile.ZipFile(result["zip_path"]).namelist())
-            self.assertIn("FORMAT_CONTRACT.json", names)
-            self.assertNotIn("train_sft_qwen3_8b.yaml", names)
+            self.assertIn(f"{PACK}/data/MANIFEST.json", names)
+            self.assertNotIn(f"{PACK}/train_sft_qwen3_8b.yaml", names)
+            self.assertFalse(any(n.endswith("qwen3_8b.yaml") for n in names))
 
-            sft = _load_jsonl(unzipped / "data" / "sft.train.lf.jsonl")[0]
+            sft = _load_jsonl(_at(unzipped, "data") / "sft.train.lf.jsonl")[0]
             gpts = [m["value"] for m in sft["conversations"] if m["from"] == "gpt"]
             gpt, target = gpts[0], gpts[-1]
             obs = next(m["value"] for m in sft["conversations"] if m["from"] == "observation")
@@ -498,55 +471,57 @@ class ExportFormatTests(unittest.TestCase):
             self.assertIn('"arguments"', obs)
             self.assertIn("<tool_call>garbage</tool_call>", obs)
 
-            dpo = _load_jsonl(unzipped / "data" / "dpo.train.lf.jsonl")[0]
+            dpo = _load_jsonl(_at(unzipped, "data") / "dpo.train.lf.jsonl")[0]
             self.assertIn("good-cmd", dpo["chosen"]["value"])
             self.assertIn("<function=bash>", dpo["chosen"]["value"])
             self.assertIn("bad-cmd", dpo["rejected"]["value"])
             self.assertNotIn('"arguments"', dpo["rejected"]["value"])
 
-            sft_yaml = (unzipped / "train_sft.yaml").read_text(encoding="utf-8")
-            self.assertRegex(sft_yaml, r"(?m)^template: qwen3_8$")
-            start = (unzipped / "START_HERE.md").read_text(encoding="utf-8")
-            self.assertIn("--tool-call-parser qwen3_coder", start)
-            self.assertIn("没有打入", start)
-            contract = json.loads((unzipped / "FORMAT_CONTRACT.json").read_text(encoding="utf-8"))
+            settings = _at(unzipped, "settings.yaml").read_text(encoding="utf-8")
+            self.assertRegex(settings, r"(?m)^  template: qwen3_8\b")
+            readme = _at(unzipped, "README.md").read_text(encoding="utf-8")
+            self.assertIn("--tool-call-parser qwen3_coder", readme)
+            man = json.loads((_at(unzipped, "data", "MANIFEST.json")).read_text(encoding="utf-8"))
+            contract = man["format_contract"]
             self.assertEqual("Qwen3.8-27B", contract["profile"])
             self.assertEqual("coder-xml", contract["tool_style"])
             self.assertEqual("qwen3_8", contract["train_template"])
             self.assertEqual("qwen3_coder", contract["serve_tool_parser"])
             self.assertGreater(contract["blocks_converted"], 0)
-            man = json.loads((unzipped / "MANIFEST.json").read_text(encoding="utf-8"))
-            self.assertEqual(contract["profile"], man["format_contract"]["profile"])
-            self.assertIn("工具调用格式已锁定", (unzipped / "handoff.md").read_text(encoding="utf-8")[:2000])
+            self.assertEqual("coder-xml", man["format"]["tool_call"])
 
     def test_hermes_keeps_json_and_includes_8b_yaml(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             self._seed(root)
             result = build_delivery_zip(root, self.cfg, log=lambda *_: None, profile="hermes-json")
             unzipped = root / "out"
             _unzip(Path(result["zip_path"]), unzipped)
             names = set(zipfile.ZipFile(result["zip_path"]).namelist())
-            self.assertIn("train_sft_qwen3_8b.yaml", names)
+            self.assertFalse(any(n.endswith("qwen3_8b.yaml") for n in names))
 
-            sft = _load_jsonl(unzipped / "data" / "sft.train.lf.jsonl")[0]
+            sft = _load_jsonl(_at(unzipped, "data") / "sft.train.lf.jsonl")[0]
             gpt = sft["conversations"][2]["value"]
             self.assertIn('"arguments"', gpt)
             self.assertNotIn("<function=bash>", gpt)
             self.assertIn("<tool_call>garbage</tool_call>", sft["conversations"][3]["value"])
 
-            sft_yaml = (unzipped / "train_sft.yaml").read_text(encoding="utf-8")
-            self.assertRegex(sft_yaml, r"(?m)^template: qwen3$")
-            eight = (unzipped / "train_sft_qwen3_8b.yaml").read_text(encoding="utf-8")
-            self.assertRegex(eight, r"(?m)^template: qwen3$")
-            self.assertIn("dataset: gt_sft_train_lf", eight)
-            start = (unzipped / "START_HERE.md").read_text(encoding="utf-8")
-            self.assertIn("--tool-call-parser hermes", start)
-            self.assertNotIn("qwen3_coder", start)
+            settings = _at(unzipped, "settings.yaml").read_text(encoding="utf-8")
+            self.assertRegex(settings, r"(?m)^  template: qwen3\b")
+            self.assertIn("gt_sft_train_lf", settings)
+            readme = _at(unzipped, "README.md").read_text(encoding="utf-8")
+            self.assertIn("--tool-call-parser hermes", readme)
+            self.assertNotIn("qwen3_coder", readme)
+            public = {item["id"]: item for item in export_profiles_public()}
+            self.assertFalse(public["Qwen3.8-8B"]["pack_8b_yaml"])
+            self.assertIn("autotrain.py", public["Qwen3.8-8B"]["summary"])
+            self.assertIn("qwen3_8", public["Qwen3.8-27B"]["summary"])
 
     def test_unparsed_assistant_tool_call_aborts_before_zip(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             self._seed(root)
             bad = _sft("bad")
             bad["conversations"][5]["value"] = "<tool_call>nope</tool_call>"
@@ -561,7 +536,8 @@ class ExportFormatTests(unittest.TestCase):
 
     def test_stage3_repack_remembers_the_last_format(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "train"
+            root.mkdir()
             self._seed(root)
             first = build_delivery_zip(root, self.cfg, log=lambda *_: None, profile="Qwen3.8-8B")
             second = build_delivery_zip(root, self.cfg, log=lambda *_: None)
@@ -631,6 +607,39 @@ class PackageHashTests(unittest.TestCase):
         h1 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows}, fp)
         h2 = compute_package_hash("cfgabc", {"sft.train.lf.jsonl": rows}, fp)
         self.assertEqual(h1, h2)
+
+
+class DeliveryListingTests(unittest.TestCase):
+    def test_console_reads_new_and_legacy_zip_manifests(self):
+        from server.app import _delivery_zips, _package_hash_from_name, _zip_manifest
+
+        with tempfile.TemporaryDirectory() as tmp:
+            delivery = Path(tmp)
+            old = delivery / "goldthread-delivery-aaaaaaaa.zip"
+            new = delivery / "goldthread-train-bbbbbbbb.zip"
+            (delivery / "notes.zip").write_bytes(b"not a training pack")
+            with zipfile.ZipFile(old, "w") as zf:
+                zf.writestr(
+                    "MANIFEST.json",
+                    json.dumps({"package_hash": "aaaaaaaa", "counts": {"sft.train.lf.jsonl": 2}}),
+                )
+            with zipfile.ZipFile(new, "w") as zf:
+                zf.writestr(
+                    "goldthread-train/data/MANIFEST.json",
+                    json.dumps({"package_hash": "bbbbbbbb", "counts": {"sft.train.lf.jsonl": 4}}),
+                )
+            names = [p.name for p in _delivery_zips(delivery)]
+            self.assertEqual(
+                ["goldthread-train-bbbbbbbb.zip", "goldthread-delivery-aaaaaaaa.zip"],
+                names,
+            )
+            self.assertEqual("aaaaaaaa", _zip_manifest(old)["package_hash"])
+            self.assertEqual(4, _zip_manifest(new)["counts"]["sft.train.lf.jsonl"])
+            self.assertEqual("bbbbbbbb", _package_hash_from_name(new.stem))
+            self.assertEqual("aaaaaaaa", _package_hash_from_name(old.stem))
+        from server.app import _package_layout_note
+        self.assertEqual("goldthread-train 模板", _package_layout_note("goldthread-train-bbbbbbbb.zip"))
+        self.assertEqual("交付包", _package_layout_note("goldthread-delivery-aaaaaaaa.zip"))
 
 
 if __name__ == "__main__":

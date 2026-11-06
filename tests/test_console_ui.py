@@ -62,6 +62,7 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             'body.dirty', 'data-draft-decision', 'id="draftBuild"',
             'trainRequestCurrent', 'expected_hash', 'syncDraftSelection',
             'dataset_evaluate', 'pending_evaluations', 'DPO 偏好对',
+            'train-split-tools', 'function trainTableHead(',
             'loadTrainBuilds', 'buildWorkspace', 'build_id',
             'onTaskFinished(j)', 'RUNS_REQUEST_SEQ', 'DRAWER_REQUEST_SEQ',
             'e.target.closest("[data-draft-toggle]")',
@@ -69,6 +70,14 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             self.assertIn(snippet, HTML)
         self.assertNotIn("gt.trainInclude", HTML)
         self.assertNotIn("function setTrainInclude", HTML)
+        self.assertIn(".train-draft-shell .train-main{grid-column:1 / -1", HTML)
+        self.assertIn("grid-template-rows:auto minmax(168px,320px) minmax(0,1fr)", HTML)
+        desktop = HTML.index("grid-template-rows:auto minmax(168px,320px) minmax(0,1fr)")
+        mobile = HTML.index("grid-template-rows:auto auto auto minmax(280px,1fr)")
+        self.assertGreater(mobile, desktop)
+        self.assertIn(".ds-row{display:grid;grid-template-columns:minmax(0,1fr) auto", HTML)
+        self.assertIn("function trainTableHead(", HTML)
+        self.assertIn("${trainTableHead(kind)}", HTML)
 
     def test_drawer_async_loaders_capture_seq_after_open_drawer(self) -> None:
         for fn in ("openDraftSample", "openBuildDetail", "openTrainHistorySample"):
@@ -146,6 +155,10 @@ class ConsoleWorkspaceTests(unittest.TestCase):
         self.assertIsNotNone(load_match)
         self.assertNotIn('api("/api/runs")', load_match.group(1))
         self.assertIn('api("/api/export/history")', load_match.group(1))
+        self.assertIn('api("/api/releases")', load_match.group(1))
+        self.assertIn("releasePanelHtml()", detail_source)
+        for snippet in ("发布当前 Build", "回滚到上一版本", "迁入 Build", "function activateRelease"):
+            self.assertIn(snippet, HTML)
 
     def test_reference_conversation_and_overview_views_are_preserved(self) -> None:
         for snippet in (
@@ -226,6 +239,39 @@ async function api() {{ return {{status:'done', stage:'package', id:'quick', log
             path.write_text(node_script, encoding="utf-8")
             result = subprocess.run(["node", str(path)], check=True, capture_output=True, text=True)
         self.assertEqual({"completed": 1}, json.loads(result.stdout))
+
+    @unittest.skipUnless(shutil.which("node"), "需要 Node.js 检查任务登记后的即时查询")
+    def test_register_job_watch_reads_a_finished_job_immediately(self) -> None:
+        match = re.search(r"(function registerJobWatch\(jobId, onDone\) \{[\s\S]*?\n\})", SCRIPT)
+        self.assertIsNotNone(match)
+        node_script = f"""
+const TASK_HUB = {{ watched: new Map(), pollTimer: 1, notified: new Set() }};
+const finished = [];
+function taskHubEnsure() {{}}
+function onTaskFinished(j) {{
+  if (!j || TASK_HUB.notified.has(j.id)) return;
+  TASK_HUB.notified.add(j.id);
+  TASK_HUB.watched.delete(j.id);
+  finished.push(j.id);
+}}
+let status = 'done';
+async function api() {{ return {{status, id:'quick', stage:'package'}}; }}
+{match.group(1)}
+(async () => {{
+  registerJobWatch('quick', () => {{}});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  status = 'running';
+  registerJobWatch('later', () => {{}});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  if (JSON.stringify(finished) !== JSON.stringify(['quick'])) throw new Error(JSON.stringify(finished));
+  console.log(JSON.stringify({{finished}}));
+}})().catch(err => {{ console.error(err); process.exit(1); }});
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "register_watch_test.js"
+            path.write_text(node_script, encoding="utf-8")
+            result = subprocess.run(["node", str(path)], check=True, capture_output=True, text=True)
+        self.assertEqual({"finished": ["quick"]}, json.loads(result.stdout))
 
     @unittest.skipUnless(shutil.which("node"), "需要 Node.js 检查导出格式选择")
     def test_saved_export_profile_does_not_require_runbook(self) -> None:

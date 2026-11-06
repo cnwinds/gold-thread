@@ -802,7 +802,7 @@
   .train-scope{display:flex;gap:4px;margin-bottom:8px}
   .train-scope button{flex:1;padding:4px 0;font-size:12px}
   .train-scope button.on{background:rgba(95,185,196,.16);color:var(--mint);border-color:rgba(95,185,196,.35)}
-  .ds-row{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:6px;align-items:center;width:100%;
+  .ds-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center;width:100%;
     padding:6px 8px;border-radius:6px}
   .ds-row:hover{background:rgba(255,255,255,.03)}
   .ds-row.on{background:rgba(95,185,196,.1);box-shadow:inset 2px 0 var(--mint)}
@@ -1024,7 +1024,7 @@
   .ds-group{margin-bottom:14px}
   .ds-group-h{padding:7px 8px 6px;font-size:11px;letter-spacing:.02em;border-bottom:1px solid var(--line-soft);margin-bottom:4px}
   .ds-row{padding:9px 8px;border-radius:7px;gap:8px}
-  .ds-row .ds-file{font-size:11.5px;line-height:1.45;overflow-wrap:anywhere;white-space:normal}
+  .ds-row .ds-file{font-size:11.5px;line-height:1.45;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ds-row .ds-from{font-size:10.5px;line-height:1.4;margin-top:2px}
   .ds-row .ds-num{font-size:12px}
   .train-main{position:relative}
@@ -1037,6 +1037,29 @@
   .train-main .scroll{max-height:none}
   .train-main td{font-size:12px;vertical-align:top}
   .train-main .clip{max-width:360px}
+  /* 草稿不是「左栏选文件」。切分与 Build 并排，样本表占满下一行。 */
+  .train-draft-shell{
+    grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr);
+    grid-template-rows:auto minmax(168px,320px) minmax(0,1fr);
+  }
+  .train-draft-shell .train-split,
+  .train-draft-shell #draftBuild{min-width:0;min-height:0;overflow:auto;border-bottom:1px solid var(--line-soft)}
+  .train-draft-shell .train-split{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--line-soft)}
+  .train-draft-shell .train-split-body{flex:1;min-height:0;overflow:auto}
+  .train-draft-shell .train-split-tools{flex:none;border-top:1px solid var(--line-soft)}
+  .train-draft-shell .train-split table{width:100%}
+  .train-draft-shell .train-split td.mono{overflow-wrap:anywhere}
+  .train-draft-shell .train-main{grid-column:1 / -1;min-height:0}
+  @media (max-width:860px){
+    .train-draft-shell{
+      grid-template-columns:minmax(0,1fr);
+      grid-template-rows:auto auto auto minmax(280px,1fr);
+      height:auto;overflow:visible;
+    }
+    .train-draft-shell .train-split{border-right:none;max-height:320px}
+    .train-draft-shell #draftBuild{max-height:220px}
+    .train-draft-shell .train-main{min-height:360px}
+  }
 
   /* 任务：列表负责定位，详情负责解释与下一步 */
   .tasks-shell{grid-template-columns:330px minmax(0,1fr);gap:16px;min-height:560px;align-items:start}
@@ -1298,6 +1321,8 @@
   .delivery-history .pack-hist{margin:0;padding:0 16px 16px}
   .delivery-history .pack-hist>p{margin:10px 0 12px!important}
   .delivery-history .scroll{max-height:520px!important;border:1px solid var(--line-soft);border-radius:8px}
+  .delivery-releases{margin-top:18px}
+  .delivery-releases .pack-hist{margin:0;padding:0 16px 16px}
   @media (max-width:1100px){.delivery-workspace{grid-template-columns:1fr}.delivery-current-panel{margin-bottom:0}}
   @media (max-width:680px){
     .delivery-current-body{padding:14px}
@@ -1397,7 +1422,7 @@ const PAGES = {
   raw:      ["原始数据", "采集源会话、查看分析状态，以及回合清洗与黄金提纯进度。"],
   gold:     ["黄金数据", "查看每条会话的有用步、SFT 窗口和 DPO 偏好对，以及它们的训练去向。"],
   train:    ["训练数据", "选择本批生成的数据文件，预览样本并回溯到来源黄金会话。"],
-  runs:     ["梳理与交付", "选择导出格式，生成并下载当前交付包，或查看历史打包结果。"],
+  runs:     ["梳理与交付", "选择导出格式，按 goldthread-train 模板打包当前训练集，或查看历史打包结果。"],
   tasks:    ["任务中心", "集中查看采集、分析、管线与打包任务的状态、日志和结果入口。"],
   config:   ["配置", "按分组调整常用参数；高级参数与 YAML 源码保留在同一工作区。"],
 };
@@ -1734,6 +1759,12 @@ function jumpToTasks(id) {
 function registerJobWatch(jobId, onDone) {
   if (jobId) TASK_HUB.watched.set(jobId, { onDone });
   taskHubEnsure();
+  if (!jobId) return;
+  api(`/api/jobs/${encodeURIComponent(jobId)}`).then(j => {
+    if (!j || j.status === "running") return;
+    if (!TASK_HUB.watched.has(jobId)) return;
+    onTaskFinished(j);
+  }).catch(() => {});
 }
 
 async function api(path, opts={}) {
@@ -3568,13 +3599,13 @@ function renderSplitWorkspace(plan, projectStats) {
   const seed = Number(plan.seed ?? 42);
   return `<div class="workspace-panel train-split">
     <div class="panel-h"><h3>Split Plan</h3><span class="hint">服务端账本 · eval_ratio ${esc(String(ratio))} · seed ${fmt(seed)}</span></div>
-    <div class="panel-b"><table><thead><tr><th>项目</th><th>切分</th><th>纳入</th><th>排除</th><th>会话</th></tr></thead><tbody>${rows}</tbody></table>
-    <div class="toolbar" style="margin-top:10px">
+    <div class="panel-b train-split-body"><table><thead><tr><th>项目</th><th>切分</th><th>纳入</th><th>排除</th><th>会话</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="toolbar train-split-tools">
       <label class="faint">eval_ratio <input id="draftEvalRatio" type="number" min="0" max="1" step="0.05" value="${esc(String(ratio))}" style="width:72px"></label>
-      <label class="faint" style="margin-left:10px">seed <input id="draftSeed" type="number" step="1" value="${fmt(seed)}" style="width:72px"></label>
+      <label class="faint">seed <input id="draftSeed" type="number" step="1" value="${fmt(seed)}" style="width:72px"></label>
       <button type="button" class="ghost" id="draftReplanPreview">预览重切分</button>
       <button type="button" class="primary" id="draftReplanSave" disabled>应用重切分</button>
-    </div></div></div>`;
+    </div></div>`;
 }
 function buildWorkspace(lastBuild, builds) {
   const lb = lastBuild || {};
@@ -3800,8 +3831,8 @@ async function loadTrainFiles() {
         <span class="grow"></span>
         <button type="button" class="ghost" id="dsReload">刷新</button>
       </div>
-      <div class="scroll"><table><thead><tr><th class="n">#</th><th>样本</th><th>切分</th></tr></thead><tbody>
-      ${rows.rows.map(r => trainRow(r, kind)).join("") || emptyRow(3, "空")}
+      <div class="scroll"><table><thead><tr>${trainTableHead(kind)}</tr></thead><tbody>
+      ${rows.rows.map(r => trainRow(r, kind)).join("") || emptyRow(trainTableCols(kind), "空")}
       </tbody></table></div>
       <div class="toolbar bottom">
         <span class="count"><b>${rows.total ? fmt(rows.offset + 1) : 0}–${fmt(end)}</b>，共 ${fmt(rows.total)} 条</span>
@@ -3899,14 +3930,12 @@ function applyTrainList() {
 function renderTrainPlan(list) {
   const picked = list || [];
   const sum = pred => picked.filter(x => pred(x.name)).reduce((a, x) => a + (Number(x.rows) || 0), 0);
-  const bits = picked.map(x => `<span class="chip train">${esc(x.name.replace(/\.jsonl$/, ""))} <b>${x.rows == null ? "—" : fmt(x.rows)}</b></span>`).join("");
   const sftN = sum(n => dsFamily(n) === "sft" || dsFamily(n) === "traj");
   const dpoN = sum(n => dsFamily(n) === "dpo");
   return `<div class="train-plan" id="trainPlan">
     <b>历史文件 ${picked.length} 份</b>
-    <span class="faint">SFT ${fmt(sftN)} 条 · DPO ${fmt(dpoN)} 条</span>
+    <span class="faint">SFT ${fmt(sftN)} 条 · DPO ${fmt(dpoN)} 条 · 从左侧列表打开</span>
     <span class="grow"></span>
-    ${bits || `<span class="faint">Stage 3 写入的 jsonl 会出现在左侧列表。</span>`}
   </div>`;
 }
 function renderDatasetIndex(list) {
@@ -3936,6 +3965,14 @@ function renderDatasetIndex(list) {
     </div></aside>`;
 }
 
+function trainTableHead(kind) {
+  if (kind === "dpo") return `<th class="n">#</th><th>样本</th><th>来源</th><th>chosen</th><th>rejected</th><th>切分</th>`;
+  if (kind === "diagnostic") return `<th class="n">#</th><th>样本</th><th>模型</th><th>病态</th><th>目标</th><th>切分</th>`;
+  return `<th class="n">#</th><th>样本</th><th>阶段</th><th class="n">权重</th><th>提问</th><th>思考 / 目标</th><th>切分</th>`;
+}
+function trainTableCols(kind) {
+  return kind === "dpo" || kind === "diagnostic" ? 6 : 7;
+}
 function trainRow(r,kind) {
   const m=r.metadata||{}, p=r.preview||{};
   const fromGold = m.session_id ? `黄金会话 ${m.session_id.slice(0,8)}` : "";
@@ -4656,7 +4693,8 @@ function rwRenderDeliveryDetail(rb) {
   <section class="panel delivery-history">
     <div class="panel-h"><h3>历史打包</h3><span class="hint">每一次生成结果都可单独下载</span></div>
     ${packHistHtml()}
-  </section>`;
+  </section>
+  ${releasePanelHtml()}`;
 }
 function packHistHtml() {
   const packs = (STATE.packHist && STATE.packHist.packs) || [];
@@ -4681,6 +4719,72 @@ function packHistHtml() {
   </div>`;
 }
 
+function releasePanelHtml() {
+  const data = STATE.releases || {releases: [], active_version: "", can_rollback: false};
+  const rows = (data.releases || []).map(r => {
+    const source = r.origin === "legacy"
+      ? (r.imported_build_id ? `历史发布 · Build ${esc(String(r.imported_build_id).slice(0, 8))}` : "历史发布")
+      : (r.build_id ? `Build ${esc(String(r.build_id).slice(0, 8))}` : "Build");
+    const state = r.active ? `<span class="chip train">当前训练版本</span>` : `<span class="faint">未激活</span>`;
+    const activate = r.active
+      ? ""
+      : `<button class="slim" type="button" onclick="activateRelease('${esc(r.version)}')">激活</button>`;
+    const migrate = r.origin === "legacy" && !r.imported_build_id
+      ? `<button class="slim" type="button" onclick="importLegacyRelease('${esc(r.version)}')">迁入 Build</button>`
+      : "";
+    return `<tr>
+      <td class="mono">${esc(r.version)}</td>
+      <td>${source}</td>
+      <td>${state}</td>
+      <td class="muted">${esc(stamp(r.created_at) || "")}</td>
+      <td>${activate}${migrate}</td>
+    </tr>`;
+  }).join("") || emptyRow(5, "还没有发布版本。当前 Build 可以发布成一个新版本。");
+  const rollback = data.can_rollback
+    ? `<button class="ghost" type="button" onclick="rollbackRelease()">回滚到上一版本</button>`
+    : `<button class="ghost" type="button" disabled title="没有上一激活版本">回滚到上一版本</button>`;
+  return `<section class="panel delivery-releases">
+    <div class="panel-h"><h3>发布版本</h3><span class="hint">发布生成冻结版本。激活后，当前训练版本才指向它</span><span class="grow"></span>
+      <button type="button" onclick="publishCurrentRelease()">发布当前 Build</button>${rollback}
+    </div>
+    <div class="pack-hist">
+      <p class="faint" style="margin:0 0 10px;font-size:12px">当前训练版本 ${esc(data.active_version || "未设置")}。构建和打包不会改它。</p>
+      <div class="scroll" style="max-height:280px"><table><thead><tr>
+        <th>版本</th><th>来源</th><th>状态</th><th>时间</th><th></th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+    </div>
+  </section>`;
+}
+async function publishCurrentRelease() {
+  try {
+    const d = await api("/api/releases", {method:"POST", body:"{}"});
+    toast(d.reused ? `版本 ${d.version} 已经发布` : `已发布 ${d.version}。激活后才会成为当前训练版本`, "ok");
+    if (STATE.tab === "runs") loadRuns();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function activateRelease(version) {
+  if (!window.confirm(`激活 ${version} 为当前训练版本？`)) return;
+  try {
+    await api(`/api/releases/${encodeURIComponent(version)}/activate`, {method:"POST"});
+    toast(`${version} 已是当前训练版本`, "ok");
+    if (STATE.tab === "runs") loadRuns();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function rollbackRelease() {
+  if (!window.confirm("回滚到上一个激活版本？")) return;
+  try {
+    const d = await api("/api/releases/rollback", {method:"POST"});
+    toast(`已回到 ${d.version}`, "ok");
+    if (STATE.tab === "runs") loadRuns();
+  } catch (e) { toast(e.message, "err"); }
+}
+async function importLegacyRelease(version) {
+  try {
+    const d = await api(`/api/releases/${encodeURIComponent(version)}/import-build`, {method:"POST"});
+    toast(`已迁入 Build ${String(d.build_id || "").slice(0, 8)}`, "ok");
+    if (STATE.tab === "runs") loadRuns();
+  } catch (e) { toast(e.message, "err"); }
+}
 function renderRunsView(rb) {
   STATE.runbook = rb;
   STATE.delivery = rb.deliverable || {};
@@ -4690,9 +4794,12 @@ function renderRunsView(rb) {
 async function loadRuns() {
   const seq = ++RUNS_REQUEST_SEQ;
   try {
-    const [rb, packs] = await Promise.all([api("/api/runbook"), api("/api/export/history")]);
+    const [rb, packs, releases] = await Promise.all([
+      api("/api/runbook"), api("/api/export/history"), api("/api/releases"),
+    ]);
     if (seq !== RUNS_REQUEST_SEQ) return;
     STATE.packHist = packs || {packs:[]};
+    STATE.releases = releases || {releases: []};
     renderRunsView(rb);
   } catch (e) {
     if (seq !== RUNS_REQUEST_SEQ) return;

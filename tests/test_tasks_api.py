@@ -70,6 +70,27 @@ class TaskRegistryTests(unittest.TestCase):
             self.assertEqual(2, row["log_count"])
             self.assertNotIn("logs", row)
 
+    def test_visible_log_is_readable_while_the_job_is_still_running(self):
+        cfg = {"paths": {"data_dir": "data"}}
+        job = Job("analyze", False, {"sessions": ["abcd1234efgh"]})
+        job.status = "running"
+
+        def _boom(_job):
+            raise RuntimeError("disk full")
+
+        job.on_persist = _boom
+        job.log("这条失败也不能丢")
+        self.assertTrue(any("不能丢" in line for line in job.logs))
+
+        with patch.object(task_registry, "tasks_path") as tp:
+            tp.return_value = __import__("pathlib").Path(__import__("tempfile").mkdtemp()) / "tasks.json"
+            job.on_persist = lambda current: task_registry.sync_job(current, cfg)
+            job.log("▶ 开始 · 步级判断")
+            got = task_registry.get_task(job.id, cfg)
+        self.assertEqual("running", got["status"])
+        self.assertIsNone(got["finished_at"])
+        self.assertTrue(any("步级判断" in line for line in got["logs"]))
+
     def test_clip_logs_keeps_tail(self):
         lines = [f"L{i}" for i in range(10)]
         clipped = task_registry.clip_logs(lines, limit=3)

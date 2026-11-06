@@ -23,7 +23,15 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from pipeline import curation, dataset_build, dataset_draft, stage1_extract, stage2_gold, stage3_synth
+from pipeline import (
+    curation,
+    dataset_build,
+    dataset_draft,
+    release,
+    stage1_extract,
+    stage2_gold,
+    stage3_synth,
+)
 from pipeline import steps as stepcat
 from pipeline import task_registry
 from pipeline.common import pilog
@@ -114,6 +122,16 @@ class Job:
         self.logs.append(line)
         if len(self.logs) > 5000:
             del self.logs[:1000]
+        self._persist()
+
+    def _persist(self) -> None:
+        callback = getattr(self, "on_persist", None)
+        if not callback:
+            return
+        try:
+            callback(self)
+        except Exception:  # noqa: BLE001
+            pass
 
     def as_dict(self, with_logs: bool = True, offset: int = 0) -> Dict[str, Any]:
         d = {
@@ -142,6 +160,11 @@ JOBS_LOCK = threading.Lock()
 
 def _run_job(job: Job) -> None:
     cfg = load_config()
+
+    def _persist(current: Job, _cfg: Dict[str, Any] = cfg) -> None:
+        task_registry.sync_job(current, _cfg)
+
+    job.on_persist = _persist
     try:
         if job.stage == "analyze":
             job.log("[analyze] 开始（单会话提纯，会调模型 judge，耗时取决于步数）")
@@ -605,11 +628,11 @@ def _runbook_state() -> Dict[str, Any]:
         put("s3.handoff", "done" if ho.exists() else "ready",
             "handoff.md 已生成" if ho.exists() else "待生成", "含环境搭建 → 训练 → 评估全流程")
         delivery_dir = train_root.parent / "04_release" / "delivery"
-        zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"), key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
+        zips = _delivery_zips(delivery_dir)
         if zips:
             z = zips[0]
             mb = z.stat().st_size / (1024 * 1024)
-            put("s3.package", "done", z.name, f"{mb:.1f} MB · 含 handoff + 数据集")
+            put("s3.package", "done", z.name, f"{mb:.1f} MB · {_package_layout_note(z.name)}")
         elif ho.exists():
             put("s3.package", "ready", "待打包", "运行 stage3 或点「生成交付包」")
         else:
@@ -661,15 +684,12 @@ def runbook() -> Dict[str, Any]:
     current = next((x for x in steps_out if x["status"] == "running"), None)
     train_root = stage_dirs(cfg)["train"]
     delivery_dir = train_root.parent / "04_release" / "delivery"
-    zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
-                  key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
+    zips = _delivery_zips(delivery_dir)
     _zip0 = zips[0] if zips else None
     _man = _zip_manifest(_zip0) if _zip0 is not None else {}
     _pkg_h = _man.get("package_hash")
     if _zip0 is not None and not _pkg_h:
-        _stem = _zip0.stem
-        if _stem.startswith("goldthread-delivery-"):
-            _pkg_h = _stem[len("goldthread-delivery-"):]
+        _pkg_h = _package_hash_from_name(_zip0.stem)
     _fmt = _man.get("format_contract") if isinstance(_man.get("format_contract"), dict) else None
     deliverable = {
         "ready": bool(zips) and done >= total - 1,
@@ -724,7 +744,7 @@ def runbook() -> Dict[str, Any]:
             {"id": "stage3", "label": "03_train", "path": str(train_root),
              "desc": "SFT/DPO 样本 + handoff"},
             {"id": "delivery", "label": "交付 zip", "path": str(delivery_dir),
-             "desc": "handoff + 数据集，交给下游训练"},
+             "desc": "按 goldthread-train 模板打包，交给 autotrain"},
         ],
     }
 
@@ -1598,6 +1618,31 @@ class ExportPackageBody(BaseModel):
     build_id: Optional[str] = None
 
 
+_ZIP_NAME_PREFIXES = ("goldthread-train-", "goldthread-delivery-")
+
+
+def _delivery_zips(delivery_dir: Path) -> List[Path]:
+    if not delivery_dir.exists():
+        return []
+    found: List[Path] = []
+    for prefix in _ZIP_NAME_PREFIXES:
+        found.extend(delivery_dir.glob(f"{prefix}*.zip"))
+    return sorted(found, key=lambda item: item.stat().st_mtime, reverse=True)
+
+
+def _package_layout_note(name: str) -> str:
+    if name.startswith("goldthread-train-"):
+        return "goldthread-train 模板"
+    return "交付包"
+
+
+def _package_hash_from_name(name: str) -> str:
+    for prefix in _ZIP_NAME_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return ""
+
+
 def _zip_manifest(path: Optional[Path]) -> Dict[str, Any]:
     if path is None:
         return {}
@@ -1605,10 +1650,12 @@ def _zip_manifest(path: Optional[Path]) -> Dict[str, Any]:
 
     try:
         with zipfile.ZipFile(path) as zf:
-            if "MANIFEST.json" not in zf.namelist():
-                return {}
-            data = json.loads(zf.read("MANIFEST.json").decode("utf-8"))
-            return data if isinstance(data, dict) else {}
+            names = set(zf.namelist())
+            for arc in ("MANIFEST.json", "goldthread-train/data/MANIFEST.json"):
+                if arc in names:
+                    data = json.loads(zf.read(arc).decode("utf-8"))
+                    return data if isinstance(data, dict) else {}
+            return {}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -1641,21 +1688,20 @@ def export_package_info() -> Dict[str, Any]:
     """返回当前交付包信息（若存在）。
 
     zip 文件名用 package_hash（内容指纹）；config_hash 仍是 pipeline.yaml 配置版本，
-    二者可以不同。下载始终取 delivery/ 下 mtime 最新的 goldthread-delivery-*.zip。
+    二者可以不同。下载始终取 delivery/ 下 mtime 最新的训练 zip。
     """
     cfg = load_config()
     train_root = stage_dirs(cfg)["train"]
     delivery_dir = train_root.parent / "04_release" / "delivery"
-    zips = sorted(delivery_dir.glob("goldthread-delivery-*.zip"),
-                  key=lambda p: p.stat().st_mtime, reverse=True) if delivery_dir.exists() else []
+    zips = _delivery_zips(delivery_dir)
     if not zips:
         return {"exists": False, "handoff_exists": (train_root / "handoff.md").exists(), "format": None}
     z = zips[0]
     man = _zip_manifest(z)
     package_hash = man.get("package_hash")
-    stem = z.stem  # goldthread-delivery-<pkg8>
-    if not package_hash and stem.startswith("goldthread-delivery-"):
-        package_hash = stem[len("goldthread-delivery-"):]
+    stem = z.stem
+    if not package_hash:
+        package_hash = _package_hash_from_name(stem)
     fmt = man.get("format_contract") if isinstance(man.get("format_contract"), dict) else None
     return {
         "exists": True,
@@ -1757,6 +1803,57 @@ def list_dataset_builds() -> Dict[str, Any]:
         "file_count": len(row.get("files") or []),
     } for row in rows]
     return {"total": len(summaries), "latest_build_id": latest_id, "builds": summaries}
+
+
+class PublishReleaseBody(BaseModel):
+    build_id: Optional[str] = None
+
+
+@app.get("/api/releases")
+def get_releases() -> Dict[str, Any]:
+    return release.list_releases(load_config())
+
+
+@app.post("/api/releases")
+def publish_release(body: Optional[PublishReleaseBody] = None) -> Dict[str, Any]:
+    """冻结一个 Build 为发布版本。不修改当前训练版本。"""
+    try:
+        return release.publish(load_config(), body.build_id if body else None)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/releases/rollback")
+def rollback_release() -> Dict[str, Any]:
+    try:
+        return release.rollback(load_config())
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/releases/{version}/activate")
+def activate_release(version: str) -> Dict[str, Any]:
+    try:
+        return release.activate(load_config(), version)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/releases/{version}/import-build")
+def import_release_build(version: str) -> Dict[str, Any]:
+    """把历史发布目录固化成 Build。不切换当前训练版本，也不改最新 Build。"""
+    try:
+        return release.import_legacy(load_config(), version)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/dataset/builds/{build_id}")

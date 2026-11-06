@@ -1,0 +1,179 @@
+# 训练方案表：autotrain.py 按「阶段 + 可用 GPU」从上往下选第一个 auto_select: true 且硬件满足的方案。
+# 爆显存（CUDA OOM）时自动换到 on_oom 指向的方案重试。
+#
+# 字段：
+#   min_gpus             至少需要几张可用 GPU
+#   max_procs            最多用几张卡（不写 = 用上全部可用卡）
+#   min_gpu_mem_gb       每张卡显存下限（80GB 卡读数约 79.x）
+#   deepspeed            null = 不用 DeepSpeed；多卡时就是 DDP
+#   cutoff_len           序列上限；超长样本在开训前整条剔除
+#   global_batch         全局 batch；梯度累积 = global_batch / GPU 数
+#   env                  额外环境变量
+#   status               verified = 本机实测跑通；estimated = 按显存/通信推算，未实测
+#   note                 选型依据，会显示在 autotrain.py plans 里
+
+sft:
+  - id: sft_ddp
+    min_gpus: 2
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 16384
+    global_batch: 8
+    status: verified
+    note: "每卡一份完整权重，双卡摊样本。最长样本约 11.3K，16384 覆盖全部 548 条；2×A800 实测约 22 s/步，207 步约 76 分钟"
+    auto_select: true
+    on_oom: sft_ddp_10k
+
+  - id: sft_ddp_10k
+    min_gpus: 2
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 10240
+    global_batch: 8
+    status: estimated
+    note: "sft_ddp 爆显存时的退路；10240 仍保留全部 548 条（3 条长观察结果被压缩）"
+    auto_select: false
+    on_oom: null
+
+  - id: sft_single
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 12288
+    global_batch: 4
+    status: verified
+    note: "单卡实测约 20 s/步，峰值约 76GB；16384 首步 OOM"
+    auto_select: true
+    on_oom: sft_single_10k
+
+  - id: sft_single_10k
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 10240
+    global_batch: 4
+    status: estimated
+    note: "单卡退路；保留全部 548 条（3 条长观察结果被压缩）"
+    auto_select: false
+    on_oom: sft_single_8k
+
+  - id: sft_single_8k
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 8192
+    global_batch: 4
+    status: estimated
+    note: "单卡最后退路；保留 547/548 条"
+    auto_select: false
+    on_oom: null
+
+dpo:
+  # 降级顺序是长度优先：先换成显存更宽裕的卸载方案保住 10240，最后才降 cutoff
+  - id: dpo_z3_10k
+    min_gpus: 2
+    min_gpu_mem_gb: 75
+    deepspeed: ds_z3.json
+    cutoff_len: 10240
+    global_batch: 4
+    status: estimated
+    note: "实测（2026-11-06 探测）：最长那批样本反向时 OOM（单卡 78GB 用满），所以不再自动选。显存由最长样本决定，最长训练对约 8.4K"
+    auto_select: false
+    on_oom: dpo_z3_offload_10k
+
+  - id: dpo_z3
+    min_gpus: 2
+    min_gpu_mem_gb: 75
+    deepspeed: ds_z3.json
+    cutoff_len: 8192
+    global_batch: 4
+    status: estimated
+    note: "8192 保留 99/100 训练对（去掉最长的 8381 那条）、全部 143 条验证对"
+    auto_select: false
+    on_oom: dpo_z3_offload
+
+  - id: dpo_z3_offload
+    min_gpus: 2
+    min_gpu_mem_gb: 75
+    deepspeed: ds_z3_offload.json
+    cutoff_len: 8192
+    global_batch: 4
+    status: estimated
+    note: "ZeRO-3 + 参数卸载到 CPU，显存最宽裕，比 dpo_z3 慢约 20-40%；需要主机内存 ≥ 128GB"
+    auto_select: false
+    on_oom: dpo_ddp
+
+  - id: dpo_z3_offload_10k
+    min_gpus: 2
+    min_gpu_mem_gb: 75
+    deepspeed: ds_z3_offload.json
+    cutoff_len: 10240
+    global_batch: 4
+    status: verified
+    note: "ZeRO-3 + 参数卸载到 CPU，保留全部 100 对。2×A800 实测：75 步 67 分钟（平均约 48 s/步），nvidia-smi 峰值 78.2GB，冒烟 5/5；需要主机内存 ≥ 128GB"
+    auto_select: true
+    on_oom: dpo_z3_offload
+
+  - id: dpo_ddp
+    min_gpus: 2
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 5120
+    global_batch: 4
+    status: estimated
+    note: "显存与单卡 5120 相同（已实测），双卡并行更快，但只保留 65/100 训练对"
+    auto_select: false
+    on_oom: dpo_ddp_4k
+
+  - id: dpo_ddp_4k
+    min_gpus: 2
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 4096
+    global_batch: 4
+    env: {LOWMEM_DPO_CHUNK: "512"}
+    status: estimated
+    note: "多卡最后退路；只保留 46/100 训练对"
+    auto_select: false
+    on_oom: null
+
+  - id: dpo_single
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 5120
+    global_batch: 4
+    status: verified
+    note: "单卡实测：5120 余量约 5GB（保留 65/100 训练对）；6144 峰值 77.9GB；8192 OOM"
+    auto_select: true
+    on_oom: dpo_single_4k
+
+  - id: dpo_single_4k
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 4096
+    global_batch: 4
+    env: {LOWMEM_DPO_CHUNK: "512"}
+    status: estimated
+    note: "单卡最后退路；只保留 46/100 训练对"
+    auto_select: false
+    on_oom: null
+
+eval:
+  - id: eval_single
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 12288
+    global_batch: 1
+    status: verified
+    note: "单卡跑 SFT 验证集"
+    auto_select: true
+    on_oom: null

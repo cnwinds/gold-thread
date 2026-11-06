@@ -1,0 +1,34 @@
+### SFT 训后评测（autotrain.py eval）。adapter 默认取最近一次成功的 SFT 运行。
+
+### model
+model_name_or_path: null                             # [auto] settings.yaml: base_model
+adapter_name_or_path: null                           # [auto] SFT adapter 目录
+trust_remote_code: true
+flash_attn: fa2
+enable_liger_kernel: false
+
+### method
+stage: sft
+do_train: false
+do_eval: true
+finetuning_type: lora
+lora_rank: 32
+lora_target: gate_proj,up_proj,down_proj
+
+### dataset
+dataset_dir: null                                    # [auto]
+eval_dataset: null                                   # [auto] settings.yaml: project.datasets.<阶段>.eval
+template: null                                       # [auto] settings.yaml: project.template
+cutoff_len: null                                     # [auto]
+packing: false
+mask_history: true
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: null                                     # [auto]
+overwrite_output_dir: true
+
+### eval
+per_device_eval_batch_size: 1
+bf16: true

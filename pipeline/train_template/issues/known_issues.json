@@ -1,0 +1,532 @@
+{
+  "_doc": "问题库。autotrain.py 训练失败时按顺序用 patterns（Python 正则，不区分大小写）匹配日志末尾 400 行（scope=full 的条目匹配整份日志），命中第一条就执行 action。action.type: next_plan=换到方案的 on_oom；retry=带 yaml/env 覆盖重试同一方案；install=执行 commands 后重试；abort=停下并显示 manual。patterns 为空的条目只用于文档（训练后质量、部署类问题）。特殊模式：__exit_sigkill__ 进程被 SIGKILL，__timeout__ 超时。新增条目用 python autotrain.py record-issue，不要手改 hits/last_seen。",
+  "issues": [
+    {
+      "id": "dpo_patch_skipped",
+      "title": "低显存 DPO 补丁没有生效",
+      "category": "runtime",
+      "stages": [
+        "dpo"
+      ],
+      "patterns": [
+        "跳过 DPO 补丁",
+        "无法导入 LLaMA-Factory DPO trainer"
+      ],
+      "scope": "full",
+      "diagnosis": "LLaMA-Factory 的 CustomDPOTrainer.concatenated_forward 结构变了，lowmem_dpo.py 拒绝打补丁，DPO 退回全序列 fp32 logits，必然 OOM。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "把 /opt/LLaMA-Factory 切回已验证版本（0.9.6.dev0 main），或按新源码更新 tools/lowmem_dpo.py 的 expected 关键字与实现。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "logits_to_keep_unsupported",
+      "title": "模型不支持张量形式的 logits_to_keep",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo",
+        "eval"
+      ],
+      "patterns": [
+        "没有按 logits_to_keep 裁剪"
+      ],
+      "diagnosis": "transformers 版本不对，模型 forward 没有按位置裁剪 logits，低显存路径失效。",
+      "action": {
+        "type": "install",
+        "commands": [
+          "{python} -m pip install transformers==5.8.0 --no-deps"
+        ]
+      },
+      "manual": "确认 transformers==5.8.0（python autotrain.py env）。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "fla_missing",
+      "title": "缺少线性注意力加速包 flash-linear-attention / causal-conv1d",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo",
+        "eval"
+      ],
+      "patterns": [
+        "requires flash-linear-attention",
+        "Falling back to torch implementation",
+        "No module named '(fla|causal_conv1d)'"
+      ],
+      "scope": "full",
+      "diagnosis": "27B 有 48 层 linear_attention，缺这两个包会退回 PyTorch 实现，显存和速度都明显变差，长序列容易 OOM。",
+      "action": {
+        "type": "install",
+        "commands": [
+          "{python} -m pip install flash-linear-attention==0.4.2 causal-conv1d --no-build-isolation"
+        ]
+      },
+      "manual": "pip install flash-linear-attention==0.4.2 causal-conv1d --no-build-isolation",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "deepspeed_missing",
+      "title": "缺少 DeepSpeed",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo"
+      ],
+      "patterns": [
+        "No module named 'deepspeed'",
+        "requires the deepspeed",
+        "deepspeed is not installed"
+      ],
+      "diagnosis": "ZeRO-3 方案需要 deepspeed。",
+      "action": {
+        "type": "install",
+        "commands": [
+          "{python} -m pip install deepspeed==0.19.9"
+        ]
+      },
+      "manual": "pip install deepspeed==0.19.9",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "flash_attn_unavailable",
+      "title": "flash-attn 不可用",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo",
+        "eval"
+      ],
+      "patterns": [
+        "No module named 'flash_attn'",
+        "FlashAttention2 has been toggled on, but it cannot be used",
+        "flash_attn.*(undefined symbol|is not installed)"
+      ],
+      "diagnosis": "flash-attn 没装或与 torch 版本不匹配。它只作用于 16 层 full_attention，换 sdpa 能跑，16K 附近多占约 3-5GB。",
+      "action": {
+        "type": "retry",
+        "yaml": {
+          "flash_attn": "sdpa"
+        }
+      },
+      "manual": "YAML 改 flash_attn: sdpa；想装预编译轮子，选 cp312 + torch2.7 + cu12 的 flash-attn release，不要源码编译。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "transformers_version",
+      "title": "transformers 版本不对",
+      "category": "runtime",
+      "stages": [
+        "*"
+      ],
+      "patterns": [
+        "cannot import name .* from 'transformers",
+        "transformers>=?[0-9.]+.*is required",
+        "Qwen3_5.*(not found|does not exist|Unrecognized)",
+        "model type `qwen3_5`"
+      ],
+      "diagnosis": "模型 config 要求 5.8.0.dev0，LLaMA-Factory main 上限 5.8.0，只能用 5.8.0。安装 LLaMA-Factory 时常被覆盖成别的版本。",
+      "action": {
+        "type": "install",
+        "commands": [
+          "{python} -m pip install transformers==5.8.0 --no-deps"
+        ]
+      },
+      "manual": "pip install transformers==5.8.0 --no-deps；装 LLaMA-Factory 时必须带 --no-deps；不要 pip install -U transformers。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "nccl_failure",
+      "title": "多卡通信失败或超时",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo"
+      ],
+      "patterns": [
+        "NCCL error",
+        "ncclInternalError",
+        "ncclUnhandledCudaError",
+        "Watchdog caught collective operation timeout",
+        "ProcessGroupNCCL.*[Tt]imeout"
+      ],
+      "diagnosis": "本机两卡经 PCIe 主机桥（PHB）互联、像是虚拟机直通，点对点通信可能不可用。",
+      "action": {
+        "type": "retry",
+        "env": {
+          "NCCL_P2P_DISABLE": "1",
+          "NCCL_IB_DISABLE": "1"
+        }
+      },
+      "manual": "带 NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1 重跑；仍失败就用 --plan 选单卡方案。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "port_in_use",
+      "title": "torchrun 端口被占用",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo"
+      ],
+      "patterns": [
+        "EADDRINUSE",
+        "[Aa]ddress already in use"
+      ],
+      "diagnosis": "上一次的进程没退干净或别的任务占了端口。autotrain 每次重试都会换新端口。",
+      "action": {
+        "type": "retry"
+      },
+      "manual": "ps aux | grep train_lowmem 确认没有残留进程。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "cuda_oom",
+      "title": "GPU 显存不足（CUDA OOM）",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo",
+        "eval"
+      ],
+      "patterns": [
+        "CUDA out of memory",
+        "OutOfMemoryError",
+        "cuMemAlloc failed",
+        "Allocation on device"
+      ],
+      "diagnosis": "当前方案的 cutoff_len 对这张卡太长。梯度累积不影响峰值。",
+      "action": {
+        "type": "next_plan"
+      },
+      "manual": "按 configs/plans.yaml 的 on_oom 链降级；单卡 DPO 还可设 LOWMEM_DPO_CHUNK=512。",
+      "source": "builtin",
+      "hits": 1,
+      "last_seen": "2026-11-06 03:57:16"
+    },
+    {
+      "id": "system_oom_killer",
+      "title": "进程被系统 OOM Killer 杀掉（主机内存不足）",
+      "category": "runtime",
+      "stages": [
+        "*"
+      ],
+      "patterns": [
+        "__exit_sigkill__",
+        "Killed\\s*$",
+        "exitcode\\s*:\\s*-9"
+      ],
+      "diagnosis": "没有 CUDA OOM 却被 SIGKILL，通常是主机内存不够：ZeRO-3 offload 要把整份权重放内存，合并 27B 峰值约 60GB。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "free -g 看内存；加内存或 swap，或换不带 offload 的方案（--plan）。合并时保证可用内存 ≥ 64GB。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "lora_target_mlp",
+      "title": "lora_target 写成了 mlp",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo"
+      ],
+      "patterns": [
+        "Target module Qwen3_5MLP",
+        "Qwen3_5MLP.*is not supported"
+      ],
+      "diagnosis": "qwen3_5 的 mlp 是容器模块，peft 不接受。",
+      "action": {
+        "type": "retry",
+        "yaml": {
+          "lora_target": "gate_proj,up_proj,down_proj"
+        }
+      },
+      "manual": "lora_target: gate_proj,up_proj,down_proj",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "tool_format_conflict",
+      "title": "YAML 里多写了 tool_format",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo",
+        "eval"
+      ],
+      "patterns": [
+        "Error.*tool_format",
+        "tool_format.*(not supported|conflict|invalid)"
+      ],
+      "diagnosis": "qwen3_8 模板已内置工具格式，再写 tool_format 会报错。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "删掉 configs/*.yaml 里的 tool_format。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "dataset_undefined",
+      "title": "数据集键找不到",
+      "category": "runtime",
+      "stages": [
+        "sft",
+        "dpo",
+        "eval"
+      ],
+      "patterns": [
+        "Undefined dataset",
+        "Cannot find valid samples",
+        "dataset_info.json.*(not found|No such file)"
+      ],
+      "diagnosis": "YAML 的 dataset 键与 data/dataset_info.json 不一致，或过滤后没有样本。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "python tools/check_data.py；不要改 data/ 里的文件名和 dataset_info.json。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "model_path_invalid",
+      "title": "模型或 tokenizer 路径无效",
+      "category": "runtime",
+      "stages": [
+        "*"
+      ],
+      "patterns": [
+        "is not a local folder and is not a valid model identifier",
+        "does not appear to have a file named",
+        "Incorrect path_or_model_id"
+      ],
+      "diagnosis": "settings.yaml 里的路径不存在，或模型下载不完整。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "检查 settings.yaml 的 base_model / sft_merged / length_tokenizer；重新下载缺分片的模型（autotrain 开训前会核对分片）。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "disk_full",
+      "title": "磁盘写满",
+      "category": "runtime",
+      "stages": [
+        "*"
+      ],
+      "patterns": [
+        "No space left on device"
+      ],
+      "diagnosis": "磁盘写满。本地盘 work_dir 放 checkpoint 和过滤数据；挂载盘放 adapter 和合并模型（每个约 52GB）。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "df -h /data /cloud/cloud-ssd1；本地盘清理 /data/goldthread/work 下失败运行的现场；挂载盘清理旧合并模型（部署只需 DPO 合并模型）。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "readonly_fs",
+      "title": "输出目录在只读文件系统上",
+      "category": "runtime",
+      "stages": [
+        "*"
+      ],
+      "patterns": [
+        "Read-only file system"
+      ],
+      "diagnosis": "本机 /model（以及指向它的 /data/models）是只读共享存储，只能放下载的底座。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "settings.yaml 的 work_dir 指到本地盘 /data 下，saves_dir / merged_dir 指到挂载盘 /cloud/cloud-ssd1 下；/model 只读。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "timeout",
+      "title": "单次尝试超时",
+      "category": "runtime",
+      "stages": [
+        "*"
+      ],
+      "patterns": [
+        "__timeout__"
+      ],
+      "diagnosis": "超过 settings.yaml 的 timeout_hours。可能是正常长跑，也可能卡死在通信上。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "看 runs/<run>/attempt-N.log 末尾的进度；正常长跑就调大 timeout_hours。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "dpo_ref_is_base",
+      "title": "DPO 后乱码、think 不闭合、不再调工具",
+      "category": "quality",
+      "stages": [
+        "dpo"
+      ],
+      "patterns": [],
+      "diagnosis": "reference 成了原始底座：LoRA 做 DPO 时参考模型是关掉 adapter 的底座，底座若是原始 27B，DPO 会把模型往原始分布拽。8B 上 lr 5e-5 也出现过同样崩坏。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "DPO 底座必须是 SFT 合并模型（autotrain 会拒绝用 base_model 做 DPO），不设 ref_model，lr 1e-5。丢掉这次 adapter 重训。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "independent_ref_oom",
+      "title": "另加载一份 8bit/4bit reference 仍然 OOM",
+      "category": "quality",
+      "stages": [
+        "dpo"
+      ],
+      "patterns": [],
+      "diagnosis": "27B 单卡放不下 policy 与独立 reference 两套权重和 logits；4bit policy + 4bit ref 实测峰值仍 77GB。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "只用「SFT 合并模型 + 关闭 adapter 当 reference」这一种做法（configs/dpo.yaml 已是）。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "loss_flat_or_no_think",
+      "title": "loss 不降，或生成只有工具调用没有思考",
+      "category": "quality",
+      "stages": [
+        "sft"
+      ],
+      "patterns": [],
+      "diagnosis": "模板错了（think 被注入两次）或 mask_history / packing 设置不对。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "template 必须是 qwen3_8，mask_history: true，packing: false；python tools/check_data.py --model <底座> 看 think 是否恰好一对。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "smoke_greedy_stall",
+      "title": "冒烟时一直在思考、不出工具调用",
+      "category": "quality",
+      "stages": [
+        "sft",
+        "dpo"
+      ],
+      "patterns": [],
+      "diagnosis": "贪心解码会卡在长思考；部分验证样本本身思考就长，1024 token 上限不够。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "用采样（temp 0.6 / top_p 0.95 / top_k 20，smoke_infer.py 默认如此），max-new-tokens 给到 1536 以上。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "eval_oom_during_train",
+      "title": "训练步正常，一进 eval 就 OOM",
+      "category": "quality",
+      "stages": [
+        "sft",
+        "dpo"
+      ],
+      "patterns": [],
+      "diagnosis": "训练中 eval 会额外占激活。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "训练 YAML 保持 eval_strategy: \"no\"，训完用 python autotrain.py eval。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "vllm_think_in_content",
+      "title": "推理服务：正文里出现 </think> 或 <tool_call> 原文",
+      "category": "deploy",
+      "stages": [
+        "serve"
+      ],
+      "patterns": [],
+      "diagnosis": "vLLM 没加 reasoning parser，或 tool-call-parser 与训练格式不一致。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "vllm serve 加 --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder（本数据是 Qwen XML，不是 hermes）。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "vllm_small_gpu",
+      "title": "推理服务：24GB 卡加载不了合并模型",
+      "category": "deploy",
+      "stages": [
+        "serve"
+      ],
+      "patterns": [],
+      "diagnosis": "bf16 权重约 52GB。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "换 48GB/80GB 卡，或先在大卡上量化成该架构支持的 4bit 再搬；不支持 qwen3_5 的量化工具会直接报架构错误，换工具。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "merge_cpu_oom",
+      "title": "合并 adapter 时被杀",
+      "category": "deploy",
+      "stages": [
+        "merge"
+      ],
+      "patterns": [],
+      "diagnosis": "合并 27B 时 CPU 内存峰值约 60GB。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "保证可用内存 ≥ 64GB，保留 --export_size 5；不要在内存不足时反复重试把盘写满。",
+      "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    }
+  ]
+}
