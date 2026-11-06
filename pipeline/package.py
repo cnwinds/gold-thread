@@ -516,14 +516,22 @@ def build_delivery_zip(
     cfg: Optional[Dict[str, Any]] = None,
     log=None,
     profile: Optional[str] = None,
+    delivery_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """打包 handoff + 规整后的数据集为 zip，返回路径与元信息。"""
     cfg = cfg or load_config()
     dirs = stage_dirs(cfg)
     root = Path(train_root or dirs["train"])
+    build_manifest = read_json(root / "BUILD.json", default={}) or {}
+    build_id = str(build_manifest.get("build_id") or "")
     # 发布产物统一落在 data/04_release/，与 03_train 工作区分离
     release_root = root.parent / "04_release"
-    delivery_dir = release_root / "delivery"
+    if delivery_dir:
+        delivery_dir = Path(delivery_dir)
+    elif build_id:
+        delivery_dir = stage_dirs(cfg)["root"] / "04_release" / "delivery"
+    else:
+        delivery_dir = release_root / "delivery"
     delivery_dir.mkdir(parents=True, exist_ok=True)
     spec = resolve_export_profile(profile or _remembered_profile(delivery_dir))
 
@@ -600,7 +608,12 @@ def build_delivery_zip(
         prepared.files,
         lg_fp,
         spec["id"],
-        extras={**packed_yaml_texts, **packed_merge_texts, **script_blobs},
+        extras={
+            **packed_yaml_texts,
+            **packed_merge_texts,
+            **script_blobs,
+            **({"build_id": build_id} if build_id else {}),
+        },
     )
     zip_name = f"goldthread-delivery-{pkg_h}.zip"
     zip_path = delivery_dir / zip_name
@@ -671,6 +684,7 @@ def build_delivery_zip(
             "generated_at": now_iso(),
             "config_hash": cfg_h,
             "package_hash": pkg_h,
+            "build_id": build_id or None,
             "length_gate_version": lg_fp,
             "stats_generated_at": stats.get("generated_at"),
             "datasets": {key: entry.get("file_name") for key, entry in info.items()},
@@ -711,6 +725,7 @@ def build_delivery_zip(
         "generated_at": manifest["generated_at"],
         "config_hash": cfg_h,
         "package_hash": pkg_h,
+        "build_id": build_id or None,
         "counts": prepared.counts,
         "sources": prepared.sources,
         "datasets": manifest["datasets"],

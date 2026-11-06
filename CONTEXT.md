@@ -139,6 +139,16 @@
 
 **与 ADR-0002 对齐**：`POST /api/collect` 的 `analyze` 默认 **false**；原始库单会话 **分析/重新分析** 不变。
 
+### 6.4 数据集草稿与构建
+
+- **数据集草稿**是用户调整将要生成的数据时使用的可变工作区：候选样本、自动准入结果、人工排除/恢复和项目切分计划共同决定草稿内容。
+- 自动质量门禁仍是默认准入方式，不恢复全量人工审批。人工可以排除不想要的样本或撤销排除；排除必须跨重建保持，不能直接编辑某一次输出文件代替决策。
+- **切分计划**按 `project_group` 持久保存。已有项目不因新增项目或普通重建而被动换组；比例/seed 的全量重算必须是带差异预览的显式操作。
+- **数据集构建**是草稿某次执行后的确定性结果。预览与实际构建必须共用同一准入和切分决策；历史构建与冻结 release 不随后续草稿编辑改变。
+- **DPO 评估**先于构建执行并持久保存：待评估或评估失败的偏好对不进入训练集；`good/swap` 可以进入，`drop` 由质量门禁排除。只读预览不临时调用模型，构建也不应在后台改变评估结论。
+- **不可变 Build** 是一次构建的固定输入、样本、配置、切分、决策和文件哈希清单。交付打包必须读取明确 Build，不能从工作区历史文件中另选一份数据；最新 Build 与激活 release 是不同概念。
+- 采集、分析、草稿、构建、发布是不同事实：采集不等于入集，分析不等于构建，构建不等于发布，导出 zip 不等于激活 release。
+
 ---
 
 ## 7. 术语表（Glossary）
@@ -157,6 +167,13 @@
 | **Teacher / Student** | 会话的主导模型来源，用于血缘与数据分布分析，不代表整条会话质量或固定训练去向 |
 | **delivery / release** | 可上机训练的冻结包；`ACTIVE_RELEASE.txt` 指向当前版本 |
 | **lf 数据集** | `*.lf.jsonl` + `gt_*_lf` 键，避免 ShareGPT 交替角色静默丢样本 |
+| **候选样本** | 黄金数据经自动合成与质量门禁后、可进入数据集草稿的 SFT / DPO 逻辑样本；候选不等于已发布 |
+| **数据集草稿（Dataset Draft）** | 当前将要生成的可变集合，由候选样本、准入结果、人工排除/恢复和切分计划共同决定 |
+| **决策账本（Decision Ledger）** | 按逻辑 `sample_id` 保存排除或恢复自动决策的记录；排除跨重建生效，不依赖浏览器状态 |
+| **切分计划（Split Plan）** | 按 `project_group` 持久保存的 train/eval 归属及显式固定项，避免普通重建造成项目漂移 |
+| **数据集构建（Dataset Build）** | 使用同一草稿决策生成的确定性结果与统计快照；不等于冻结 release |
+| **DPO 评估** | 在构建前按偏好对内容和评审模型缓存 `pending/good/swap/drop/review_failed`；`bypassed` 表示模型判断被显式关闭 |
+| **不可变 Build** | 已固定输入指纹、样本、配置、切分、决策和文件哈希的构建版本；交付打包的来源，不被后续草稿或会话删除修改 |
 
 避免说法：把旧 **negative 字段**叫「垃圾会话全删」— 任何来源都可能同时提供 SFT 与 DPO；把旧 **pending 字段**叫「未采集」— 它只表示来源未知，未采集则指源目录尚未 ingest。
 
@@ -188,6 +205,8 @@
 | 采集 vs 分析 | 目标 **两个动作**：仅采集 / 采集并分析；原始库保留单会话 **分析·重新分析** | [ADR-0002](docs/adr/ADR-0002-collect-vs-analyze-actions.md) |
 | observation 乱码 | **默认不修**；若做则 stage1 转码 + 可选 stage3 阈值门控 | [ADR-0003](docs/adr/ADR-0003-observation-encoding-deferred.md) |
 | Unsloth | **非目标**，除非显式立项 | [ADR-0004](docs/adr/ADR-0004-no-unsloth-migration.md) |
+| 数据集草稿与切分计划 | 训练页操作持久化到草稿决策账本；项目归属跨重建稳定，显式重规划才允许批量移动 | [ADR-0006](docs/adr/ADR-0006-dataset-draft-and-split-plan.md) |
+| DPO 评估与不可变 Build | 评估先于构建；Build 固定输入与文件哈希，产品打包只读指定 Build，不自动激活 release | [ADR-0007](docs/adr/ADR-0007-dpo-evaluation-and-immutable-builds.md) |
 
 **本地 backlog**（`.scratch/goldthread-backlog/issues/`）：
 

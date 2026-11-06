@@ -32,14 +32,14 @@ def _record(stage: str, status: str, started: str, result=None, error: str = Non
 
 def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="GoldThread · Agent 训练数据维护工具")
-    parser.add_argument("stage", choices=["stage1", "stage2", "stage3", "review", "all"])
+    parser.add_argument("stage", choices=["stage1", "stage2", "stage3", "dataset_evaluate", "review", "all"])
     parser.add_argument("--force", action="store_true", help="忽略增量状态，强制重建")
     parser.add_argument("--session", action="append", help="review 指定会话 id（可多次）")
     parser.add_argument("--config", help="配置文件路径")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
-    stages: List[str] = ["stage1", "stage2", "stage3"] if args.stage == "all" else [args.stage]
+    stages: List[str] = ["stage1", "stage2", "dataset_evaluate", "stage3"] if args.stage == "all" else [args.stage]
 
     for name in stages:
         started = now_iso()
@@ -50,6 +50,9 @@ def main(argv: List[str] | None = None) -> int:
             elif name == "stage2":
                 from .stage2_gold import run
                 result = run(force=args.force, log=_log, cfg=cfg)
+            elif name == "dataset_evaluate":
+                from .stage3_synth import evaluate_dpo_pending
+                result = evaluate_dpo_pending(log=_log, cfg=cfg)
             elif name == "stage3":
                 from .stage3_synth import run
                 result = run(force=args.force, log=_log, cfg=cfg)

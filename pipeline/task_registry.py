@@ -112,6 +112,10 @@ def describe_task(stage: str, force: bool, extra: Optional[Dict[str, Any]] = Non
         title = "黄金提纯" + ("（全量）" if force else "（增量）")
         affects = ["overview", "gold"]
         links = {"open_tab": "gold"}
+    elif stage == "dataset_evaluate":
+        title = "DPO 模型评估"
+        affects = ["overview", "train"]
+        links = {"open_tab": "train"}
     elif stage == "stage3":
         title = "训练集合成" + ("（全量）" if force else "（增量）")
         affects = ["overview", "train"]
@@ -128,7 +132,8 @@ def describe_task(stage: str, force: bool, extra: Optional[Dict[str, Any]] = Non
         affects = ["overview", "raw", "gold", "train"]
         links = {}
     elif stage == "package":
-        title = "交付打包"
+        build_id = str(extra.get("build_id") or "")
+        title = f"交付打包 {build_id[:8]}" if build_id else "交付打包"
         affects = ["overview", "train"]
         links = {"open_tab": "runs", "kind": "package"}
     elif stage == "review":

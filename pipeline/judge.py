@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .common.config import load_config
 from .common.llm import chat_json
+from .common.store import read_json
 
 PROMPT_VERSION = "judge.v1"
 
@@ -587,10 +588,42 @@ def _vkey(model: str, tag: str, p: Dict[str, Any]) -> str:
     from .common.store import sha256_text  # noqa: PLC0415
 
     return sha256_text(json.dumps({
-        "m": model, "pv": f"{PROMPT_VERSION}.{tag}", "sid": p.get("sample_id"),
-        "chosen": (p.get("chosen") or {}).get("value"),
-        "rejected": (p.get("rejected") or {}).get("value"),
+        "m": model,
+        "pv": f"{PROMPT_VERSION}.{tag}",
+        "sid": p.get("sample_id"),
+        "reason": (p.get("metadata") or {}).get("reason"),
+        "context_tail": [
+            {"from": c.get("from"), "value": _clip(c.get("value"), 260)}
+            for c in (p.get("conversations") or [])[-3:]
+        ],
+        "chosen": _clip((p.get("chosen") or {}).get("value"), 900),
+        "rejected": _clip((p.get("rejected") or {}).get("value"), 900),
     }, ensure_ascii=False, sort_keys=True))[:20]
+
+
+def cached_dpo_verdicts(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """只读 DPO 评估状态，不调用模型；缺失统一返回 pending。"""
+    cfg = cfg or load_config()
+    if not enabled(cfg):
+        return {
+            str(p.get("sample_id")): {"verdict": "bypassed", "reason": "模型判断已关闭"}
+            for p in pairs
+        }
+    j = _jcfg(cfg)
+    model_id = _model(cfg, j, "dpo") or ""
+    cache = read_json(_verdict_cache_path(cfg), default={}) or {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for pair in pairs:
+        sample_id = str(pair.get("sample_id"))
+        hit = cache.get(_vkey(model_id, "dpo", pair))
+        if isinstance(hit, dict) and hit.get("verdict") in ("good", "swap", "drop", "review_failed"):
+            out[sample_id] = {
+                "verdict": hit["verdict"],
+                "reason": str(hit.get("reason") or ""),
+            }
+        else:
+            out[sample_id] = {"verdict": "pending", "reason": "尚未完成模型复核"}
+    return out
 
 
 def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None,
@@ -611,11 +644,12 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
     pending: List[Dict[str, Any]] = []
     for p in pairs:
         hit = cache.get(_vkey(model_id, "dpo", p))
-        if isinstance(hit, dict):
-            if hit.get("verdict") in ("swap", "drop"):
-                out_map[str(p.get("sample_id"))] = hit
+        verdict = hit.get("verdict") if isinstance(hit, dict) else None
+        if verdict == "review_failed" or verdict not in ("good", "swap", "drop"):
+            pending.append(p)  # 失败或旧格式缓存允许重试，不能永久挡住评估。
         else:
-            pending.append(p)
+            if verdict in ("swap", "drop"):
+                out_map[str(p.get("sample_id"))] = hit
     if len(pending) != len(pairs):
         log(f"[judge] dpo 缓存命中 {len(pairs) - len(pending)}/{len(pairs)} 对")
     pairs = pending
@@ -693,6 +727,18 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
             out_map[str(sid)] = {"verdict": v, "reason": _clip(it.get("reason"), 60)}
     for fid in failed_ids:
         out_map[fid] = {"verdict": "review_failed", "reason": "模型复核失败，需人工抽查"}
+    if failed_ids and _wj is not None:
+        by_id = {str(p.get("sample_id")): p for p in pairs}
+        with _clock:
+            for fid in failed_ids:
+                if fid in by_id:
+                    cache[_vkey(model_id, "dpo", by_id[fid])] = {
+                        "verdict": "review_failed", "reason": "模型复核失败，可重试",
+                    }
+            try:
+                _wj(cpath, cache)
+            except Exception:  # noqa: BLE001
+                pass
     return out_map
 
 

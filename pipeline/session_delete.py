@@ -186,6 +186,15 @@ def _update_state(tx: _Transaction, state: Path, sid: str) -> None:
             if len(kept) != len(data):
                 tx.write_json(path, kept)
 
+    draft_path = state / "dataset_draft.json"
+    draft = _read_json(draft_path)
+    if isinstance(draft, dict) and isinstance(draft.get("decisions"), dict):
+        decisions = draft["decisions"]
+        kept = {k: v for k, v in decisions.items() if not _id_matches(k, sid)}
+        if len(kept) != len(decisions):
+            draft["decisions"] = kept
+            tx.write_json(draft_path, draft)
+
     for path in (state / "inbox").glob(f"**/{sid}.jsonl") if (state / "inbox").exists() else []:
         tx.delete(_inside(path, state))
 

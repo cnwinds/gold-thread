@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from pipeline import task_registry
-from server.app import Job, app
+from server.app import Job, _run_job, app
 
 
 class TaskRegistryTests(unittest.TestCase):
@@ -26,6 +26,12 @@ class TaskRegistryTests(unittest.TestCase):
         self.assertIn("采集", meta["title"])
         self.assertNotIn("分析", meta["title"])
         self.assertEqual(["overview", "raw"], meta["affects"])
+
+    def test_dataset_evaluation_title_and_affects(self):
+        meta = task_registry.describe_task("dataset_evaluate", False, {})
+        self.assertIn("DPO", meta["title"])
+        self.assertEqual(["overview", "train"], meta["affects"])
+        self.assertEqual("train", meta["links"]["open_tab"])
 
     def test_register_and_sync(self):
         cfg = {"paths": {"data_dir": "data"}}
@@ -68,6 +74,57 @@ class TaskRegistryTests(unittest.TestCase):
         lines = [f"L{i}" for i in range(10)]
         clipped = task_registry.clip_logs(lines, limit=3)
         self.assertEqual(["L7", "L8", "L9"], clipped)
+
+
+    def test_full_pipeline_evaluates_dpo_before_stage3(self):
+        calls = []
+        job = Job("all", False, {})
+        with patch("server.app.stage1_extract.run", side_effect=lambda **_: calls.append("stage1") or {}), patch(
+            "server.app.stage2_gold.run", side_effect=lambda **_: calls.append("stage2") or {}
+        ), patch(
+            "server.app.stage3_synth.evaluate_dpo_pending",
+            side_effect=lambda **_: calls.append("evaluate") or {"pending": 0},
+        ), patch(
+            "server.app.stage3_synth.run", side_effect=lambda **_: calls.append("stage3") or {}
+        ):
+            _run_job(job)
+        self.assertEqual("done", job.status, job.error)
+        self.assertEqual(["stage1", "stage2", "evaluate", "stage3"], calls)
+
+    def test_full_pipeline_aborts_when_dpo_still_pending(self):
+        job = Job("all", False, {})
+        with patch("server.app.stage1_extract.run", return_value={}), patch(
+            "server.app.stage2_gold.run", return_value={}
+        ), patch(
+            "server.app.stage3_synth.evaluate_dpo_pending",
+            return_value={"pending": 2, "failed": 0},
+        ), patch("server.app.stage3_synth.run") as stage3:
+            _run_job(job)
+        self.assertEqual("failed", job.status)
+        self.assertIn("DPO 评估未全部完成", job.error or "")
+        stage3.assert_not_called()
+
+    def test_review_does_not_hide_dpo_gate_failure(self):
+        job = Job("review", False, {})
+        with patch("pipeline.review.run_review", return_value={}), patch(
+            "server.app.stage3_synth.evaluate_dpo_pending",
+            side_effect=RuntimeError("DPO 尚未完成模型复核"),
+        ), patch("server.app.stage3_synth.run") as stage3:
+            _run_job(job)
+        self.assertEqual("failed", job.status)
+        self.assertIn("尚未完成模型复核", job.error)
+        stage3.assert_not_called()
+
+    def test_review_aborts_when_dpo_evaluation_incomplete(self):
+        job = Job("review", False, {})
+        with patch("pipeline.review.run_review", return_value={}), patch(
+            "server.app.stage3_synth.evaluate_dpo_pending",
+            return_value={"pending": 1, "failed": 0},
+        ), patch("server.app.stage3_synth.run") as stage3:
+            _run_job(job)
+        self.assertEqual("failed", job.status)
+        self.assertIn("DPO 评估未全部完成", job.error or "")
+        stage3.assert_not_called()
 
 
 class TasksApiTests(unittest.TestCase):

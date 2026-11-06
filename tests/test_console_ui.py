@@ -44,7 +44,7 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             ),
             "train": (
                 'id="dsProject"', 'id="dsSplit"', 'id="dsSearch"',
-                "renderDatasetIndex", "setTrainInclude",
+                "loadTrainDraft", "setDraftDecisions", "renderSplitWorkspace",
             ),
             "tasks": ("taskRowHtml", "pollTaskLogs", "taskOpenAction"),
             "delivery": ("selectExportProfile", "exportPackage", "downloadZip"),
@@ -54,6 +54,28 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             with self.subTest(workspace=workspace):
                 for snippet in snippets:
                     self.assertIn(snippet, HTML)
+
+    def test_train_draft_uses_server_decisions_not_local_file_switches(self) -> None:
+        for snippet in (
+            'api("/api/dataset/draft', 'function setDraftDecisions(',
+            'function renderSplitWorkspace(', 'function replanSplit(',
+            'body.dirty', 'data-draft-decision', 'id="draftBuild"',
+            'trainRequestCurrent', 'expected_hash', 'syncDraftSelection',
+            'dataset_evaluate', 'pending_evaluations', 'DPO 偏好对',
+            'loadTrainBuilds', 'buildWorkspace', 'build_id',
+            'onTaskFinished(j)', 'RUNS_REQUEST_SEQ', 'DRAWER_REQUEST_SEQ',
+            'e.target.closest("[data-draft-toggle]")',
+        ):
+            self.assertIn(snippet, HTML)
+        self.assertNotIn("gt.trainInclude", HTML)
+        self.assertNotIn("function setTrainInclude", HTML)
+
+    def test_drawer_async_loaders_capture_seq_after_open_drawer(self) -> None:
+        for fn in ("openDraftSample", "openBuildDetail", "openTrainHistorySample"):
+            with self.subTest(fn=fn):
+                match = re.search(rf"async function {fn}\([^)]*\) \{{([\s\S]*?)const seq = DRAWER_REQUEST_SEQ", SCRIPT)
+                self.assertIsNotNone(match, f"{fn} 应在 openDrawer 之后捕获 DRAWER_REQUEST_SEQ")
+                self.assertIn("openDrawer(", match.group(1))
 
     def test_raw_and_gold_drawers_share_confirmed_delete_action(self) -> None:
         for snippet in (
@@ -69,11 +91,9 @@ class ConsoleWorkspaceTests(unittest.TestCase):
         self.assertIn('!running ? sessionDeleteButton(sid)', HTML)
 
     def test_drawer_load_failures_surface_error_instead_of_hanging(self) -> None:
-        for snippet in (
-            '加载失败：${esc(err.message || err)}',
-            "toast(String(err.message || err), \"err\")",
-        ):
-            self.assertEqual(2, HTML.count(snippet), snippet)
+        # 原始、黄金、数据草稿、Build 和历史文件五个抽屉都必须结束 loading 并显示错误。
+        self.assertEqual(5, HTML.count('加载失败：${esc(err.message || err)}'))
+        self.assertEqual(2, HTML.count("toast(String(err.message || err), \"err\")"))
 
     def test_gold_drawer_browses_sft_and_dpo_content(self) -> None:
         for snippet in (
@@ -142,6 +162,90 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             "@media (max-width:860px)", "@media (prefers-reduced-motion:reduce)",
         ):
             self.assertIn(snippet, HTML)
+
+    @unittest.skipUnless(shutil.which("node"), "需要 Node.js 检查草稿交互辅助函数")
+    def test_train_replan_and_stale_response_helpers(self) -> None:
+        replan = re.search(r"(function replanNeedsSave\(preview, current\) \{[\s\S]*?\n\})", SCRIPT)
+        current = re.search(r"(function trainRequestCurrent\(request\) \{[\s\S]*?\n\})", SCRIPT)
+        self.assertIsNotNone(replan)
+        self.assertIsNotNone(current)
+        node_script = f"""
+let TRAIN_REQUEST_SEQ = 2;
+let STATE = {{train: {{workspace: 'draft'}}}};
+{current.group(1)}
+{replan.group(1)}
+if (!trainRequestCurrent({{id:2, workspace:'draft'}})) throw new Error('current response rejected');
+if (trainRequestCurrent({{id:1, workspace:'draft'}})) throw new Error('stale response accepted');
+if (trainRequestCurrent({{id:2, workspace:'files'}})) throw new Error('wrong workspace accepted');
+const currentPlan = {{eval_ratio:0.25, seed:42}};
+const cases = [
+  [{{changes:{{}}, split_plan:{{eval_ratio:0.25, seed:42}}}}, false],
+  [{{changes:{{}}, base_plan:{{eval_ratio:0.5, seed:42}}, split_plan:{{eval_ratio:0.5, seed:42}}}}, false],
+  [{{changes:{{}}, split_plan:{{eval_ratio:0.5, seed:42}}}}, true],
+  [{{changes:{{}}, split_plan:{{eval_ratio:0.25, seed:7}}}}, true],
+  [{{changes:{{'game::a':{{before:'train',after:'eval'}}}}, split_plan:{{eval_ratio:0.25, seed:42}}}}, true],
+];
+for (const [preview, expected] of cases) {{
+  const actual = replanNeedsSave(preview, currentPlan);
+  if (actual !== expected) throw new Error(JSON.stringify({{preview, expected, actual}}));
+}}
+console.log(JSON.stringify({{cases: cases.length + 3}}));
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "train_draft_helpers_test.js"
+            path.write_text(node_script, encoding="utf-8")
+            result = subprocess.run(["node", str(path)], check=True, capture_output=True, text=True)
+        self.assertEqual({"cases": 8}, json.loads(result.stdout))
+
+    @unittest.skipUnless(shutil.which("node"), "需要 Node.js 检查打包完成回调")
+    def test_fast_package_completion_notifies_watchers(self) -> None:
+        match = re.search(r"(function watchJob\(jobId, onDone\) \{[\s\S]*?\n\})", SCRIPT)
+        self.assertIsNotNone(match)
+        node_script = f"""
+let JOB_TIMER = null, JOB_ID = null, JOB_LINES = [], JOB_META = null, RB_TIMER = null;
+let STATE = {{tab:'train'}};
+let RAW_DRAWER = {{analyzeJobId:null}};
+let completed = 0;
+function registerJobWatch() {{}}
+function onTaskFinished(j) {{ if (j.status === 'done') completed += 1; }}
+function clearInterval() {{}}
+function setInterval() {{ return 1; }}
+function paintRawDrawerAnalyze() {{}}
+function paintJob() {{}}
+async function api() {{ return {{status:'done', stage:'package', id:'quick', logs:[]}}; }}
+{match.group(1)}
+(async () => {{
+  watchJob('quick', () => {{}});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  if (completed !== 1) throw new Error(`terminal callback count=${{completed}}`);
+  console.log(JSON.stringify({{completed}}));
+}})().catch(err => {{ console.error(err); process.exit(1); }});
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "watch_job_test.js"
+            path.write_text(node_script, encoding="utf-8")
+            result = subprocess.run(["node", str(path)], check=True, capture_output=True, text=True)
+        self.assertEqual({"completed": 1}, json.loads(result.stdout))
+
+    @unittest.skipUnless(shutil.which("node"), "需要 Node.js 检查导出格式选择")
+    def test_saved_export_profile_does_not_require_runbook(self) -> None:
+        list_match = re.search(r"(function exportProfileList\(rb\) \{[\s\S]*?\n\})", SCRIPT)
+        current_match = re.search(r"(function currentExportProfile\(rb\) \{[\s\S]*?\n\})", SCRIPT)
+        self.assertIsNotNone(list_match)
+        self.assertIsNotNone(current_match)
+        node_script = f"""
+let PACK = {{profile:'Qwen3.8-8B', profileChosen:true}};
+{list_match.group(1)}
+{current_match.group(1)}
+const selected = currentExportProfile({{}});
+if (selected !== 'Qwen3.8-8B') throw new Error(`selected=${{selected}}`);
+console.log(JSON.stringify({{selected}}));
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "export_profile_test.js"
+            path.write_text(node_script, encoding="utf-8")
+            result = subprocess.run(["node", str(path)], check=True, capture_output=True, text=True)
+        self.assertEqual({"selected": "Qwen3.8-8B"}, json.loads(result.stdout))
 
     @unittest.skipUnless(shutil.which("node"), "需要 Node.js 检查内联脚本")
     def test_inline_script_syntax_and_task_progress_behavior(self) -> None:

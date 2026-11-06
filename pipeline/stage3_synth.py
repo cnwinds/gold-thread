@@ -7,7 +7,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import curation, judge
+from . import curation, dataset_build, dataset_draft, judge
 from . import steps as stepcat
 from .handoff import write_handoff
 from .common.config import config_hash, load_config, stage_dirs
@@ -33,18 +33,9 @@ def _tools_json(flow_messages: List[Dict[str, Any]]) -> str:
     return json.dumps(DEFAULT_TOOLS, ensure_ascii=False)
 
 
-def _pick_split(projects: List[str], cfg: Dict[str, Any]) -> Dict[str, str]:
-    scfg = cfg["synth"]
-    explicit = list(scfg.get("eval_projects") or [])
-    ratio = float(scfg.get("eval_ratio", 0.0))
-    unique = sorted(set(projects))
-    if explicit:
-        return {p: ("eval" if p in explicit else "train") for p in unique}
-    if ratio <= 0 or len(unique) < 2:
-        return {p: "train" for p in unique}
-    n_eval = max(1, round(len(unique) * ratio))
-    eval_set = set(unique[-n_eval:])
-    return {p: ("eval" if p in eval_set else "train") for p in unique}
+def _pick_split(projects: List[str], cfg: Dict[str, Any], persist: bool = True) -> Dict[str, str]:
+    plan = dataset_draft.resolve_split_plan(projects, cfg, persist=persist)
+    return dict(plan["assignments"])
 
 
 def _subsegment_ranges(sid: str, cfg: Dict[str, Any]) -> List[Tuple[int, int]]:
@@ -579,6 +570,271 @@ def preview_session_synthesis(sid: str, cfg: Optional[Dict[str, Any]] = None) ->
     }
 
 
+def synthesize_dpo_candidates(
+    records: Dict[str, Any], cfg: Dict[str, Any], split_map: Dict[str, str]
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, int]]]:
+    """确定性合成全部 DPO 候选；模型评估和人工决策在后续统一应用。"""
+    dirs = stage_dirs(cfg)
+    dcfg = cfg["synth"].get("dpo", {})
+    window_turns = int(cfg["synth"].get("window_turns", 8))
+    pairs: List[Dict[str, Any]] = []
+    source_counts: Dict[str, Dict[str, int]] = {}
+    if dcfg.get("from_pruned_steps", True):
+        for pair in read_jsonl(dirs["gold"] / "dpo_pairs.jsonl"):
+            meta = pair.setdefault("metadata", {})
+            meta["split"] = split_map.get(meta.get("project_group"), "train")
+            pairs.append(pair)
+
+    for sid, entry in sorted(records.items()):
+        gold_rows = read_jsonl(Path(entry["gold_file"]))
+        if not gold_rows:
+            continue
+        rec = gold_rows[0]
+        msgs = rec.get("messages") or []
+        label = rec.get("label") or entry.get("label", "pending")
+        project = rec.get("project_group") or entry.get("project_group", "unknown")
+        split = split_map.get(project, "train")
+        model = rec.get("dominant_model") or entry.get("dominant_model") or "unknown"
+        sys_msg = next((m for m in msgs if m["role"] == "system"), None)
+        root_msg = next((m for m in msgs if m["role"] == "user"), None)
+        annotation = read_json(Path(entry.get("annotation_file", "")), default={}) or {}
+        effective = curation.resolve(annotation, cfg)
+        review_count = 0
+        negative_count = 0
+        if dcfg.get("from_review_rewrites", True) and effective["rewrites"]:
+            generated = _review_rewrite_dpo(
+                msgs, effective["rewrites"], set(effective["excluded"]), sys_msg, root_msg,
+                window_turns, sid, project, split, model,
+            )
+            pairs.extend(generated)
+            review_count = len(generated)
+        if label == "negative" and dcfg.get("from_negative_steps", True):
+            generated = _negative_dpo(
+                msgs, sys_msg, root_msg, dcfg, window_turns, sid, project, split, model
+            )
+            pairs.extend(generated)
+            negative_count = len(generated)
+        source_counts[sid] = {"review": review_count, "negative": negative_count}
+    return pairs, source_counts
+
+
+def evaluate_dpo_pending(cfg: Optional[Dict[str, Any]] = None, log=print) -> Dict[str, Any]:
+    """显式刷新 DPO 模型评估；Stage 3 构建只消费这里产生的缓存。"""
+    cfg = cfg or load_config()
+    dirs = stage_dirs(cfg)
+    records = load_index(dirs["gold"] / "index.json").get("sessions") or {}
+    split_map = _pick_split([r.get("project_group", "unknown") for r in records.values()], cfg)
+    pairs, _ = synthesize_dpo_candidates(records, cfg, split_map)
+    draft = dataset_draft.load_draft(cfg)
+    legacy = _load_dpo_exclusions(dirs["state"])
+    eligible = [
+        pair for pair in pairs
+        if dataset_draft.dpo_decision_for(str(pair.get("sample_id") or ""), draft, legacy)["action"] != "exclude"
+    ]
+    before = judge.cached_dpo_verdicts(eligible, cfg)
+    pending_before = sum(v["verdict"] in ("pending", "review_failed") for v in before.values())
+    verdicts: Dict[str, Dict[str, Any]] = {}
+    if pending_before:
+        stepcat.begin(log, "s3.dpo_evaluate", msg=f"待评估 {pending_before} 对")
+        verdicts = judge.review_dpo(eligible, cfg=cfg, log=log)
+        stepcat.finish(log, "s3.dpo_evaluate", done=pending_before, total=pending_before,
+                       msg=f"已请求评估 {pending_before} 对")
+    after = judge.cached_dpo_verdicts(eligible, cfg)
+    pending_after = sum(v["verdict"] in ("pending", "review_failed") for v in after.values())
+    failed = sum(v.get("verdict") == "review_failed" for v in verdicts.values())
+    return {
+        "candidates": len(eligible),
+        "evaluated": pending_before,
+        "pending": pending_after,
+        "failed": failed,
+        "good": sum(v["verdict"] == "good" for v in after.values()),
+        "swap": sum(v["verdict"] == "swap" for v in after.values()),
+        "drop": sum(v["verdict"] == "drop" for v in after.values()),
+        "bypassed": sum(v["verdict"] == "bypassed" for v in after.values()),
+    }
+
+
+def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = True) -> Dict[str, Any]:
+    """返回将要生成的 SFT 候选及有效人工决策，不写训练文件。"""
+    cfg = cfg or load_config()
+    dirs = stage_dirs(cfg)
+    gold_index = load_index(dirs["gold"] / "index.json")
+    records = gold_index.get("sessions") or {}
+    with dataset_draft.DRAFT_LOCK:
+        split_map = _pick_split([r.get("project_group", "unknown") for r in records.values()], cfg, persist=persist_split)
+        draft = dataset_draft.load_draft(cfg)
+        if not persist_split:
+            draft["split_plan"] = dataset_draft.resolve_split_plan(
+                [r.get("project_group", "unknown") for r in records.values()], cfg, persist=False
+            )
+    plan_hash = dataset_draft.plan_fingerprint(cfg, draft, include_aux_outputs=True)
+    last_build = draft.get("last_build") or {}
+    rows: List[Dict[str, Any]] = []
+    sessions: List[Dict[str, Any]] = []
+
+    for sid, entry in sorted(records.items()):
+        gold_rows = read_jsonl(Path(entry["gold_file"]))
+        if not gold_rows:
+            continue
+        rec = gold_rows[0]
+        annotation = read_json(Path(entry.get("annotation_file", "")), default={}) or {}
+        project = rec.get("project_group") or entry.get("project_group", "unknown")
+        split = split_map.get(project, "train")
+        evaluated = evaluate_session_synthesis(rec, annotation, cfg, split=split)
+        candidates = [("sft", row) for row in evaluated["windows_sgpt"]]
+        if evaluated.get("gold_traj"):
+            candidates.append(("trajectory", evaluated["gold_traj"]))
+        included = 0
+        excluded = 0
+        for kind, sample in candidates:
+            sample_id = str(sample.get("sample_id") or "")
+            decision = dataset_draft.decision_for(sample_id, draft)
+            is_included = decision["action"] != "exclude"
+            included += int(is_included)
+            excluded += int(not is_included)
+            meta = sample.get("metadata") or {}
+            rows.append({
+                "sample_id": sample_id,
+                "kind": kind,
+                "session_id": sid,
+                "project_group": project,
+                "split": split,
+                "model": meta.get("model") or rec.get("dominant_model") or "unknown",
+                "stage": meta.get("stage") or kind,
+                "sample_weight": meta.get("sample_weight", 1),
+                "quality_score": meta.get("quality_score"),
+                "root_task": meta.get("root_task", ""),
+                "admit_reason": meta.get("admit_reason", "clean_gold"),
+                "included": is_included,
+                "decision": decision["action"],
+                "gate_status": "passed",
+                "decision_reason": decision.get("reason", ""),
+                "decision_at": decision.get("at"),
+            })
+        sessions.append({
+            "session_id": sid,
+            "project_group": project,
+            "split": split,
+            "effective_state": evaluated["effective_state"],
+            "model_report": evaluated.get("model_report"),
+            "full_sft_allowed": evaluated["full_sft_allowed"],
+            "subsegment_only": evaluated["subsegment_only"],
+            "included_candidates": included,
+            "excluded_candidates": excluded,
+            "funnel": evaluated["funnel"],
+        })
+
+    dpo_candidates, _ = synthesize_dpo_candidates(records, cfg, split_map)
+    dpo_verdicts = judge.cached_dpo_verdicts(dpo_candidates, cfg)
+    legacy_exclusions = _load_dpo_exclusions(dirs["state"])
+    pending_evaluations = 0
+    for pair in dpo_candidates:
+        sample_id = str(pair.get("sample_id") or "")
+        meta = pair.get("metadata") or {}
+        decision = dataset_draft.dpo_decision_for(sample_id, draft, legacy_exclusions)
+        verdict = dpo_verdicts.get(sample_id) or {"verdict": "pending", "reason": "尚未完成模型复核"}
+        gate_status = verdict["verdict"]
+        manually_excluded = decision["action"] == "exclude"
+        if not manually_excluded and gate_status in ("pending", "review_failed"):
+            pending_evaluations += 1
+        is_included = not manually_excluded and gate_status in ("good", "swap", "bypassed")
+        project = meta.get("project_group") or "unknown"
+        reason = decision.get("reason", "") if manually_excluded else verdict.get("reason", "")
+        rows.append({
+            "sample_id": sample_id,
+            "kind": "dpo",
+            "session_id": meta.get("session_id", ""),
+            "project_group": project,
+            "split": split_map.get(project, "train"),
+            "model": meta.get("model") or "unknown",
+            "stage": meta.get("source") or "dpo",
+            "sample_weight": 1,
+            "quality_score": None,
+            "root_task": "",
+            "admit_reason": gate_status,
+            "included": is_included,
+            "decision": decision["action"],
+            "gate_status": gate_status,
+            "decision_reason": reason,
+            "decision_at": decision.get("at"),
+        })
+
+    return {
+        "rows": rows,
+        "sessions": sessions,
+        "split": split_map,
+        "split_plan": draft.get("split_plan") or {},
+        "summary": {
+            "candidates": len(rows),
+            "included": sum(1 for row in rows if row["included"]),
+            "excluded": sum(1 for row in rows if not row["included"] and row["decision"] == "exclude"),
+            "gate_excluded": sum(1 for row in rows if not row["included"] and row["decision"] != "exclude"),
+            "pending_evaluations": pending_evaluations,
+            "blocked_sessions": sum(
+                1 for s in sessions if not s["full_sft_allowed"] and not s["subsegment_only"]
+            ),
+        },
+        "updated_at": draft.get("updated_at"),
+        "plan_hash": plan_hash,
+        "dirty": last_build.get("plan_hash") != plan_hash,
+        "last_build": last_build or None,
+    }
+
+
+def draft_sample(sample_id: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """读取一条草稿样本正文；被排除的候选仍可查看和恢复。"""
+    cfg = cfg or load_config()
+    dirs = stage_dirs(cfg)
+    gold_index = load_index(dirs["gold"] / "index.json")
+    records = gold_index.get("sessions") or {}
+    with dataset_draft.DRAFT_LOCK:
+        split_map = _pick_split([r.get("project_group", "unknown") for r in records.values()], cfg)
+        draft = dataset_draft.load_draft(cfg)
+    for sid, entry in sorted(records.items()):
+        gold_rows = read_jsonl(Path(entry["gold_file"]))
+        if not gold_rows:
+            continue
+        rec = gold_rows[0]
+        project = rec.get("project_group") or entry.get("project_group", "unknown")
+        split = split_map.get(project, "train")
+        annotation = read_json(Path(entry.get("annotation_file", "")), default={}) or {}
+        evaluated = evaluate_session_synthesis(rec, annotation, cfg, split=split)
+        candidates = list(evaluated["windows_sgpt"])
+        if evaluated.get("gold_traj"):
+            candidates.append(evaluated["gold_traj"])
+        for sample in candidates:
+            if str(sample.get("sample_id") or "") != sample_id:
+                continue
+            decision = dataset_draft.decision_for(sample_id, draft)
+            out = dict(sample)
+            out["_draft"] = {
+                "included": decision["action"] != "exclude",
+                "decision": decision["action"],
+                "decision_reason": decision.get("reason", ""),
+                "decision_at": decision.get("at"),
+            }
+            return out
+    dpo_candidates, _ = synthesize_dpo_candidates(records, cfg, split_map)
+    pair = next((p for p in dpo_candidates if str(p.get("sample_id") or "") == sample_id), None)
+    if pair is not None:
+        legacy = _load_dpo_exclusions(dirs["state"])
+        decision = dataset_draft.dpo_decision_for(sample_id, draft, legacy)
+        verdict = judge.cached_dpo_verdicts([pair], cfg).get(sample_id) or {"verdict": "pending", "reason": ""}
+        manually_excluded = decision["action"] == "exclude"
+        out = dict(pair)
+        out["_draft"] = {
+            "included": not manually_excluded and verdict["verdict"] in ("good", "swap", "bypassed"),
+            "decision": decision["action"],
+            "gate_status": verdict["verdict"],
+            "decision_reason": decision.get("reason", "") if manually_excluded else verdict.get("reason", ""),
+            "decision_at": decision.get("at"),
+        }
+        if out["_draft"]["included"] and verdict["verdict"] == "swap":
+            out["chosen"], out["rejected"] = out["rejected"], out["chosen"]
+        return out
+    raise KeyError(f"草稿样本不存在: {sample_id}")
+
+
 def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cfg = cfg or load_config()
     dirs = stage_dirs(cfg)
@@ -589,45 +845,21 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     train_root = dirs["train"]
     train_root.mkdir(parents=True, exist_ok=True)
     scfg = cfg["synth"]
-    dcfg = scfg.get("dpo", {})
     fcfg = scfg.get("formats", {"sharegpt": True, "openai": True})
-    window_turns = int(scfg.get("window_turns", 8))
 
     records = gold_index["sessions"]
-    split_map = _pick_split([r.get("project_group", "unknown") for r in records.values()], cfg)
+    with dataset_draft.DRAFT_LOCK:
+        split_map = _pick_split([r.get("project_group", "unknown") for r in records.values()], cfg)
+        draft = dataset_draft.load_draft(cfg)
+    input_hash = dataset_draft.plan_fingerprint(cfg, draft, include_aux_outputs=False)
 
     gold_trajs: List[Dict[str, Any]] = []
     step_pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-    dpo_pairs: List[Dict[str, Any]] = []
+    dpo_pairs, dpo_source_counts = synthesize_dpo_candidates(records, cfg, split_map)
     diagnostics: List[Dict[str, Any]] = []
     session_funnels: Dict[str, Any] = {}
-
-    # 1) stage2 产出的天然 DPO 对
-    if dcfg.get("from_pruned_steps", True):
-        excluded_pairs = _load_dpo_exclusions(dirs["state"])
-        if excluded_pairs:
-            log(f"[stage3] dpo 排除账本：{len(excluded_pairs)} 个 sample_id 不再产出（data/00_state/dpo_exclusions.json）")
-        for pair in read_jsonl(dirs["gold"] / "dpo_pairs.jsonl"):
-            pair["metadata"]["split"] = split_map.get(pair["metadata"].get("project_group"), "train")
-            if pair.get("sample_id") in excluded_pairs:
-                md = pair.get("metadata") or {}
-                exc = excluded_pairs[pair.get("sample_id")]
-                if not isinstance(exc, dict):
-                    exc = {"reason": str(exc)}
-                pair["metadata"]["dpo_excluded"] = exc.get("reason", "")
-                diagnostics.append({
-                    "diagnostic_id": f"dpoexcl::{pair.get('sample_id')}",
-                    "sample_id": pair.get("sample_id"),
-                    "session_id": md.get("session_id", ""),
-                    "project_group": md.get("project_group", ""),
-                    "model": md.get("model", ""),
-                    "source": md.get("source", ""),
-                    "reason": exc.get("reason", ""),
-                    "excluded_by": exc.get("by", ""),
-                    "excluded_at": exc.get("at", ""),
-                })
-                continue
-            dpo_pairs.append(pair)
+    draft_excluded = {"sft": 0, "trajectory": 0, "dpo": 0}
+    excluded_pairs = _load_dpo_exclusions(dirs["state"])
 
     stage_counts = Counter()
     review_counts = Counter()
@@ -664,31 +896,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             diag["split"] = split
             diagnostics.append(diag)
 
-        # DPO 来源 2：黄金复核改写对（正例/待定会话中模型重写或人工精修）
-        effective_obj = curation.resolve(annotation, cfg)
-        sess_review_dpos: List[Dict[str, Any]] = []
-        if dcfg.get("from_review_rewrites", True) and effective_obj["rewrites"]:
-            sess_review_dpos = _review_rewrite_dpo(
-                msgs,
-                effective_obj["rewrites"],
-                set(effective_obj["excluded"]),
-                sys_msg,
-                root_msg,
-                window_turns,
-                sid,
-                project,
-                split,
-                model,
-            )
-            dpo_pairs.extend(sess_review_dpos)
-
-        # DPO 来源 3：反例会话病态步启发式压缩对
-        sess_neg_dpos: List[Dict[str, Any]] = []
-        if label == "negative" and dcfg.get("from_negative_steps", True):
-            sess_neg_dpos = _negative_dpo(
-                msgs, sys_msg, root_msg, dcfg, window_turns, sid, project, split, model
-            )
-            dpo_pairs.extend(sess_neg_dpos)
+        dpo_counts = dpo_source_counts.get(sid) or {"review": 0, "negative": 0}
 
         for sa in eval_res["step_audits"]:
             if sa["status"] == "admitted":
@@ -707,8 +915,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             "subsegment_only": eval_res["subsegment_only"],
             "funnel": eval_res["funnel"],
             "dpo_pruned": int(entry.get("dpo_count", 0)),
-            "dpo_review": len(sess_review_dpos),
-            "dpo_negative": len(sess_neg_dpos),
+            "dpo_review": dpo_counts["review"],
+            "dpo_negative": dpo_counts["negative"],
             "diagnostics": len(sess_diags),
         }
 
@@ -739,6 +947,9 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         eval_res = item["eval_res"]
         project = item["project"]
         for w_sgpt, w_oai in zip(eval_res["windows_sgpt"], eval_res["windows_oai"]):
+            if dataset_draft.decision_for(str(w_sgpt.get("sample_id") or ""), draft)["action"] == "exclude":
+                draft_excluded["sft"] += 1
+                continue
             st_name = w_sgpt["metadata"]["stage"]
             stage_counts[st_name] += 1
             project_counts[project] += 1
@@ -751,45 +962,81 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     stepcat.begin(log, "s3.traj", msg=f"从 {len(admitted)} 个会话产出完整轨迹")
     for item in admitted:
         traj = item["eval_res"].get("gold_traj")
-        if traj:
-            gold_trajs.append(traj)
-            model_counts[item["model"]] += 1
-            stepcat.emit(log, "s3.traj", len(gold_trajs), len(admitted) or 1,
-                         f"{item['sid'][:8]} 轨迹 {len(gold_trajs)}")
+        if not traj:
+            continue
+        if dataset_draft.decision_for(str(traj.get("sample_id") or ""), draft)["action"] == "exclude":
+            draft_excluded["trajectory"] += 1
+            continue
+        gold_trajs.append(traj)
+        model_counts[item["model"]] += 1
+        stepcat.emit(log, "s3.traj", len(gold_trajs), len(admitted) or 1,
+                     f"{item['sid'][:8]} 轨迹 {len(gold_trajs)}")
     stepcat.finish(log, "s3.traj", done=len(gold_trajs), total=len(gold_trajs) or 1,
                    msg=f"{len(gold_trajs)} 条轨迹")
 
-    # ---- DPO 偏好对：模型复核（多模型生成的对里，风格差异/长短偏好不算正误）----
-    dpo_review_stats = {"checked": 0, "swapped": 0, "dropped": 0}
+    # 通用草稿账本也覆盖 Stage 3 新生成的 DPO；显式 auto 可撤销旧排除。
+    kept_by_draft = []
+    for pair in dpo_pairs:
+        decision = dataset_draft.dpo_decision_for(str(pair.get("sample_id") or ""), draft, excluded_pairs)
+        if decision["action"] == "exclude":
+            draft_excluded["dpo"] += 1
+            md = pair.get("metadata") or {}
+            diagnostics.append({
+                "diagnostic_id": f"dpoexcl::{pair.get('sample_id')}",
+                "sample_id": pair.get("sample_id"),
+                "session_id": md.get("session_id", ""),
+                "project_group": md.get("project_group", ""),
+                "model": md.get("model", ""),
+                "source": md.get("source", ""),
+                "reason": decision.get("reason", ""),
+                "excluded_by": decision.get("by", ""),
+                "excluded_at": decision.get("at", ""),
+            })
+        else:
+            kept_by_draft.append(pair)
+    dpo_pairs = kept_by_draft
+
+    # DPO 只消费显式评估缓存；缺失/失败不进入训练集，也不在构建中临时调用模型。
+    dpo_review_stats = {"checked": 0, "swapped": 0, "dropped": 0, "pending": 0}
+    verdicts = judge.cached_dpo_verdicts(dpo_pairs, cfg)
+    pending = [
+        str(p.get("sample_id")) for p in dpo_pairs
+        if (verdicts.get(str(p.get("sample_id"))) or {}).get("verdict") in ("pending", "review_failed")
+    ]
+    dpo_review_stats["pending"] = len(pending)
+    if pending:
+        raise RuntimeError(
+            f"{len(pending)} 个 DPO 偏好对尚未完成模型复核，请先在训练数据页运行 DPO 评估"
+        )
     if dpo_pairs and judge.enabled(cfg):
-        stepcat.begin(log, "s3.dpo_review", msg=f"共 {len(dpo_pairs)} 对")
-        verdicts = judge.review_dpo(dpo_pairs, cfg=cfg, log=log)
         dpo_review_stats["checked"] = len(dpo_pairs)
         kept_pairs = []
-        for p in dpo_pairs:
-            v = verdicts.get(p.get("sample_id")) or {}
-            kind = v.get("verdict")
+        for pair in dpo_pairs:
+            verdict = verdicts.get(str(pair.get("sample_id"))) or {}
+            kind = verdict.get("verdict")
             if kind == "drop":
                 dpo_review_stats["dropped"] += 1
                 continue
             if kind == "swap":
-                p["chosen"], p["rejected"] = p["rejected"], p["chosen"]
-                p.setdefault("metadata", {})["model_review"] = "swap"
+                pair["chosen"], pair["rejected"] = pair["rejected"], pair["chosen"]
                 dpo_review_stats["swapped"] += 1
-            if kind:
-                p.setdefault("metadata", {})["model_review"] = kind
-                p["metadata"]["model_review_reason"] = v.get("reason", "")
-            kept_pairs.append(p)
-        # 关键：把过滤结果写回，否则 drop 的偏好对仍会进训练集
+            pair.setdefault("metadata", {})["model_review"] = kind
+            pair["metadata"]["model_review_reason"] = verdict.get("reason", "")
+            kept_pairs.append(pair)
         dpo_pairs = kept_pairs
-        stepcat.finish(
-            log, "s3.dpo_review",
-            done=len(dpo_pairs), total=dpo_review_stats["checked"] or 1,
-            msg=(
-                f"调换 {dpo_review_stats['swapped']} / 丢弃 {dpo_review_stats['dropped']}，"
-                f"保留 {len(dpo_pairs)}"
-            ),
+        log(
+            f"[stage3] DPO 缓存门禁：调换 {dpo_review_stats['swapped']} / "
+            f"丢弃 {dpo_review_stats['dropped']}，保留 {len(dpo_pairs)}"
         )
+
+    # 构建中只比较源输入；handoff/YAML 在生成后单独计入 Build 身份。
+    if dataset_draft.plan_fingerprint(cfg, draft, include_aux_outputs=False) != input_hash:
+        raise RuntimeError("构建期间黄金数据、DPO 输入或评估缓存发生变化，请重新运行 Stage 3")
+
+    # 自动准入原因只统计实际进入草稿构建的窗口，人工排除另记 draft_excluded。
+    admit_reason_counts = Counter(
+        (p[0].get("metadata") or {}).get("admit_reason", "clean_gold") for p in step_pairs
+    )
 
     # 全局打乱（跨项目混训，且保证 ShareGPT 与 OpenAI 格式严格同序）
     stepcat.begin(log, "s3.split")
@@ -818,20 +1065,20 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     for name, rows in out.items():
         counts[name] = write_jsonl_atomic(train_root / name, rows)
 
-    # 物理切分：train / eval 各写一份，训练框架可直接读取，无需自行过滤
+    # 物理切分：train / eval 各写一份；空分片移除，避免上次构建残留继续被打包。
     split_out: Dict[str, int] = {}
     for name, rows in out.items():
-        if not rows:
-            continue
         by_split: Dict[str, List[Dict[str, Any]]] = {"train": [], "eval": []}
         for r in rows:
             sp = (r.get("metadata") or {}).get("split", "train")
             by_split.setdefault(sp, []).append(r)
         for sp, part in by_split.items():
-            if not part:
-                continue
             fname = f"{name[:-6]}.{sp}.jsonl"
-            split_out[fname] = write_jsonl_atomic(train_root / fname, part)
+            path = train_root / fname
+            if not part:
+                path.unlink(missing_ok=True)
+                continue
+            split_out[fname] = write_jsonl_atomic(path, part)
     counts.update(split_out)
 
     dataset_info = {
@@ -920,6 +1167,9 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     if info_path.exists():
         prev = read_json(info_path, default={}) or {}
         for key, meta in prev.items():
+            # pi_* 由本次 Stage 3 全量重建；空分片或改名后的旧登记不得继承。
+            if key.startswith("pi_"):
+                continue
             dataset_info.setdefault(key, meta)
     write_json_atomic(info_path, dataset_info)
 
@@ -945,6 +1195,16 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         "label_counts": dict(Counter(r.get("label", "?") for r in records.values())),
         "review_states": dict(review_counts),
         "dpo_review": dpo_review_stats,
+        "draft": {
+            "plan_hash": None,
+            "build_id": None,
+            "sft_included": len(step_pairs),
+            "trajectory_included": len(gold_trajs),
+            "dpo_included": len(dpo_pairs),
+            "sft_excluded": draft_excluded["sft"],
+            "trajectory_excluded": draft_excluded["trajectory"],
+            "dpo_excluded": draft_excluded["dpo"],
+        },
     }
     write_json_atomic(train_root / "stats.json", stats)
 
@@ -961,16 +1221,12 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     except Exception as exc:  # noqa: BLE001
         log(f"[stage3] handoff 生成失败: {exc}")
 
-    # 交付包：handoff + 数据集 zip，交给下游 AI 直接训练
-    try:
-        from pipeline.package import build_delivery_zip  # noqa: PLC0415
-
-        stepcat.begin(log, "s3.package")
-        pkg = build_delivery_zip(train_root, cfg, log=log)
-        stepcat.finish(log, "s3.package", done=1, total=1,
-                       msg=pkg.get("zip_name", "delivery.zip"))
-    except Exception as exc:  # noqa: BLE001
-        log(f"[stage3] 交付包生成失败: {exc}")
+    plan_hash = dataset_draft.plan_fingerprint(cfg, draft, include_aux_outputs=True)
+    if dataset_draft.plan_fingerprint(cfg, draft, include_aux_outputs=False) != input_hash:
+        raise RuntimeError("构建期间黄金数据、DPO 输入或评估缓存发生变化，请重新运行 Stage 3")
+    stats["draft"]["plan_hash"] = plan_hash
+    stats["draft"]["build_id"] = plan_hash
+    write_json_atomic(train_root / "stats.json", stats)
 
     dump_index(
         train_root / "index.json",
@@ -979,10 +1235,40 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         },
         {"stage": STAGE, "stats": stats, "last_run": now_iso()},
     )
+    build_dir, build_manifest = dataset_build.create_build(
+        train_root, cfg, plan_hash, draft, counts, validate_input=True
+    )
+    build_id = build_manifest["build_id"]
+    dataset_draft.mark_built(cfg, plan_hash, build_dir=build_dir)
+
+    # 交付包只读取刚固化的 Build，避免选择工作区历史 LF/v2。
+    pkg_result = None
+    try:
+        from pipeline.package import build_delivery_zip  # noqa: PLC0415
+
+        stepcat.begin(log, "s3.package")
+        pkg_result = build_delivery_zip(
+            build_dir,
+            dataset_build.load_build_config(build_dir, cfg),
+            log=log,
+            delivery_dir=dirs["root"] / "04_release" / "delivery",
+        )
+        stepcat.finish(log, "s3.package", done=1, total=1,
+                       msg=pkg_result.get("zip_name", "delivery.zip"))
+    except Exception as exc:  # noqa: BLE001
+        log(f"[stage3] 交付包生成失败: {exc}")
 
     log(
         f"[stage3] 完成：黄金轨迹 {counts.get('sft_gold_trajectories_sharegpt.jsonl', 0)}，"
         f"单步窗口 {counts.get('sft_step_windows_sharegpt.jsonl', 0)}，"
         f"DPO {counts.get('dpo_preference_pairs.jsonl', 0)}，诊断 {counts.get('negative_diagnostics.jsonl', 0)}"
     )
-    return {"stage": STAGE, **counts, "split": split_map, "stats": stats}
+    return {
+        "stage": STAGE,
+        **counts,
+        "split": split_map,
+        "stats": stats,
+        "build_id": build_id,
+        "build_dir": str(build_dir),
+        "package": pkg_result,
+    }

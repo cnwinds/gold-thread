@@ -744,6 +744,7 @@
   .train-shell{display:grid;grid-template-columns:300px minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);
     height:calc(100vh - 158px);min-height:460px;
     background:var(--ink-1);border:1px solid var(--line-soft);border-radius:12px;overflow:hidden}
+  body.dirty .train-draft-status{border-color:var(--amber);color:var(--amber)}
   .train-plan{grid-column:1 / -1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
     padding:8px 12px;border-bottom:1px solid var(--line-soft);background:#14171c}
   .train-plan b{color:var(--mint);font-weight:600;font-size:12.5px}
@@ -1401,7 +1402,7 @@ const PAGES = {
   config:   ["配置", "按分组调整常用参数；高级参数与 YAML 源码保留在同一工作区。"],
 };
 
-let STATE = { tab: "overview", overview: null, tasksSelectedId: "", raw: {project:"", model:"", adopted:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {project:"", model:"", output:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", fileq:"", scope:"in"}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
+let STATE = { tab: "overview", overview: null, tasksSelectedId: "", raw: {project:"", model:"", adopted:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {project:"", model:"", output:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {workspace:"draft", name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", kind:"", decision:"", fileq:"", scope:"all", splitPlan:null, replanPreview:null, builds:[]}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
 /** 交付打包作业 UI 状态（独立于 pipeline stage jobs） */
 let PACK = { running: false, jobId: null, startedAt: null, elapsed: 0, phase: "", error: null, result: null, timer: null,
   profile: localStorage.getItem("gt.exportProfile") || "", profileChosen: !!localStorage.getItem("gt.exportProfile") };
@@ -1411,6 +1412,9 @@ const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模
 const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold"||s==="finalized", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
 
 const TASK_HUB = { tasks: [], running: 0, pollTimer: null, notified: new Set(), watched: new Map(), logTimers: new Map() };
+let RUNS_REQUEST_SEQ = 0;
+let TRAIN_REQUEST_SEQ = 0;
+let DRAWER_REQUEST_SEQ = 0;
 
 function updateTasksBadge() {
   const em = $("#navTasksBadge");
@@ -1435,7 +1439,7 @@ function onTaskFinished(t) {
   if (aff.includes("overview") && STATE.tab === "overview") loadOverview().catch(() => {});
   if (aff.includes("raw") && STATE.tab === "raw") loadRaw().catch(() => {});
   if (aff.includes("gold") && STATE.tab === "gold") loadGold().catch(() => {});
-  if (aff.includes("train") && STATE.tab === "train") loadTrain().catch(() => {});
+  if (aff.includes("train") && STATE.tab === "train") loadTrainDraft().catch(() => {});
   if (t.stage === "package" || t.kind === "package") {
     if (STATE.tab === "runs") loadRuns().catch(() => {});
   }
@@ -2271,15 +2275,18 @@ async function openRaw(sid) {
   RAW_DRAWER.sid = sid;
   RAW_DRAWER.kind = "raw";
   openDrawer(`原始会话 ${sid.slice(0,8)}`, "stage1 视图，已应用回合过滤");
+  const seq = DRAWER_REQUEST_SEQ;
   $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
   let d;
   try {
     d = await api(`/api/raw/session/${sid}`);
   } catch (err) {
+    if (seq !== DRAWER_REQUEST_SEQ) return;
     $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
     toast(String(err.message || err), "err");
     return;
   }
+  if (seq !== DRAWER_REQUEST_SEQ) return;
   const meta = d.meta || {}, st = meta.stats || {};
   RAW_DRAWER.label = meta.label || "pending";
   $("#drawerSub").innerHTML = `<span class="faint">${esc(meta.project_group || "未分组")}</span>`;
@@ -2416,6 +2423,15 @@ async function requestSessionDelete(sid) {
 }
 
 function onDrawerFootClick(e) {
+  const tb = e.target.closest("[data-draft-toggle]");
+  if (tb && tb.dataset.draftToggle) {
+    setDraftDecisions([{
+      sample_id: tb.dataset.draftToggle,
+      action: tb.dataset.draftDecision || "exclude",
+      reason: "控制台切换",
+    }]).catch(err => toast(err.message || String(err), "err"));
+    return;
+  }
   const db = e.target.closest("#sessionDeleteBtn");
   if (db && RAW_DRAWER.sid) { requestSessionDelete(RAW_DRAWER.sid); return; }
   const ab = e.target.closest("#rawAnalyzeBtn");
@@ -3101,15 +3117,18 @@ async function openGold(sid) {
   RAW_DRAWER.kind = "gold";
   RAW_DRAWER.feedback = null;
   openDrawer(`黄金会话 ${sid.slice(0, 8)}`, "");
+  const seq = DRAWER_REQUEST_SEQ;
   $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
   let d;
   try {
     d = await api(`/api/gold/session/${sid}`);
   } catch (err) {
+    if (seq !== DRAWER_REQUEST_SEQ) return;
     $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
     toast(String(err.message || err), "err");
     return;
   }
+  if (seq !== DRAWER_REQUEST_SEQ) return;
   if (REV.sid !== sid) return;
   const rec = d.record;
   RAW_DRAWER.label = rec.label || "pending";
@@ -3511,95 +3530,296 @@ function datasetKind(name) {
   return "sft";
 }
 const DS_KIND_ZH = {sft:"SFT 单步",trajectory:"完整轨迹",dpo:"DPO 偏好",diagnostic:"病态诊断"};
-async function loadTrain() {
-  const d = await api("/api/train/datasets");
-  const files = d.datasets.map(x=>x.name);
-  const tf = STATE.train;
-  if (!files.includes(tf.name)) {
-    const inc = trainInclude();
-    tf.name = [...inc].find(n => files.includes(n)) || files[0] || "";
+const DRAFT_KIND_ZH = {sft:"SFT", trajectory:"轨迹", dpo:"DPO 偏好对", diagnostic:"诊断"};
+function trainRequestCurrent(request) {
+  return request.id === TRAIN_REQUEST_SEQ && STATE.train.workspace === request.workspace;
+}
+function replanNeedsSave(preview, current) {
+  if (Object.keys(preview.changes || {}).length) return true;
+  const plan = preview.split_plan || {};
+  const base = preview.base_plan || current || {};
+  if (Number(plan.eval_ratio) !== Number(base.eval_ratio)) return true;
+  if (Number(plan.seed) !== Number(base.seed)) return true;
+  return false;
+}
+function syncDraftSelection() {
+  const sel = new Set(STATE.train.selectedIds || []);
+  $$("#view-train [data-draft-row]").forEach(row => {
+    row.classList.toggle("on", sel.has(row.dataset.sampleId));
+  });
+}
+async function setDraftDecisions(updates) {
+  await api("/api/dataset/draft/decisions", {method:"PUT", body: JSON.stringify({decisions: updates})});
+  syncDraftSelection();
+  await loadTrainDraft();
+}
+function renderSplitWorkspace(plan, projectStats) {
+  plan = plan || {};
+  const stats = projectStats || {};
+  const assignments = plan.assignments || {};
+  const rows = Object.keys(assignments).sort().map(p => {
+    const st = stats[p] || {};
+    const split = assignments[p] || "train";
+    return `<tr><td class="mono">${esc(p)}</td><td><select data-split-project="${esc(p)}" aria-label="项目切分">
+      <option value="train" ${split==="train"?"selected":""}>train</option><option value="eval" ${split==="eval"?"selected":""}>eval</option></select></td>
+      <td class="n">${fmt(st.included || 0)}</td><td class="n faint">${fmt(st.excluded || 0)}</td><td class="n">${fmt(st.sessions || 0)}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="empty">暂无项目</td></tr>`;
+  const ratio = Number(plan.eval_ratio ?? 0);
+  const seed = Number(plan.seed ?? 42);
+  return `<div class="workspace-panel train-split">
+    <div class="panel-h"><h3>Split Plan</h3><span class="hint">服务端账本 · eval_ratio ${esc(String(ratio))} · seed ${fmt(seed)}</span></div>
+    <div class="panel-b"><table><thead><tr><th>项目</th><th>切分</th><th>纳入</th><th>排除</th><th>会话</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="toolbar" style="margin-top:10px">
+      <label class="faint">eval_ratio <input id="draftEvalRatio" type="number" min="0" max="1" step="0.05" value="${esc(String(ratio))}" style="width:72px"></label>
+      <label class="faint" style="margin-left:10px">seed <input id="draftSeed" type="number" step="1" value="${fmt(seed)}" style="width:72px"></label>
+      <button type="button" class="ghost" id="draftReplanPreview">预览重切分</button>
+      <button type="button" class="primary" id="draftReplanSave" disabled>应用重切分</button>
+    </div></div></div>`;
+}
+function buildWorkspace(lastBuild, builds) {
+  const lb = lastBuild || {};
+  const list = (builds || []).map(b => `<button type="button" class="ghost mono" data-build-open="${esc(b.build_id)}">${esc(b.build_id.slice(0, 12))}… · ${fmt((b.counts && b.counts.rows) || 0)} 条</button>`).join(" ");
+  return `<div id="draftBuild" class="workspace-panel">
+    <div class="panel-h"><h3>不可变 Build</h3><span class="hint">build_id · 与 Stage 3 输出绑定</span></div>
+    <div class="panel-b">
+      <div class="kv"><span class="k">最新 build_id</span><span class="mono">${esc(lb.build_id || "尚未构建")}</span>
+      <span class="k">plan_hash</span><span class="mono faint">${esc(lb.plan_hash || "—")}</span></div>
+      <div class="toolbar" style="margin-top:10px"><button type="button" class="ghost" id="draftBuildReload">刷新 Build 列表</button>${list || `<span class="faint">暂无历史 Build</span>`}</div>
+    </div></div>`;
+}
+async function loadTrainBuilds() {
+  const d = await api("/api/dataset/builds");
+  STATE.train.builds = d.builds || [];
+  const host = $("#draftBuild");
+  if (host) host.outerHTML = buildWorkspace(STATE.train.lastBuild, STATE.train.builds);
+  $$("#view-train [data-build-open]").forEach(btn => { btn.onclick = () => openBuildDetail(btn.dataset.buildOpen); });
+  const reload = $("#draftBuildReload");
+  if (reload) reload.onclick = () => loadTrainBuilds().catch(e => toast(e.message, "err"));
+}
+async function replanSplit(dryRun) {
+  const plan = STATE.train.splitPlan || {};
+  const ratio = Number($("#draftEvalRatio")?.value ?? plan.eval_ratio ?? 0);
+  const seed = Number($("#draftSeed")?.value ?? plan.seed ?? 42);
+  const body = {eval_ratio: ratio, seed, dry_run: !!dryRun};
+  if (!dryRun) body.expected_hash = (STATE.train.replanPreview && STATE.train.replanPreview.base_hash) || undefined;
+  const preview = await api("/api/dataset/draft/split/replan", {method:"POST", body: JSON.stringify(body)});
+  if (dryRun) {
+    STATE.train.replanPreview = preview;
+    const saveBtn = $("#draftReplanSave");
+    if (saveBtn) saveBtn.disabled = !replanNeedsSave(preview, plan);
+    toast(Object.keys(preview.changes || {}).length ? `预览 ${Object.keys(preview.changes).length} 项变更` : "预览：切分参数无项目变更", "ok");
+    return preview;
   }
-  if (!files.length) {
-    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>还没有训练数据</h3><p>完成黄金提纯后，运行 Stage 3 生成 SFT 与 DPO 样本。</p><button class="primary" onclick="runStage('stage3',false)">运行 Stage 3</button></div></div>`;
+  STATE.train.replanPreview = null;
+  await loadTrainDraft();
+  return preview;
+}
+function draftRow(r, idx) {
+  const kind = r.kind || "sft";
+  const inc = r.included;
+  const gate = r.gate_status || "";
+  return `<tr class="clickable ${inc ? "" : "faint"}" data-draft-row="1" data-sample-id="${esc(r.sample_id)}" data-draft-decision="${esc(r.decision || "auto")}" tabindex="0">
+    <td class="n faint">${idx + 1}</td>
+    <td><div class="mono muted" style="font-size:11px">${esc(short(r.sample_id, 28))}</div><div class="sid faint">${esc(r.project_group || "")}</div></td>
+    <td><span class="chip">${esc(DRAFT_KIND_ZH[kind] || kind)}</span>${kind==="dpo" ? `<div class="faint" style="margin-top:3px">${esc(r.decision_reason || gate)}</div>` : ""}</td>
+    <td>${esc(r.split || "–")}</td>
+    <td><span class="chip ${inc ? "train" : ""}">${inc ? "纳入" : "排除"}</span>${gate && gate !== "passed" && gate !== "good" ? `<span class="chip" style="margin-left:4px">${esc(gate)}</span>` : ""}</td>
+    <td><button type="button" class="ghost" data-draft-toggle="${esc(r.sample_id)}" data-draft-decision="${esc(r.decision === "exclude" ? "auto" : "exclude")}">${r.decision === "exclude" ? "恢复" : "排除"}</button></td></tr>`;
+}
+async function openDraftSample(sampleId) {
+  openDrawer("草稿样本", short(sampleId, 32));
+  const seq = DRAWER_REQUEST_SEQ;
+  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
+  let row;
+  try {
+    row = await api(`/api/dataset/draft/sample?sample_id=${encodeURIComponent(sampleId)}`);
+  } catch (err) {
+    if (seq !== DRAWER_REQUEST_SEQ) return;
+    $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
     return;
   }
-  const query = new URLSearchParams({offset:tf.offset,limit:50,q:tf.q||"",project:tf.project||"",stage:tf.stage||"",split:tf.split||""});
-  const rows = await api(`/api/train/dataset/${STATE.train.name}?${query}`);
+  if (seq !== DRAWER_REQUEST_SEQ) return;
+  STATE.drawerData = row;
+  const draft = row._draft || {};
+  const kind = row.kind || (String(sampleId).startsWith("dpo::") ? "dpo" : "sft");
+  $("#drawerBody").innerHTML = renderTrainDetail(row, kind === "trajectory" ? "trajectory" : kind, draft.build_file || "");
+  setDrawerFoot(`<button type="button" data-draft-toggle="${esc(sampleId)}" data-draft-decision="${esc(draft.included ? "exclude" : "auto")}">${draft.included ? "排除此样本" : "恢复纳入"}</button>
+    <button onclick="showJson(STATE.drawerData)">查看 JSON</button>`);
+}
+async function openBuildDetail(buildId) {
+  openDrawer("Build 详情", buildId.slice(0, 16));
+  const seq = DRAWER_REQUEST_SEQ;
+  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
+  let manifest;
+  try {
+    manifest = await api(`/api/dataset/builds/${encodeURIComponent(buildId)}`);
+  } catch (err) {
+    if (seq !== DRAWER_REQUEST_SEQ) return;
+    $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
+    return;
+  }
+  if (seq !== DRAWER_REQUEST_SEQ) return;
+  STATE.drawerData = manifest;
+  const files = (manifest.files || []).map(f => `<li class="mono">${esc(f.path || f.name || JSON.stringify(f))}</li>`).join("");
+  $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-b kv">
+    <span class="k">build_id</span><span class="mono">${esc(manifest.build_id)}</span>
+    <span class="k">plan_hash</span><span class="mono">${esc(manifest.plan_hash || "")}</span>
+    <span class="k">created_at</span><span>${esc(manifest.created_at || "")}</span></div>
+    <ul>${files || "<li class=\"faint\">无文件清单</li>"}</ul></div>`;
+  setDrawerFoot(`<button onclick="showJson(STATE.drawerData)">查看 JSON</button>`);
+}
+async function openTrainHistorySample(name, idx) {
+  openDrawer(`样本 #${idx}`, name);
+  const seq = DRAWER_REQUEST_SEQ;
+  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
+  let row;
+  try {
+    row = await api(`/api/train/dataset/${encodeURIComponent(name)}/${idx}`);
+  } catch (err) {
+    if (seq !== DRAWER_REQUEST_SEQ) return;
+    $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
+    return;
+  }
+  if (seq !== DRAWER_REQUEST_SEQ) return;
+  STATE.drawerData = row;
+  $("#drawerBody").innerHTML = renderTrainDetail(row, datasetKind(name), name);
+  setDrawerFoot(`<button onclick="showJson(STATE.drawerData)">查看原始 JSON</button>`);
+}
+async function loadTrainDraft() {
+  const request = {id: ++TRAIN_REQUEST_SEQ, workspace: "draft"};
+  STATE.train.workspace = "draft";
+  const tf = STATE.train;
+  const params = new URLSearchParams({offset: tf.offset, limit: 50, q: tf.q || "", project: tf.project || "", split: tf.split || "", kind: tf.kind || "", decision: tf.decision || ""});
+  let draft;
+  try {
+    draft = await api("/api/dataset/draft?" + params.toString());
+  } catch (e) {
+    if (!trainRequestCurrent(request)) return;
+    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>无法加载草稿</h3><p>${esc(e.message)}</p><button class="primary" onclick="runStage('stage3',false)">运行 Stage 3</button></div></div>`;
+    return;
+  }
+  if (!trainRequestCurrent(request)) return;
+  document.body.classList.toggle("dirty", !!draft.dirty);
+  STATE.train.splitPlan = draft.split_plan || {};
+  STATE.train.splitPlanHash = draft.base_hash || draft.plan_hash || "";
+  STATE.train.lastBuild = draft.last_build || null;
+  const summary = draft.summary || {};
+  const pending = summary.pending_evaluations || 0;
+  const end = Math.min(draft.offset + (draft.rows || []).length, draft.total || 0);
+  const projects = draft.projects || [];
+  tf.selectedIds = tf.selectedIds || [];
+  $("#view-train").innerHTML = `
+    <div class="train-shell train-draft-shell">
+      <div class="train-plan train-draft-status">
+        <b>服务端草稿</b>
+        <span class="faint">候选 ${fmt(summary.candidates || 0)} · 纳入 ${fmt(summary.included || 0)} · 排除 ${fmt(summary.excluded || 0)}</span>
+        <span class="chip ${pending ? "warn" : ""}">pending_evaluations ${fmt(pending)}</span>
+        <span class="grow"></span>
+        <button type="button" class="ghost" id="trainTabDraft" data-train-tab="draft">决策预览</button>
+        <button type="button" class="ghost" id="trainTabFiles" data-train-tab="files">历史文件</button>
+        <button type="button" class="primary" onclick="runStage('stage3',false)">运行 Stage 3</button>
+        <button type="button" class="ghost" onclick="runStage('dataset_evaluate',false)">dataset_evaluate</button>
+      </div>
+      ${renderSplitWorkspace(draft.split_plan, draft.project_stats)}
+      ${buildWorkspace(draft.last_build, STATE.train.builds)}
+      <div class="train-main workspace-panel">
+        <div class="toolbar">
+          <select id="dsProject" aria-label="按项目筛选"><option value="">全部项目</option>${projects.map(p => `<option value="${esc(p)}" ${tf.project === p ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>
+          <select id="dsSplit" aria-label="按训练切分筛选"><option value="">全部切分</option><option value="train" ${tf.split === "train" ? "selected" : ""}>train</option><option value="eval" ${tf.split === "eval" ? "selected" : ""}>eval</option></select>
+          <div class="filter-search"><input type="text" id="dsSearch" placeholder="搜索样本，回车确认" value="${esc(tf.q || "")}"></div>
+          <span class="grow"></span>
+          <button type="button" class="ghost" id="dsReload">刷新</button>
+        </div>
+        <div class="scroll"><table><thead><tr><th class="n">#</th><th>样本 / 项目</th><th>类型</th><th>切分</th><th>状态</th><th>决策</th></tr></thead><tbody>
+          ${(draft.rows || []).map((r, i) => draftRow(r, draft.offset + i)).join("") || emptyRow(6, tf.q || tf.project || tf.split ? "没有匹配的样本" : "草稿为空，请先完成 Stage 2/3")}
+        </tbody></table></div>
+        <div class="toolbar bottom">
+          <span class="count"><b>${draft.total ? fmt(draft.offset + 1) : 0}–${fmt(end)}</b>，共 ${fmt(draft.total || 0)} 条 · DPO 偏好对按 gate 与账本过滤</span>
+          <span class="grow"></span>
+          <button type="button" id="dsPrev" ${draft.offset <= 0 ? "disabled" : ""}>上一页</button>
+          <button type="button" id="dsNext" ${end >= (draft.total || 0) ? "disabled" : ""}>下一页</button>
+        </div>
+      </div>
+    </div>`;
+  syncDraftSelection();
+  loadTrainBuilds().catch(() => {});
+  $("#dsProject").onchange = e => { tf.project = e.target.value; tf.offset = 0; loadTrainDraft(); };
+  $("#dsSplit").onchange = e => { tf.split = e.target.value; tf.offset = 0; loadTrainDraft(); };
+  $("#dsSearch").onkeydown = e => { if (e.key === "Enter") { tf.q = e.target.value; tf.offset = 0; loadTrainDraft(); } };
+  $("#dsReload").onclick = () => loadTrainDraft();
+  $("#dsPrev").onclick = () => { tf.offset = Math.max(0, tf.offset - 50); loadTrainDraft(); };
+  $("#dsNext").onclick = () => { tf.offset += 50; loadTrainDraft(); };
+  $("#draftReplanPreview")?.addEventListener("click", () => replanSplit(true).catch(e => toast(e.message, "err")));
+  $("#draftReplanSave")?.addEventListener("click", () => replanSplit(false).catch(e => toast(e.message, "err")));
+  $$("#view-train [data-split-project]").forEach(sel => {
+    sel.onchange = async () => {
+      const assignments = {...(STATE.train.splitPlan?.assignments || {}), [sel.dataset.splitProject]: sel.value};
+      await api("/api/dataset/draft/split", {method:"PUT", body: JSON.stringify({assignments})});
+      await loadTrainDraft();
+    };
+  });
+  $$("#view-train [data-draft-toggle]").forEach(btn => {
+    btn.onclick = () => setDraftDecisions([{sample_id: btn.dataset.draftToggle, action: btn.dataset.draftDecision, reason: "控制台切换"}]).catch(e => toast(e.message, "err"));
+  });
+  bindRows("#view-train", tr => { if (tr.dataset.sampleId) openDraftSample(tr.dataset.sampleId); });
+  $("#trainTabFiles")?.addEventListener("click", () => loadTrainFiles());
+}
+async function loadTrain() { return loadTrainDraft(); }
+async function loadTrainFiles() {
+  const request = {id: ++TRAIN_REQUEST_SEQ, workspace: "files"};
+  STATE.train.workspace = "files";
+  const d = await api("/api/train/datasets");
+  if (!trainRequestCurrent(request)) return;
+  const files = d.datasets || [];
+  if (!files.length) {
+    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>还没有训练文件</h3><p>运行 Stage 3 后会在此列出 jsonl。</p></div></div>`;
+    return;
+  }
+  const tf = STATE.train;
+  if (!files.some(x => x.name === tf.name)) tf.name = files[0].name;
+  const query = new URLSearchParams({offset: tf.offset, limit: 50, q: tf.q || "", project: tf.project || "", stage: tf.stage || "", split: tf.split || ""});
+  const rows = await api(`/api/train/dataset/${encodeURIComponent(tf.name)}?${query}`);
+  if (!trainRequestCurrent(request)) return;
   STATE.datasetInfo = d.dataset_info;
-  STATE.trainFiles = d.datasets;
+  STATE.trainFiles = files;
   const end = Math.min(rows.offset + rows.rows.length, rows.total);
-  const kind = datasetKind(STATE.train.name);
-  const projects = Object.keys(d.stats?.split||{});
-  const phaseOpts = kind==="dpo" ? [["stage2_pruned","剪枝弯路"],["negative_step","来源会话坏步"],["review_rewrite","复核改写"],["meowdoku_dpo_chain","思维链缺陷"]]
-    : kind==="sft" ? PHASE.map(([v,t])=>[v,t]) : [];
+  const kind = datasetKind(tf.name);
+  const projects = Object.keys(d.stats?.split || {});
   $("#view-train").innerHTML = `
     <div class="train-shell">
-    ${renderTrainPlan(d.datasets)}
-    ${renderDatasetIndex(d.datasets)}
+    ${renderTrainPlan(files)}
+    ${renderDatasetIndex(files)}
     <div class="train-main">
-      <div class="train-now"><b class="mono" title="${esc(STATE.train.name)}">${esc(STATE.train.name)}</b><span class="chip ${trainInclude().has(STATE.train.name)?"train":""}" id="dsInChip">${trainInclude().has(STATE.train.name)?"本批生成":"不生成"}</span></div>
-      <div class="train-from" id="trainRel">${esc(trainRelText(STATE.train.name))}</div>
+      <div class="train-now"><b class="mono">${esc(tf.name)}</b></div>
+      <div class="train-from" id="trainRel">${esc(trainRelText(tf.name))}</div>
       <div class="toolbar">
-        <span class="chip ${kind==="sft"||kind==="trajectory"?"train":""}">${esc(DS_KIND_ZH[kind])}</span>
-        <select id="dsProject" aria-label="按项目筛选"><option value="">全部项目</option>${projects.map(p=>`<option value="${esc(p)}" ${tf.project===p?"selected":""}>${esc(p)}</option>`).join("")}</select>
-        <select id="dsSplit" aria-label="按训练切分筛选"><option value="">全部切分</option><option value="train" ${tf.split==="train"?"selected":""}>train</option><option value="eval" ${tf.split==="eval"?"selected":""}>eval</option></select>
-        ${phaseOpts.length ? `<select id="dsStage" aria-label="按来源或阶段筛选"><option value="">全部${kind==="dpo"?"来源":"阶段"}</option>${phaseOpts.map(([v,t])=>`<option value="${v}" ${tf.stage===v?"selected":""}>${t}</option>`).join("")}</select>`:""}
-        <div class="filter-search"><input type="text" id="dsSearch" placeholder="搜索样本，回车确认" value="${esc(tf.q||"")}"></div>
+        <button type="button" class="ghost" onclick="loadTrainDraft()">返回草稿</button>
+        <select id="dsProject" aria-label="按项目筛选"><option value="">全部项目</option>${projects.map(p => `<option value="${esc(p)}" ${tf.project === p ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>
+        <select id="dsSplit" aria-label="按训练切分筛选"><option value="">全部切分</option><option value="train" ${tf.split === "train" ? "selected" : ""}>train</option><option value="eval" ${tf.split === "eval" ? "selected" : ""}>eval</option></select>
+        <div class="filter-search"><input type="text" id="dsSearch" placeholder="搜索样本" value="${esc(tf.q || "")}"></div>
         <span class="grow"></span>
-        <button id="dsInfo" class="ghost">数据集信息</button>
-        <button id="dsReload" class="ghost">刷新</button>
+        <button type="button" class="ghost" id="dsReload">刷新</button>
       </div>
-      <div class="scroll"><table><thead><tr>${kind==="dpo"
-        ? `<th class="n">#</th><th>样本 / 项目</th><th>来源与理由</th><th>Chosen</th><th>Rejected</th><th>切分</th>`
-        : kind==="diagnostic"
-        ? `<th class="n">#</th><th>会话 / 项目</th><th>模型 / 质量</th><th>病态标签</th><th>思考与工具</th><th>切分</th>`
-        : `<th class="n">#</th><th>样本 / 项目</th><th>阶段</th><th class="n">权重</th><th>根任务</th><th>目标思考 / 工具动作</th><th>切分</th>`}</tr></thead><tbody>
-      ${rows.rows.map(r=>trainRow(r,kind)).join("") || emptyRow(kind==="sft"||kind==="trajectory"?7:6, tf.q||tf.project||tf.stage||tf.split ? "没有匹配的样本" : "这个数据集是空的")}
+      <div class="scroll"><table><thead><tr><th class="n">#</th><th>样本</th><th>切分</th></tr></thead><tbody>
+      ${rows.rows.map(r => trainRow(r, kind)).join("") || emptyRow(3, "空")}
       </tbody></table></div>
       <div class="toolbar bottom">
         <span class="count"><b>${rows.total ? fmt(rows.offset + 1) : 0}–${fmt(end)}</b>，共 ${fmt(rows.total)} 条</span>
         <span class="grow"></span>
-        <button id="dsPrev" ${rows.offset <= 0 ? "disabled" : ""}>上一页</button>
-        <button id="dsNext" ${end >= rows.total ? "disabled" : ""}>下一页</button>
+        <button type="button" id="dsPrev" ${rows.offset <= 0 ? "disabled" : ""}>上一页</button>
+        <button type="button" id="dsNext" ${end >= rows.total ? "disabled" : ""}>下一页</button>
       </div>
     </div></div>`;
   applyTrainList();
-  const rail = $(".train-rail-scroll");
-  const on = rail && rail.querySelector(".ds-row.on");
-  if (on && (on.offsetTop < rail.scrollTop || on.offsetTop > rail.scrollTop + rail.clientHeight - 32)) rail.scrollTop = Math.max(0, on.offsetTop - 36);
-  $$("#view-train .ds-open").forEach(c=>c.onclick=()=>{ STATE.train.name=c.dataset.name; STATE.train.offset=0; STATE.train.q=""; STATE.train.stage=""; loadTrain(); });
-  $$("#view-train .ds-pick").forEach(inp => {
-    inp.onclick = e => e.stopPropagation();
-    inp.onchange = () => setTrainInclude(inp.dataset.name, inp.checked);
-  });
-  $$("#view-train .train-scope button").forEach(b => b.onclick = () => { tf.scope = b.dataset.scope; applyTrainList(); $$("#view-train .train-scope button").forEach(x => x.classList.toggle("on", x === b)); });
-  $("#dsFile").oninput = e => { tf.fileq = e.target.value; applyTrainList(); };
-  $("#dsProject").onchange=e=>{tf.project=e.target.value;tf.offset=0;loadTrain();};
-  $("#dsSplit").onchange=e=>{tf.split=e.target.value;tf.offset=0;loadTrain();};
-  if ($("#dsStage")) $("#dsStage").onchange=e=>{tf.stage=e.target.value;tf.offset=0;loadTrain();};
-  $("#dsSearch").onkeydown = e => { if (e.key==="Enter"){ STATE.train.q=e.target.value; STATE.train.offset=0; loadTrain(); } };
-  $("#dsReload").onclick = loadTrain;
-  $("#dsInfo").onclick = () => showJson(STATE.datasetInfo);
-  $("#dsPrev").onclick = () => { STATE.train.offset = Math.max(0, STATE.train.offset-50); loadTrain(); };
-  $("#dsNext").onclick = () => { STATE.train.offset += 50; loadTrain(); };
-  bindRows("#view-train", async tr => {
-    openDrawer(`样本 #${tr.dataset.idx}`, STATE.train.name);
-    $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
-    const row = await api(`/api/train/dataset/${STATE.train.name}/${tr.dataset.idx}`);
-    STATE.drawerData = row;
-    $("#drawerBody").innerHTML = renderTrainDetail(row, datasetKind(STATE.train.name), STATE.train.name);
-    const jump = $("#jumpGold");
-    if (jump) jump.onclick = () => { STATE.pendingGold = jump.dataset.sid; setTab("gold"); };
-    $$("#drawerBody .jump-file").forEach(b => b.onclick = () => {
-      STATE.train.name = b.dataset.name;
-      STATE.train.q = b.dataset.q || "";
-      STATE.train.offset = 0;
-      STATE.train.scope = "all";
-      closeDrawer();
-      loadTrain();
-    });
-    setDrawerFoot(`<button onclick="showJson(STATE.drawerData)">查看原始 JSON</button>`);
-  });
+  $("#dsFile")?.addEventListener("input", e => { tf.fileq = e.target.value; applyTrainList(); });
+  $$("#view-train .ds-open").forEach(c => c.onclick = () => { tf.name = c.dataset.name; tf.offset = 0; loadTrainFiles(); });
+  $("#dsProject").onchange = e => { tf.project = e.target.value; tf.offset = 0; loadTrainFiles(); };
+  $("#dsSplit").onchange = e => { tf.split = e.target.value; tf.offset = 0; loadTrainFiles(); };
+  $("#dsSearch").onkeydown = e => { if (e.key === "Enter") { tf.q = e.target.value; tf.offset = 0; loadTrainFiles(); } };
+  $("#dsReload").onclick = () => loadTrainFiles();
+  $("#dsPrev").onclick = () => { tf.offset = Math.max(0, tf.offset - 50); loadTrainFiles(); };
+  $("#dsNext").onclick = () => { tf.offset += 50; loadTrainFiles(); };
+  bindRows("#view-train tbody tr.clickable", tr => openTrainHistorySample(tf.name, tr.dataset.idx));
 }
 
 /* 每份文件从哪来。编号对得上的才写成「来自某文件」，对不上的只写制作方式。 */
@@ -3609,32 +3829,7 @@ const TRAIN_YAML = {
   "dpo.train.lf.jsonl": "train_dpo.yaml 读取",
   "dpo.eval.lf.jsonl": "train_dpo.yaml 读取",
 };
-const TRAIN_INCLUDE_DEFAULT = Object.keys(TRAIN_YAML);
 const TRAIN_FAMILIES = [["sft","单步 SFT"],["traj","完整轨迹"],["dpo","DPO"],["diag","病态诊断"]];
-function trainInclude() {
-  try {
-    const raw = localStorage.getItem("gt.trainInclude");
-    if (!raw) return new Set(TRAIN_INCLUDE_DEFAULT);
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return new Set(TRAIN_INCLUDE_DEFAULT);
-    return new Set(arr);
-  } catch { return new Set(TRAIN_INCLUDE_DEFAULT); }
-}
-function setTrainInclude(name, on) {
-  const inc = trainInclude();
-  if (on) inc.add(name); else inc.delete(name);
-  try { localStorage.setItem("gt.trainInclude", JSON.stringify([...inc])); } catch (_) {}
-  const chip = $("#dsInChip");
-  if (chip && STATE.train.name === name) {
-    chip.textContent = on ? "本批生成" : "不生成";
-    chip.classList.toggle("train", on);
-  }
-  const plan = $("#trainPlan");
-  if (plan) plan.outerHTML = renderTrainPlan(STATE.trainFiles || []);
-  const rel = $("#trainRel");
-  if (rel && STATE.train.name === name) rel.textContent = trainRelText(name);
-  applyTrainList();
-}
 function dsFamily(name) {
   if (name.includes("diagnostic")) return "diag";
   if (name.includes("dpo")) return "dpo";
@@ -3689,15 +3884,11 @@ function dsRank(name) {
 function applyTrainList() {
   const tf = STATE.train;
   const n = (tf.fileq || "").trim().toLowerCase();
-  const inc = trainInclude();
-  const scope = tf.scope || "in";
-  $$("#view-train .train-scope button").forEach(b => b.classList.toggle("on", b.dataset.scope === scope));
   $$("#view-train .ds-row").forEach(row => {
     const name = row.dataset.name;
     const blob = `${name} ${row.dataset.from || ""}`.toLowerCase();
     const qmiss = !!n && !blob.includes(n);
-    const out = scope === "in" && !inc.has(name);
-    row.classList.toggle("ds-hide", qmiss || out);
+    row.classList.toggle("ds-hide", qmiss);
   });
   $$("#view-train .ds-group").forEach(g => {
     g.classList.toggle("ds-hide", !g.querySelector(".ds-row:not(.ds-hide)"));
@@ -3706,28 +3897,23 @@ function applyTrainList() {
   if (empty) empty.classList.toggle("ds-hide", !!$("#view-train .ds-row:not(.ds-hide)"));
 }
 function renderTrainPlan(list) {
-  const inc = trainInclude();
-  const picked = (list || []).filter(x => inc.has(x.name));
+  const picked = list || [];
   const sum = pred => picked.filter(x => pred(x.name)).reduce((a, x) => a + (Number(x.rows) || 0), 0);
   const bits = picked.map(x => `<span class="chip train">${esc(x.name.replace(/\.jsonl$/, ""))} <b>${x.rows == null ? "—" : fmt(x.rows)}</b></span>`).join("");
   const sftN = sum(n => dsFamily(n) === "sft" || dsFamily(n) === "traj");
   const dpoN = sum(n => dsFamily(n) === "dpo");
   return `<div class="train-plan" id="trainPlan">
-    <b>本批生成 ${picked.length} 份</b>
+    <b>历史文件 ${picked.length} 份</b>
     <span class="faint">SFT ${fmt(sftN)} 条 · DPO ${fmt(dpoN)} 条</span>
     <span class="grow"></span>
-    ${bits || `<span class="faint">切换到「全部文件」，勾选要生成的数据集。</span>`}
+    ${bits || `<span class="faint">Stage 3 写入的 jsonl 会出现在左侧列表。</span>`}
   </div>`;
 }
 function renderDatasetIndex(list) {
-  const scope = STATE.train.scope || "in";
-  const inc = trainInclude();
   const rowHtml = x => {
     const rel = dsRelation(x.name);
     const on = x.name === STATE.train.name;
-    const checked = inc.has(x.name);
     return `<div class="ds-row ${on ? "on" : ""}" data-name="${esc(x.name)}" data-from="${esc(rel.from)}">
-      <input class="ds-pick" type="checkbox" data-name="${esc(x.name)}" ${checked ? "checked" : ""} title="标成要生成" aria-label="要生成">
       <button type="button" class="ds-open" data-name="${esc(x.name)}" title="${esc(x.name + "\n" + trainRelText(x.name))}">
         <span class="ds-file mono">${esc(x.name.replace(/\.jsonl$/, ""))}</span>
         <span class="ds-from">来自 ${esc(rel.from)}</span>
@@ -3742,15 +3928,11 @@ function renderDatasetIndex(list) {
   }).join("");
   return `<aside class="train-rail">
     <div class="train-rail-h">
-      <div class="train-scope">
-        <button type="button" data-scope="in" class="${scope==="in"?"on":""}">本批生成</button>
-        <button type="button" data-scope="all" class="${scope==="all"?"on":""}">全部文件</button>
-      </div>
       <input id="dsFile" type="text" placeholder="筛选文件名或来源" value="${esc(STATE.train.fileq || "")}">
     </div>
     <div class="train-rail-scroll">
       ${groups}
-      <div id="dsEmpty" class="empty ds-hide"><h3>本批还没有文件</h3><p>切换到「全部文件」，勾选要生成的数据集。</p></div>
+      <div id="dsEmpty" class="empty ds-hide"><h3>没有匹配的文件</h3></div>
     </div></aside>`;
 }
 
@@ -4369,7 +4551,7 @@ function exportProfileList(rb) {
 }
 function currentExportProfile(rb) {
   const ids = exportProfileList(rb).map(p => p.id);
-  if (PACK.profileChosen && ids.includes(PACK.profile)) return PACK.profile;
+  if (PACK.profileChosen && PACK.profile && (!ids.length || ids.includes(PACK.profile))) return PACK.profile;
   const zipId = rb && rb.deliverable && rb.deliverable.format && rb.deliverable.format.profile;
   if (zipId && ids.includes(zipId)) return zipId;
   const fallback = exportProfileList(rb).find(p => p.default);
@@ -4506,11 +4688,14 @@ function renderRunsView(rb) {
 }
 
 async function loadRuns() {
+  const seq = ++RUNS_REQUEST_SEQ;
   try {
     const [rb, packs] = await Promise.all([api("/api/runbook"), api("/api/export/history")]);
+    if (seq !== RUNS_REQUEST_SEQ) return;
     STATE.packHist = packs || {packs:[]};
     renderRunsView(rb);
   } catch (e) {
+    if (seq !== RUNS_REQUEST_SEQ) return;
     $("#view-runs").innerHTML = `<div class="panel"><div class="empty">${esc(e.message)}</div></div>`;
   }
 }
@@ -4659,6 +4844,7 @@ function watchJob(jobId, onDone) {
       if (j.status !== "running") {
         clearInterval(JOB_TIMER); JOB_TIMER = null;
         if (RB_TIMER) { clearInterval(RB_TIMER); RB_TIMER = null; }
+        onTaskFinished(j);
         if (STATE.tab === "runs" && j.stage !== "package") loadRuns();
       }
     } catch (e) { /* job may not be registered yet */ }
@@ -4675,6 +4861,7 @@ function setDrawerFoot(html, className="df") {
   foot.hidden = !html.trim();
 }
 function openDrawer(title, sub="") {
+  DRAWER_REQUEST_SEQ += 1;
   $("#drawerTitle").textContent = title; $("#drawerSub").textContent = sub || "";
   setDrawerFoot("");
   $("#drawerBody").scrollTop = 0;

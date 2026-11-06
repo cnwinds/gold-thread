@@ -241,8 +241,9 @@ synth:
     end_step: 106
   # 跨项目全局打乱（防止优化器偏向单一游戏）
   shuffle: true
+  # 新草稿的切分 seed；普通重建沿用已保存的 Split Plan
   seed: 42
-  # 按项目整包切分验证集，防止相邻步数据泄漏
+  # 仅在 Split Plan 初始化时导入；已有项目不会因普通重建或新增项目而换组
   eval_projects: []
   eval_ratio: 0.25
   # 输出格式

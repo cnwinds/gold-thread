@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-10-30T10:07:10+08:00",
+  "generated_at": "2026-11-05T16:21:49+08:00",
   "config_hash": "bc1d8bf6a281ba8e",
   "counts": {
     "sft_gold_trajectories_sharegpt.jsonl": 4,
     "sft_step_windows_sharegpt.jsonl": 496,
     "sft_step_windows_openai.jsonl": 496,
-    "dpo_preference_pairs.jsonl": 243,
-    "negative_diagnostics.jsonl": 814,
+    "dpo_preference_pairs.jsonl": 231,
+    "negative_diagnostics.jsonl": 802,
     "sft_gold_trajectories_sharegpt.train.jsonl": 3,
     "sft_gold_trajectories_sharegpt.eval.jsonl": 1,
     "sft_step_windows_sharegpt.train.jsonl": 275,
@@ -14,15 +14,18 @@
     "sft_step_windows_openai.train.jsonl": 275,
     "sft_step_windows_openai.eval.jsonl": 221,
     "dpo_preference_pairs.train.jsonl": 100,
-    "dpo_preference_pairs.eval.jsonl": 143,
-    "negative_diagnostics.train.jsonl": 814
+    "dpo_preference_pairs.eval.jsonl": 131,
+    "negative_diagnostics.train.jsonl": 802,
+    "dpo_preference_pairs.eval.v2.jsonl": 131,
+    "dpo_preference_pairs.eval.v2w.jsonl": 106,
+    "exports/Qwen3.8-27B/dpo_preference_pairs.eval.v2w.jsonl": 118
   },
   "split": {
+    "game::jigsawcard": "train",
+    "game::meowdoku": "eval",
+    "game::mahjong": "train",
     "game::altosodyssey": "train",
     "game::cookingmadness": "train",
-    "game::jigsawcard": "train",
-    "game::mahjong": "train",
-    "game::meowdoku": "eval",
     "game::riddle": "eval"
   },
   "by_project": {
@@ -32,15 +35,15 @@
     "game::cookingmadness": 34
   },
   "by_stage": {
-    "opening": 10,
-    "key_decision": 183,
     "highlight": 72,
+    "closing": 11,
+    "key_decision": 183,
     "routine": 220,
-    "closing": 11
+    "opening": 10
   },
   "by_model": {
-    "deepseek-v4.1-flash-1017": 1,
-    "glm-5.3-flash": 3
+    "glm-5.3-flash": 3,
+    "deepseek-v4.1-flash-1017": 1
   },
   "admit_reasons": {
     "clean_gold": 329,
@@ -83,33 +86,6 @@
       "dpo_review": 0,
       "dpo_negative": 0,
       "diagnostics": 143
-    },
-    "01a1535e-bf14-7693-a920-9ca7de0ea907": {
-      "session_id": "01a1535e-bf14-7693-a920-9ca7de0ea907",
-      "label": "pending",
-      "project_group": "game::meowdoku",
-      "model": "glm-5.3",
-      "split": "eval",
-      "effective_state": "auto_reject",
-      "full_sft_allowed": false,
-      "subsegment_only": false,
-      "funnel": {
-        "raw_steps": 5,
-        "gold_steps": 5,
-        "admitted_steps": 0,
-        "rescued_steps": 0,
-        "human_kept_steps": 0,
-        "excluded_steps": 0,
-        "pathology_dropped": 0,
-        "synthesized_dropped": 0,
-        "empty_dropped": 0,
-        "blocked_or_subsegment_dropped": 5,
-        "weighted_steps": 0
-      },
-      "dpo_pruned": 0,
-      "dpo_review": 0,
-      "dpo_negative": 0,
-      "diagnostics": 0
     },
     "01a15375-8266-762c-a550-9d3bc6b6ca98": {
       "session_id": "01a15375-8266-762c-a550-9d3bc6b6ca98",
@@ -354,60 +330,6 @@
       "dpo_negative": 27,
       "diagnostics": 93
     },
-    "01a15dc3-ceb7-7573-9392-77a9a4237f55": {
-      "session_id": "01a15dc3-ceb7-7573-9392-77a9a4237f55",
-      "label": "pending",
-      "project_group": "game::meowdoku",
-      "model": "google/gemma-4-31b-it",
-      "split": "eval",
-      "effective_state": "held",
-      "full_sft_allowed": false,
-      "subsegment_only": false,
-      "funnel": {
-        "raw_steps": 35,
-        "gold_steps": 19,
-        "admitted_steps": 0,
-        "rescued_steps": 0,
-        "human_kept_steps": 0,
-        "excluded_steps": 0,
-        "pathology_dropped": 0,
-        "synthesized_dropped": 0,
-        "empty_dropped": 0,
-        "blocked_or_subsegment_dropped": 19,
-        "weighted_steps": 0
-      },
-      "dpo_pruned": 16,
-      "dpo_review": 0,
-      "dpo_negative": 0,
-      "diagnostics": 12
-    },
-    "01a16296-27dd-73e8-86fa-04938ed99f6d": {
-      "session_id": "01a16296-27dd-73e8-86fa-04938ed99f6d",
-      "label": "pending",
-      "project_group": "game::meowdoku",
-      "model": "deepseek-v4.1-flash-1017",
-      "split": "eval",
-      "effective_state": "auto_gold",
-      "full_sft_allowed": false,
-      "subsegment_only": false,
-      "funnel": {
-        "raw_steps": 6,
-        "gold_steps": 6,
-        "admitted_steps": 0,
-        "rescued_steps": 0,
-        "human_kept_steps": 0,
-        "excluded_steps": 0,
-        "pathology_dropped": 0,
-        "synthesized_dropped": 0,
-        "empty_dropped": 0,
-        "blocked_or_subsegment_dropped": 6,
-        "weighted_steps": 0
-      },
-      "dpo_pruned": 0,
-      "dpo_review": 0,
-      "dpo_negative": 0,
-      "diagnostics": 0
-    },
     "01a1676b-754b-7585-bd57-f8f082f6153c": {
       "session_id": "01a1676b-754b-7585-bd57-f8f082f6153c",
       "label": "positive",
@@ -519,30 +441,30 @@
   },
   "weighted_steps": 923,
   "dpo_by_source": {
-    "stage2_pruned": 190,
+    "stage2_pruned": 178,
     "negative_step": 53
   },
   "diagnostics_by_pathology": {
     "over_rumination_doubt_loop": 164,
     "over_rumination_length": 207,
     "mental_hex_checkmark": 68,
-    "tool_logical_failure": 39,
-    "tool_execution_error": 214,
+    "tool_logical_failure": 38,
+    "tool_execution_error": 203,
     "missing_thinking_block": 341,
     "cross_dir_violation": 14,
     "hallucinated_source_search": 10
   },
   "label_counts": {
     "positive": 6,
-    "pending": 5,
-    "negative": 6
+    "negative": 6,
+    "pending": 2
   },
   "review_states": {
     "stale": 1,
-    "auto_reject": 2,
-    "held": 3,
+    "held": 2,
     "approved": 7,
-    "auto_gold": 3,
+    "auto_reject": 1,
+    "auto_gold": 2,
     "rejected": 1
   },
   "dpo_review": {

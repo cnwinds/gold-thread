@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from pipeline import curation, stage1_extract, stage2_gold, stage3_synth
+from pipeline import curation, dataset_build, dataset_draft, stage1_extract, stage2_gold, stage3_synth
 from pipeline import steps as stepcat
 from pipeline import task_registry
 from pipeline.common import pilog
@@ -183,29 +183,45 @@ def _run_job(job: Job) -> None:
             job.result = result
         elif job.stage == "stage3":
             job.result = stage3_synth.run(force=job.force, log=job.log, cfg=cfg)
+        elif job.stage == "dataset_evaluate":
+            result = stage3_synth.evaluate_dpo_pending(log=job.log, cfg=cfg)
+            if result.get("pending") or result.get("failed"):
+                raise RuntimeError(
+                    f"DPO 评估未全部完成：剩余 {result.get('pending', 0)}，失败 {result.get('failed', 0)}"
+                )
+            job.result = result
         elif job.stage == "all":
             r1 = stage1_extract.run(force=job.force, log=job.log, cfg=cfg)
             r2 = stage2_gold.run(force=job.force, log=job.log, cfg=cfg)
+            evaluation = stage3_synth.evaluate_dpo_pending(log=job.log, cfg=cfg)
+            if evaluation.get("pending") or evaluation.get("failed"):
+                raise RuntimeError(
+                    f"DPO 评估未全部完成：剩余 {evaluation.get('pending', 0)}，失败 {evaluation.get('failed', 0)}"
+                )
             r3 = stage3_synth.run(force=job.force, log=job.log, cfg=cfg)
-            job.result = {"stage1": r1, "stage2": r2, "stage3": r3}
+            job.result = {"stage1": r1, "stage2": r2, "dpo_evaluation": evaluation, "stage3": r3}
         elif job.stage == "review":
             from pipeline.review import run_review
             res = run_review(
                 session_ids=job.extra.get("sessions"), force=job.force, log=job.log, cfg=cfg
             )
-            # 评审完成后自动刷新 stage3 统计
-            try:
-                stage3_synth.run(force=False, log=job.log, cfg=cfg)
-            except Exception:  # noqa: BLE001
-                pass
+            # 评审完成后先刷新 DPO 评估，再构建；门禁失败必须让任务失败可见。
+            evaluation = stage3_synth.evaluate_dpo_pending(log=job.log, cfg=cfg)
+            if evaluation.get("pending") or evaluation.get("failed"):
+                raise RuntimeError(
+                    f"DPO 评估未全部完成：剩余 {evaluation.get('pending', 0)}，失败 {evaluation.get('failed', 0)}"
+                )
+            stage3_synth.run(force=False, log=job.log, cfg=cfg)
             job.result = res
         elif job.stage == "refine":
             from pipeline.review import run_refine
             res = run_refine((job.extra.get("sessions") or [None])[0], log=job.log, cfg=cfg)
-            try:
-                stage3_synth.run(force=False, log=job.log, cfg=cfg)
-            except Exception:  # noqa: BLE001
-                pass
+            evaluation = stage3_synth.evaluate_dpo_pending(log=job.log, cfg=cfg)
+            if evaluation.get("pending") or evaluation.get("failed"):
+                raise RuntimeError(
+                    f"DPO 评估未全部完成：剩余 {evaluation.get('pending', 0)}，失败 {evaluation.get('failed', 0)}"
+                )
+            stage3_synth.run(force=False, log=job.log, cfg=cfg)
             job.result = res
         elif job.stage == "classify":
             from pipeline.turnclassify import classify_session
@@ -229,12 +245,16 @@ def _run_job(job: Job) -> None:
         elif job.stage == "package":
             from pipeline.package import build_delivery_zip  # noqa: PLC0415
 
-            train_root = stage_dirs(cfg)["train"]
-            if not (train_root / "handoff.md").exists():
-                raise RuntimeError("handoff.md 尚未生成，请先运行 stage3")
-            job.result = build_delivery_zip(
-                train_root, cfg, log=job.log, profile=job.extra.get("profile")
+            build_dir, manifest = dataset_build.resolve_build(cfg, job.extra.get("build_id"))
+            build_cfg = dataset_build.load_build_config(build_dir, cfg)
+            result = build_delivery_zip(
+                build_dir,
+                build_cfg,
+                log=job.log,
+                profile=job.extra.get("profile"),
+                delivery_dir=stage_dirs(cfg)["root"] / "04_release" / "delivery",
             )
+            job.result = {**result, "build_id": manifest["build_id"]}
         else:
             raise RuntimeError(f"未知阶段: {job.stage}")
         job.status = "done"
@@ -275,12 +295,14 @@ def _persist_job(job: Job) -> None:
 
 def _start(stage: str, force: bool, extra: Optional[Dict[str, Any]] = None) -> Job:
     with JOBS_LOCK:
-        gold_write = {"stage2", "stage3", "all", "analyze", "classify", "collect"}
+        gold_write = {"stage2", "stage3", "dataset_evaluate", "all", "analyze", "classify", "collect"}
         for j in JOBS.values():
             clash = (
                 j.stage == stage or stage == "all" or j.stage == "all"
                 or stage == "delete" or j.stage == "delete"
                 or (j.stage in gold_write and stage in gold_write)
+                or (j.stage == "package" and stage in {"stage3", "all"})
+                or (stage == "package" and j.stage in {"stage3", "all"})
             )
             if j.status == "running" and clash:
                 raise HTTPException(409, f"已有作业在运行: {j.stage} ({j.id})")
@@ -719,8 +741,8 @@ class RunBody(BaseModel):
 
 @app.post("/api/run")
 def run_stage(body: RunBody) -> Dict[str, Any]:
-    if body.stage not in ("stage1", "stage2", "stage3", "all", "review", "refine", "classify"):
-        raise HTTPException(400, "stage 必须是 stage1|stage2|stage3|all|review|refine|classify")
+    if body.stage not in ("stage1", "stage2", "stage3", "dataset_evaluate", "all", "review", "refine", "classify"):
+        raise HTTPException(400, "stage 必须是 stage1|stage2|stage3|dataset_evaluate|all|review|refine|classify")
     job = _start(body.stage, body.force, {"sessions": body.sessions})
     return {"job_id": job.id}
 
@@ -1559,7 +1581,13 @@ def _count_lines(path: Path) -> int:
 def train_handoff() -> Dict[str, Any]:
     """返回 handoff.md 内容（不存在时给出提示）。"""
     cfg = load_config()
-    p = stage_dirs(cfg)["train"] / "handoff.md"
+    try:
+        build_dir, _manifest = dataset_build.resolve_build(cfg)
+        p = build_dir / "handoff.md"
+    except FileNotFoundError:
+        p = stage_dirs(cfg)["train"] / "handoff.md"
+    if not p.exists():
+        p = stage_dirs(cfg)["train"] / "handoff.md"
     if not p.exists():
         raise HTTPException(404, "handoff.md 还没生成，跑一次 stage3 就会产出")
     return {"path": str(p), "markdown": p.read_text(encoding="utf-8")}
@@ -1567,6 +1595,7 @@ def train_handoff() -> Dict[str, Any]:
 
 class ExportPackageBody(BaseModel):
     profile: Optional[str] = None
+    build_id: Optional[str] = None
 
 
 def _zip_manifest(path: Optional[Path]) -> Dict[str, Any]:
@@ -1592,16 +1621,18 @@ def export_package(body: Optional[ExportPackageBody] = None) -> Dict[str, Any]:
     没有上次选择则用 Qwen XML。返回 ``{job_id}``。
     """
     cfg = load_config()
-    train_root = stage_dirs(cfg)["train"]
-    if not (train_root / "handoff.md").exists():
-        raise HTTPException(400, "handoff.md 尚未生成，请先运行 stage3")
+    requested_build = body.build_id if body else None
+    try:
+        _build_dir, manifest = dataset_build.resolve_build(cfg, requested_build)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
     chosen = body.profile if body else None
     if chosen:
         try:
             resolve_export_profile(chosen)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-    job = _start("package", True, extra={"profile": chosen})
+    job = _start("package", True, extra={"profile": chosen, "build_id": manifest["build_id"]})
     return {"job_id": job.id}
 
 
@@ -1633,6 +1664,7 @@ def export_package_info() -> Dict[str, Any]:
         "size_bytes": z.stat().st_size,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(z.stat().st_mtime)),
         "package_hash": package_hash,
+        "build_id": man.get("build_id"),
         "config_hash": man.get("config_hash"),
         "format": fmt,
     }
@@ -1680,6 +1712,7 @@ def export_history() -> Dict[str, Any]:
                     "%Y-%m-%dT%H:%M:%S", time.localtime(z.stat().st_mtime)
                 ),
                 "package_hash": man.get("package_hash") or "",
+                "build_id": man.get("build_id") or "",
                 "format_label": (fmt or {}).get("label") or "",
                 "profile": (fmt or {}).get("profile") or "",
                 "sft_train": counts.get("sft.train.lf.jsonl"),
@@ -1703,6 +1736,171 @@ def export_download(name: str = ""):
             "Pragma": "no-cache",
         },
     )
+
+
+@app.get("/api/dataset/builds")
+def list_dataset_builds() -> Dict[str, Any]:
+    cfg = load_config()
+    rows = dataset_build.list_builds(cfg)
+    try:
+        _path, latest = dataset_build.resolve_build(cfg)
+        latest_id = latest["build_id"]
+    except FileNotFoundError:
+        latest_id = ""
+    summaries = [{
+        "build_id": row["build_id"],
+        "plan_hash": row.get("plan_hash"),
+        "created_at": row.get("created_at"),
+        "config_hash": row.get("config_hash"),
+        "counts": row.get("counts") or {},
+        "split_plan": row.get("split_plan") or {},
+        "file_count": len(row.get("files") or []),
+    } for row in rows]
+    return {"total": len(summaries), "latest_build_id": latest_id, "builds": summaries}
+
+
+@app.get("/api/dataset/builds/{build_id}")
+def get_dataset_build(build_id: str) -> Dict[str, Any]:
+    try:
+        _path, manifest = dataset_build.resolve_build(load_config(), build_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return manifest
+
+
+class DraftDecisionItem(BaseModel):
+    sample_id: str
+    action: str
+    reason: str = ""
+
+
+class DraftDecisionsBody(BaseModel):
+    decisions: List[DraftDecisionItem]
+
+
+class DraftSplitBody(BaseModel):
+    assignments: Dict[str, str]
+
+
+class DraftReplanBody(BaseModel):
+    eval_ratio: float
+    seed: int = 42
+    dry_run: bool = False
+    expected_hash: Optional[str] = None
+
+
+@app.get("/api/dataset/draft/sample")
+def dataset_draft_sample(sample_id: str) -> Dict[str, Any]:
+    try:
+        return stage3_synth.draft_sample(sample_id, load_config())
+    except KeyError as exc:
+        raise HTTPException(404, str(exc.args[0])) from exc
+
+
+@app.get("/api/dataset/draft")
+def dataset_draft_preview(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    q: str = "",
+    project: str = "",
+    split: str = "",
+    kind: str = "",
+    decision: str = "",
+) -> Dict[str, Any]:
+    preview = stage3_synth.draft_preview(load_config())
+    rows = preview["rows"]
+    if project:
+        rows = [r for r in rows if r["project_group"] == project]
+    if split:
+        rows = [r for r in rows if r["split"] == split]
+    if kind:
+        rows = [r for r in rows if r["kind"] == kind]
+    if decision:
+        rows = [r for r in rows if r["decision"] == decision]
+    if q:
+        needle = q.lower()
+        rows = [r for r in rows if needle in json.dumps(r, ensure_ascii=False).lower()]
+    total = len(rows)
+    if total == 0:
+        offset = 0
+    elif offset >= total:
+        offset = ((total - 1) // limit) * limit
+    project_stats: Dict[str, Dict[str, int]] = {}
+    for session in preview["sessions"]:
+        project = session["project_group"]
+        stat = project_stats.setdefault(project, {
+            "candidates": 0, "included": 0, "excluded": 0, "gate_excluded": 0,
+            "sft": 0, "trajectory": 0, "dpo": 0, "sessions": 0,
+        })
+        stat["sessions"] += 1
+    for row in preview["rows"]:
+        stat = project_stats.setdefault(row["project_group"], {
+            "candidates": 0, "included": 0, "excluded": 0, "gate_excluded": 0,
+            "sft": 0, "trajectory": 0, "dpo": 0, "sessions": 0,
+        })
+        stat["candidates"] += 1
+        stat["included"] += int(row["included"])
+        stat["excluded"] += int(not row["included"] and row["decision"] == "exclude")
+        stat["gate_excluded"] += int(not row["included"] and row["decision"] != "exclude")
+        stat[row["kind"]] += 1
+    return {
+        **preview,
+        "rows": rows[offset : offset + limit],
+        "total": total,
+        "offset": offset,
+        "projects": sorted({s["project_group"] for s in preview["sessions"]}),
+        "project_stats": project_stats,
+    }
+
+
+@app.put("/api/dataset/draft/decisions")
+def update_dataset_draft_decisions(body: DraftDecisionsBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
+    try:
+        result = dataset_draft.update_decisions(
+            [item.model_dump() for item in body.decisions], load_config()
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, **result}
+
+
+@app.put("/api/dataset/draft/split")
+def update_dataset_draft_split(body: DraftSplitBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
+    cfg = load_config()
+    stage3_synth.draft_preview(cfg)  # 解析当前项目集合并初始化 Split Plan。
+    try:
+        plan = dataset_draft.set_project_splits(body.assignments, cfg)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "split_plan": plan}
+
+
+@app.post("/api/dataset/draft/split/replan")
+def replan_dataset_draft_split(body: DraftReplanBody) -> Dict[str, Any]:
+    _assert_no_delete_running()
+    cfg = load_config()
+    preview = stage3_synth.draft_preview(cfg, persist_split=False)
+    try:
+        result = dataset_draft.replan_split(
+            cfg,
+            eval_ratio=body.eval_ratio,
+            seed=body.seed,
+            dry_run=body.dry_run,
+            base_plan=preview["split_plan"] if body.dry_run else None,
+            expected_hash=body.expected_hash,
+        )
+    except dataset_draft.SplitPlanConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "ok": True,
+        **result,
+        "base_hash": dataset_draft.split_plan_hash(preview["split_plan"]),
+        "base_plan": preview["split_plan"],
+    }
 
 
 @app.get("/api/train/datasets")

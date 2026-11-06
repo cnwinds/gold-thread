@@ -97,6 +97,15 @@ class SessionDeleteTests(unittest.TestCase):
         write_json_atomic(self.state / "stage1.json", {"files": {SID: {}, OTHER: {}}})
         write_json_atomic(self.state / "stage2.json", {"files": {SID: {}, OTHER: {}}})
         write_json_atomic(self.state / "dpo_exclusions.json", {f"dpo::{SID}::one": {}, f"dpo::{OTHER}::one": {}})
+        write_json_atomic(self.state / "dataset_draft.json", {
+            "version": 1,
+            "decisions": {
+                key: {"action": "exclude", "reason": "test"}
+                for sid in (SID, OTHER)
+                for key in (f"step::{sid}::m1", f"traj::{sid}", f"dpo::{sid}::one")
+            },
+            "split_plan": {"assignments": {"game::demo": "train"}, "pinned": []},
+        })
         write_json_atomic(self.gold / "sample_reviews.json", {
             "version": 1,
             "items": {f"sft::{SID}::one": {"decision": "approved"}, f"sft::{OTHER}::one": {"decision": "approved"}},
@@ -172,6 +181,11 @@ class SessionDeleteTests(unittest.TestCase):
         collected = read_json(self.state / "collected.json")
         self.assertEqual([OTHER], collected["ids"])
         self.assertEqual([OTHER], list(collected["items"]))
+        draft = read_json(self.state / "dataset_draft.json")
+        self.assertEqual(
+            {f"step::{OTHER}::m1", f"traj::{OTHER}", f"dpo::{OTHER}::one"},
+            set(draft["decisions"]),
+        )
         reviews = read_json(self.gold / "sample_reviews.json")
         self.assertEqual([f"sft::{OTHER}::one"], list(reviews["items"]))
         self.assertEqual(1, reviews["review_snapshot"]["store_items"])

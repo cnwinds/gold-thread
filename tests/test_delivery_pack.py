@@ -1,6 +1,7 @@
 """交付 zip 必须解压后就能按 YAML 训练：键、文件、dataset_dir 三者一致。"""
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
 import sys
@@ -8,6 +9,8 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+
+from pipeline import dataset_build
 
 from pipeline.common.config import load_config
 from pipeline.common.format import _parse_tc_block, convert_toolcall_text
@@ -115,6 +118,48 @@ class DeliveryZipTests(unittest.TestCase):
 
     def _build(self, root: Path):
         return build_delivery_zip(root, self.cfg, log=lambda *_: None)
+
+    def test_build_package_ignores_workspace_legacy_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = copy.deepcopy(self.cfg)
+            cfg["paths"]["data_dir"] = str(Path(tmp) / "data")
+            root = Path(cfg["paths"]["data_dir"]) / "03_train"
+            root.mkdir(parents=True)
+            _scaffold(root)
+            _write_jsonl(root / "sft_step_windows_sharegpt.train.v2.jsonl", [_sft("from-v2")])
+            _write_jsonl(root / "sft_step_windows_sharegpt.eval.v2.jsonl", [_sft("from-v2-eval")])
+            _write_jsonl(root / "sft.train.lf.jsonl", [_sft("from-old-lf")])
+            _write_jsonl(root / "sft.eval.lf.jsonl", [_sft("from-old-lf-eval")])
+            _write_jsonl(root / "sft_step_windows_sharegpt.train.jsonl", [_sft("from-stage3")])
+            _write_jsonl(root / "sft_step_windows_sharegpt.eval.jsonl", [_sft("from-stage3-eval")])
+            counts = {
+                "sft_step_windows_sharegpt.train.jsonl": 1,
+                "sft_step_windows_sharegpt.eval.jsonl": 1,
+            }
+            draft = {"split_plan": {"assignments": {"game::demo": "train"}}, "decisions": {}}
+            build_dir, _manifest = dataset_build.create_build(root, cfg, "a" * 16, draft, counts)
+            result = build_delivery_zip(
+                build_dir,
+                cfg,
+                log=lambda *_: None,
+            )
+            self.assertEqual(
+                Path(cfg["paths"]["data_dir"]) / "04_release" / "delivery",
+                Path(result["zip_path"]).parent,
+            )
+            unzipped = Path(tmp) / "out"
+            _unzip(Path(result["zip_path"]), unzipped)
+            rows = _load_jsonl(unzipped / "data" / "sft.train.lf.jsonl")
+            self.assertEqual(["from-stage3"], [row["sample_id"] for row in rows])
+            eval_rows = _load_jsonl(unzipped / "data" / "sft.eval.lf.jsonl")
+            self.assertEqual(["from-stage3-eval"], [row["sample_id"] for row in eval_rows])
+            manifest = json.loads((unzipped / "MANIFEST.json").read_text(encoding="utf-8"))
+            self.assertEqual("a" * 16, manifest["build_id"])
+            self.assertEqual("a" * 16, result["build_id"])
+
+            _write_jsonl(root / "sft_step_windows_sharegpt.train.jsonl", [_sft("changed-without-new-id")])
+            with self.assertRaisesRegex(RuntimeError, "产物内容不同"):
+                dataset_build.create_build(root, cfg, "a" * 16, draft, counts)
 
     def test_prefers_v2_and_locks_yaml_to_lf_files(self):
         with tempfile.TemporaryDirectory() as tmp:
