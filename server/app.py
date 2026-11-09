@@ -1307,6 +1307,8 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
     idx = load_index(dirs["gold"] / "index.json")
     train_stats = read_json(dirs["train"] / "stats.json", default={}) or {}
     session_funnels = train_stats.get("session_funnels") or {}
+    draft = dataset_draft.load_draft(cfg)
+    split_plan = draft.get("split_plan") or {}
     rows = []
     for sid, e in idx["sessions"].items():
         if model and _dominant_model(e) != model:
@@ -1324,6 +1326,9 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
         rnd = curation.latest_round(ann)
         funnel_info = (session_funnels.get(sid) or {}).get("funnel") or {}
         lineage = _session_lineage(sid, e, session_funnels)
+        project_group = e.get("project_group", "unknown")
+        layer = dataset_draft.layer_exclusion(draft, "session", sid, project_group)
+        lineage["split"] = dataset_draft.effective_split(project_group, sid, split_plan)
         if output == "sft" and not (lineage["train_written"] and (lineage["sft_windows"] or 0) > 0):
             continue
         if output == "dpo" and not (lineage["train_written"] and (lineage["dpo_train"] or 0) > 0):
@@ -1333,6 +1338,7 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
         rows.append(
             {
                 **{k: v for k, v in e.items() if k != "annotation_file"},
+                "session_id": sid,
                 "review_status": rnd.get("verdict") or (ann.get("model_review") or {}).get("verdict"),
                 "script_status": ann.get("status"),
                 "script_score": ann.get("script_score"),
@@ -1344,6 +1350,11 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
                 "review_progress": curation.progress(ann),
                 "funnel": funnel_info,
                 "lineage": lineage,
+                "dataset_excluded": layer["action"] == "exclude",
+                "exclusion_scope": layer.get("scope", ""),
+                "exclusion_reason": layer.get("reason", ""),
+                "split": lineage["split"],
+                "split_source": dataset_draft.split_source(project_group, sid, split_plan),
             }
         )
     rows.sort(key=lambda r: (r.get("label", ""), r.get("project_group", ""), r["session_id"]))
@@ -1876,7 +1887,19 @@ class DraftDecisionsBody(BaseModel):
 
 
 class DraftSplitBody(BaseModel):
-    assignments: Dict[str, str]
+    assignments: Dict[str, str] = {}
+    session_assignments: Dict[str, str] = {}
+
+
+class ScopeDecisionItem(BaseModel):
+    scope: str
+    id: str
+    action: str
+    reason: str = ""
+
+
+class ScopeDecisionsBody(BaseModel):
+    updates: List[ScopeDecisionItem]
 
 
 class DraftReplanBody(BaseModel):
@@ -1950,6 +1973,100 @@ def dataset_draft_preview(
     }
 
 
+@app.get("/api/dataset/draft/tree")
+def dataset_draft_tree(group_by: str = "project") -> Dict[str, Any]:
+    """层级树：分组 → 黄金会话 → 已切片样本。停用与切分都沿这棵树向下生效。"""
+    if group_by not in ("project", "split"):
+        raise HTTPException(400, "group_by 必须是 project|split")
+    preview = stage3_synth.draft_preview(load_config())
+    plan = preview.get("split_plan") or {}
+    scopes = preview.get("scope_decisions") or {}
+
+    def counts(samples: List[Dict[str, Any]]) -> Dict[str, int]:
+        return {
+            "candidates": len(samples),
+            "included": sum(1 for r in samples if r["included"]),
+            "excluded": sum(1 for r in samples if not r["included"] and r["decision"] == "exclude"),
+            "gate_excluded": sum(1 for r in samples if not r["included"] and r["decision"] != "exclude"),
+            "sft": sum(1 for r in samples if r["kind"] == "sft"),
+            "trajectory": sum(1 for r in samples if r["kind"] == "trajectory"),
+            "dpo": sum(1 for r in samples if r["kind"] == "dpo"),
+        }
+
+    by_session: Dict[str, List[Dict[str, Any]]] = {}
+    for row in preview["rows"]:
+        by_session.setdefault(str(row.get("session_id") or ""), []).append(row)
+
+    session_nodes: Dict[str, Dict[str, Any]] = {}
+    for info in preview["sessions"]:
+        sid = str(info["session_id"])
+        samples = by_session.pop(sid, [])
+        session_nodes[sid] = {
+            "session_id": sid,
+            "project_group": info["project_group"],
+            "split": info["split"],
+            "split_source": info.get("split_source", "project"),
+            "excluded": bool(info.get("excluded")),
+            "exclusion_scope": info.get("exclusion_scope", ""),
+            "exclusion_reason": info.get("exclusion_reason", ""),
+            "own_excluded": (scopes.get(f"session:{sid}") or {}).get("action") == "exclude",
+            "effective_state": info.get("effective_state", ""),
+            "counts": counts(samples),
+            "samples": samples,
+        }
+    for sid, samples in by_session.items():
+        first = samples[0]
+        session_nodes[sid] = {
+            "session_id": sid,
+            "project_group": first.get("project_group", "unknown"),
+            "split": first.get("split", "train"),
+            "split_source": first.get("split_source", "project"),
+            "excluded": False,
+            "exclusion_scope": "",
+            "exclusion_reason": "",
+            "own_excluded": False,
+            "effective_state": "",
+            "counts": counts(samples),
+            "samples": samples,
+        }
+
+    groups: Dict[str, Dict[str, Any]] = {}
+    for node in session_nodes.values():
+        if group_by == "split":
+            key = node["split"]
+            title = "验证集 eval" if key == "eval" else "训练集 train"
+        else:
+            key = node["project_group"]
+            title = key
+        group = groups.setdefault(key, {
+            "key": key,
+            "title": title,
+            "project_group": node["project_group"] if group_by == "project" else "",
+            "split": (plan.get("assignments") or {}).get(key, "train") if group_by == "project" else key,
+            "own_excluded": (scopes.get(f"project:{key}") or {}).get("action") == "exclude" if group_by == "project" else False,
+            "sessions": [],
+            "samples": [],
+        })
+        group["sessions"].append(node)
+        group["samples"].extend(node["samples"])
+    out_groups = []
+    for group in groups.values():
+        group["counts"] = counts(group.pop("samples"))
+        group["sessions"].sort(key=lambda n: n["session_id"])
+        out_groups.append(group)
+    out_groups.sort(key=lambda g: g["key"])
+    return {
+        "group_by": group_by,
+        "groups": out_groups,
+        "summary": preview["summary"],
+        "split_plan": plan,
+        "scope_decisions": scopes,
+        "dirty": preview.get("dirty", False),
+        "plan_hash": preview.get("plan_hash"),
+        "last_build": preview.get("last_build"),
+    }
+
+
 @app.put("/api/dataset/draft/decisions")
 def update_dataset_draft_decisions(body: DraftDecisionsBody) -> Dict[str, Any]:
     _assert_no_delete_running()
@@ -1962,13 +2079,30 @@ def update_dataset_draft_decisions(body: DraftDecisionsBody) -> Dict[str, Any]:
     return {"ok": True, **result}
 
 
+@app.put("/api/dataset/draft/scopes")
+def update_dataset_draft_scopes(body: ScopeDecisionsBody) -> Dict[str, Any]:
+    """项目层或会话层停用/恢复，下面的切片一并生效。"""
+    _assert_no_delete_running()
+    try:
+        result = dataset_draft.update_scope_decisions(
+            [item.model_dump() for item in body.updates], load_config()
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, **result}
+
+
 @app.put("/api/dataset/draft/split")
 def update_dataset_draft_split(body: DraftSplitBody) -> Dict[str, Any]:
     _assert_no_delete_running()
     cfg = load_config()
     stage3_synth.draft_preview(cfg)  # 解析当前项目集合并初始化 Split Plan。
     try:
-        plan = dataset_draft.set_project_splits(body.assignments, cfg)
+        if body.assignments:
+            dataset_draft.set_project_splits(body.assignments, cfg)
+        if body.session_assignments:
+            dataset_draft.set_session_splits(body.session_assignments, cfg)
+        plan = dataset_draft.load_draft(cfg)["split_plan"]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "split_plan": plan}

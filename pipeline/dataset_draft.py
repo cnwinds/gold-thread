@@ -31,7 +31,13 @@ def _empty() -> Dict[str, Any]:
         "version": DRAFT_VERSION,
         "updated_at": None,
         "decisions": {},
-        "split_plan": {"unit": "project_group", "assignments": {}, "pinned": []},
+        "scope_decisions": {},
+        "split_plan": {
+            "unit": "project_group",
+            "assignments": {},
+            "pinned": [],
+            "session_assignments": {},
+        },
     }
 
 
@@ -46,6 +52,7 @@ def load_draft(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     plan = dict(plan) if isinstance(plan, dict) else {}
     assignments = plan.get("assignments")
     pinned = plan.get("pinned")
+    session_assignments = plan.get("session_assignments")
     out["split_plan"] = {
         "unit": "project_group",
         "eval_ratio": plan.get("eval_ratio"),
@@ -54,7 +61,12 @@ def load_draft(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             str(k): v for k, v in (assignments or {}).items() if v in ("train", "eval")
         } if isinstance(assignments, dict) else {},
         "pinned": sorted({str(p) for p in (pinned or []) if str(p)}) if isinstance(pinned, list) else [],
+        "session_assignments": {
+            str(k): v for k, v in (session_assignments or {}).items() if v in ("train", "eval")
+        } if isinstance(session_assignments, dict) else {},
     }
+    scopes = raw.get("scope_decisions")
+    out["scope_decisions"] = dict(scopes) if isinstance(scopes, dict) else {}
     out["updated_at"] = raw.get("updated_at")
     last_build = raw.get("last_build")
     out["last_build"] = dict(last_build) if isinstance(last_build, dict) else None
@@ -198,6 +210,14 @@ def plan_fingerprint(
             for sample_id, value in sorted((draft.get("decisions") or {}).items())
             if isinstance(value, dict)
         },
+        "scope_decisions": {
+            key: {
+                "action": value.get("action"),
+                "reason": value.get("reason", ""),
+            }
+            for key, value in sorted((draft.get("scope_decisions") or {}).items())
+            if isinstance(value, dict)
+        },
         "sources": revisions["sources"],
         "stage3_inputs": revisions["stage3_inputs"],
     }
@@ -265,6 +285,7 @@ def split_plan_hash(plan: Dict[str, Any]) -> str:
         "seed": int(plan["seed"]),
         "assignments": plan.get("assignments") or {},
         "pinned": sorted(plan.get("pinned") or []),
+        "session_assignments": plan.get("session_assignments") or {},
     }
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:16]
@@ -371,6 +392,147 @@ def dpo_decision_for(
             "at": old.get("at"),
         }
     return {"action": "auto", "reason": ""}
+
+
+SCOPE_KINDS = ("project", "session")
+
+
+def scope_key(scope: str, ident: str) -> str:
+    return f"{scope}:{ident}"
+
+
+def _scope_entry(draft: Dict[str, Any], scope: str, ident: str) -> Dict[str, Any]:
+    value = (draft.get("scope_decisions") or {}).get(scope_key(scope, ident)) or {}
+    if not isinstance(value, dict) or value.get("action") not in ("exclude", "auto"):
+        return {"action": "auto", "reason": ""}
+    return {
+        "action": value["action"],
+        "reason": str(value.get("reason") or ""),
+        "by": str(value.get("by") or "user"),
+        "at": value.get("at"),
+    }
+
+
+def exclusion_for(
+    sample_id: str,
+    project: str,
+    session_id: str,
+    draft: Dict[str, Any],
+    legacy: Optional[Dict[str, Dict[str, Any]]] = None,
+    *,
+    is_dpo: bool = False,
+) -> Dict[str, Any]:
+    """按 项目 → 会话 → 样本 查人工停用。上层停用时下层样本一律停用。
+
+    返回的 ``scope`` 说明是哪一层做的决定，界面据此提示「在会话层恢复」。
+    """
+    for scope, ident in (("project", project), ("session", session_id)):
+        if not ident:
+            continue
+        entry = _scope_entry(draft, scope, ident)
+        if entry["action"] == "exclude":
+            return {**entry, "scope": scope}
+    if is_dpo:
+        entry = dpo_decision_for(sample_id, draft, legacy or {})
+    else:
+        entry = decision_for(sample_id, draft)
+    if entry["action"] == "exclude":
+        return {**entry, "scope": "sample"}
+    return {"action": "auto", "reason": "", "scope": ""}
+
+
+def layer_exclusion(
+    draft: Dict[str, Any], scope: str, ident: str, project: str = ""
+) -> Dict[str, Any]:
+    """某一层本身或它的上层是否被停用（会话层还要看所属项目）。"""
+    chain = [("project", ident)] if scope == "project" else [
+        ("project", project), ("session", ident),
+    ]
+    for kind, key in chain:
+        if not key:
+            continue
+        entry = _scope_entry(draft, kind, key)
+        if entry["action"] == "exclude":
+            return {**entry, "scope": kind}
+    return {"action": "auto", "reason": "", "scope": ""}
+
+
+def update_scope_decisions(
+    updates: Iterable[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    cfg = cfg or load_config()
+    with DRAFT_LOCK:
+        draft = load_draft(cfg)
+        scopes = draft["scope_decisions"]
+        changed = 0
+        for item in updates:
+            scope = str(item.get("scope") or "").strip()
+            ident = str(item.get("id") or "").strip()
+            action = str(item.get("action") or "").strip()
+            if scope not in SCOPE_KINDS:
+                raise ValueError("scope 必须是 project|session")
+            if not ident:
+                raise ValueError("id 不能为空")
+            if action not in ("exclude", "auto"):
+                raise ValueError("action 必须是 exclude|auto")
+            reason = str(item.get("reason") or "").strip()
+            if action == "exclude" and not reason:
+                raise ValueError("停用必须填写原因")
+            by = str(item.get("by") or "user")
+            key = scope_key(scope, ident)
+            old = scopes.get(key) or {}
+            if all(
+                old.get(k) == v
+                for k, v in (("action", action), ("reason", reason), ("by", by))
+            ):
+                continue
+            scopes[key] = {"action": action, "reason": reason, "by": by, "at": now_iso()}
+            changed += 1
+        if changed:
+            save_draft(draft, cfg)
+        return {
+            "changed": changed,
+            "scope_decisions": len(scopes),
+            "updated_at": draft["updated_at"],
+        }
+
+
+def effective_split(project: str, session_id: str, plan: Dict[str, Any]) -> str:
+    """会话层切分覆盖项目层；没有覆盖时用项目归属。"""
+    override = (plan.get("session_assignments") or {}).get(session_id or "")
+    if override in ("train", "eval"):
+        return override
+    return (plan.get("assignments") or {}).get(project or "", "train")
+
+
+def split_source(project: str, session_id: str, plan: Dict[str, Any]) -> str:
+    override = (plan.get("session_assignments") or {}).get(session_id or "")
+    return "session" if override in ("train", "eval") else "project"
+
+
+def set_session_splits(
+    updates: Dict[str, str], cfg: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    cfg = cfg or load_config()
+    with DRAFT_LOCK:
+        draft = load_draft(cfg)
+        plan = draft["split_plan"]
+        assignments = plan.setdefault("session_assignments", {})
+        for session_id, split in updates.items():
+            sid = str(session_id or "").strip()
+            if not sid:
+                raise ValueError("session_id 不能为空")
+            if split in ("inherit", "auto", ""):
+                assignments.pop(sid, None)
+            elif split in ("train", "eval"):
+                assignments[sid] = split
+            else:
+                raise ValueError("session split 必须是 train|eval|inherit")
+        plan["session_assignments"] = {
+            k: v for k, v in assignments.items() if v in ("train", "eval")
+        }
+        save_draft(draft, cfg)
+        return plan
 
 
 def update_decisions(

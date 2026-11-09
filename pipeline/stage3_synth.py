@@ -38,6 +38,22 @@ def _pick_split(projects: List[str], cfg: Dict[str, Any], persist: bool = True) 
     return dict(plan["assignments"])
 
 
+def _split_for(split_map: Dict[str, str], draft: Dict[str, Any], project: str, sid: str) -> str:
+    plan = (draft or {}).get("split_plan") or {}
+    if plan:
+        return dataset_draft.effective_split(project, sid, plan)
+    return split_map.get(project, "train")
+
+
+def _session_splits(
+    records: Dict[str, Any], split_map: Dict[str, str], draft: Dict[str, Any]
+) -> Dict[str, str]:
+    return {
+        sid: _split_for(split_map, draft, entry.get("project_group", "unknown"), sid)
+        for sid, entry in records.items()
+    }
+
+
 def _subsegment_ranges(sid: str, cfg: Dict[str, Any]) -> List[Tuple[int, int]]:
     """检查会话是否命中 synth.sft_allow_subsegments 白名单子段配置。"""
     rules = cfg.get("synth", {}).get("sft_allow_subsegments") or []
@@ -557,7 +573,8 @@ def preview_session_synthesis(sid: str, cfg: Optional[Dict[str, Any]] = None) ->
     rec = rows[0]
     ann = read_json(Path(entry.get("annotation_file", "")), default={}) or {}
     split_map = _pick_split([r.get("project_group", "unknown") for r in gold_index["sessions"].values()], cfg)
-    split = split_map.get(entry.get("project_group", "unknown"), "train")
+    draft = dataset_draft.load_draft(cfg)
+    split = _split_for(split_map, draft, entry.get("project_group", "unknown"), sid)
     res = evaluate_session_synthesis(rec, ann, cfg, split=split)
     return {
         "session_id": sid,
@@ -571,7 +588,10 @@ def preview_session_synthesis(sid: str, cfg: Optional[Dict[str, Any]] = None) ->
 
 
 def synthesize_dpo_candidates(
-    records: Dict[str, Any], cfg: Dict[str, Any], split_map: Dict[str, str]
+    records: Dict[str, Any],
+    cfg: Dict[str, Any],
+    split_map: Dict[str, str],
+    session_splits: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, int]]]:
     """确定性合成全部 DPO 候选；模型评估和人工决策在后续统一应用。"""
     dirs = stage_dirs(cfg)
@@ -579,10 +599,11 @@ def synthesize_dpo_candidates(
     window_turns = int(cfg["synth"].get("window_turns", 8))
     pairs: List[Dict[str, Any]] = []
     source_counts: Dict[str, Dict[str, int]] = {}
+    session_splits = session_splits or {}
     if dcfg.get("from_pruned_steps", True):
         for pair in read_jsonl(dirs["gold"] / "dpo_pairs.jsonl"):
             meta = pair.setdefault("metadata", {})
-            meta["split"] = split_map.get(meta.get("project_group"), "train")
+            meta["split"] = session_splits.get(str(meta.get("session_id") or "")) or split_map.get(meta.get("project_group"), "train")
             pairs.append(pair)
 
     for sid, entry in sorted(records.items()):
@@ -593,7 +614,7 @@ def synthesize_dpo_candidates(
         msgs = rec.get("messages") or []
         label = rec.get("label") or entry.get("label", "pending")
         project = rec.get("project_group") or entry.get("project_group", "unknown")
-        split = split_map.get(project, "train")
+        split = session_splits.get(sid) or split_map.get(project, "train")
         model = rec.get("dominant_model") or entry.get("dominant_model") or "unknown"
         sys_msg = next((m for m in msgs if m["role"] == "system"), None)
         root_msg = next((m for m in msgs if m["role"] == "user"), None)
@@ -624,12 +645,19 @@ def evaluate_dpo_pending(cfg: Optional[Dict[str, Any]] = None, log=print) -> Dic
     dirs = stage_dirs(cfg)
     records = load_index(dirs["gold"] / "index.json").get("sessions") or {}
     split_map = _pick_split([r.get("project_group", "unknown") for r in records.values()], cfg)
-    pairs, _ = synthesize_dpo_candidates(records, cfg, split_map)
     draft = dataset_draft.load_draft(cfg)
+    pairs, _ = synthesize_dpo_candidates(
+        records, cfg, split_map, _session_splits(records, split_map, draft)
+    )
     legacy = _load_dpo_exclusions(dirs["state"])
     eligible = [
         pair for pair in pairs
-        if dataset_draft.dpo_decision_for(str(pair.get("sample_id") or ""), draft, legacy)["action"] != "exclude"
+        if dataset_draft.exclusion_for(
+            str(pair.get("sample_id") or ""),
+            str((pair.get("metadata") or {}).get("project_group") or "unknown"),
+            str((pair.get("metadata") or {}).get("session_id") or ""),
+            draft, legacy, is_dpo=True,
+        )["action"] != "exclude"
     ]
     before = judge.cached_dpo_verdicts(eligible, cfg)
     pending_before = sum(v["verdict"] in ("pending", "review_failed") for v in before.values())
@@ -669,6 +697,8 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
             )
     plan_hash = dataset_draft.plan_fingerprint(cfg, draft, include_aux_outputs=True)
     last_build = draft.get("last_build") or {}
+    session_splits = _session_splits(records, split_map, draft)
+    plan = draft.get("split_plan") or {}
     rows: List[Dict[str, Any]] = []
     sessions: List[Dict[str, Any]] = []
 
@@ -679,7 +709,7 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
         rec = gold_rows[0]
         annotation = read_json(Path(entry.get("annotation_file", "")), default={}) or {}
         project = rec.get("project_group") or entry.get("project_group", "unknown")
-        split = split_map.get(project, "train")
+        split = session_splits.get(sid, "train")
         evaluated = evaluate_session_synthesis(rec, annotation, cfg, split=split)
         candidates = [("sft", row) for row in evaluated["windows_sgpt"]]
         if evaluated.get("gold_traj"):
@@ -688,7 +718,7 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
         excluded = 0
         for kind, sample in candidates:
             sample_id = str(sample.get("sample_id") or "")
-            decision = dataset_draft.decision_for(sample_id, draft)
+            decision = dataset_draft.exclusion_for(sample_id, project, sid, draft)
             is_included = decision["action"] != "exclude"
             included += int(is_included)
             excluded += int(not is_included)
@@ -699,6 +729,8 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
                 "session_id": sid,
                 "project_group": project,
                 "split": split,
+                "split_source": dataset_draft.split_source(project, sid, plan),
+                "decision_scope": decision.get("scope", ""),
                 "model": meta.get("model") or rec.get("dominant_model") or "unknown",
                 "stage": meta.get("stage") or kind,
                 "sample_weight": meta.get("sample_weight", 1),
@@ -711,10 +743,15 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
                 "decision_reason": decision.get("reason", ""),
                 "decision_at": decision.get("at"),
             })
+        layer = dataset_draft.layer_exclusion(draft, "session", sid, project)
         sessions.append({
             "session_id": sid,
             "project_group": project,
             "split": split,
+            "split_source": dataset_draft.split_source(project, sid, plan),
+            "excluded": layer["action"] == "exclude",
+            "exclusion_scope": layer.get("scope", ""),
+            "exclusion_reason": layer.get("reason", ""),
             "effective_state": evaluated["effective_state"],
             "model_report": evaluated.get("model_report"),
             "full_sft_allowed": evaluated["full_sft_allowed"],
@@ -724,14 +761,18 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
             "funnel": evaluated["funnel"],
         })
 
-    dpo_candidates, _ = synthesize_dpo_candidates(records, cfg, split_map)
+    dpo_candidates, _ = synthesize_dpo_candidates(records, cfg, split_map, session_splits)
     dpo_verdicts = judge.cached_dpo_verdicts(dpo_candidates, cfg)
     legacy_exclusions = _load_dpo_exclusions(dirs["state"])
     pending_evaluations = 0
     for pair in dpo_candidates:
         sample_id = str(pair.get("sample_id") or "")
         meta = pair.get("metadata") or {}
-        decision = dataset_draft.dpo_decision_for(sample_id, draft, legacy_exclusions)
+        dpo_project = meta.get("project_group") or "unknown"
+        dpo_sid = str(meta.get("session_id", "") or "")
+        decision = dataset_draft.exclusion_for(
+            sample_id, dpo_project, dpo_sid, draft, legacy_exclusions, is_dpo=True
+        )
         verdict = dpo_verdicts.get(sample_id) or {"verdict": "pending", "reason": "尚未完成模型复核"}
         gate_status = verdict["verdict"]
         manually_excluded = decision["action"] == "exclude"
@@ -745,7 +786,9 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
             "kind": "dpo",
             "session_id": meta.get("session_id", ""),
             "project_group": project,
-            "split": split_map.get(project, "train"),
+            "split": session_splits.get(dpo_sid) or split_map.get(project, "train"),
+            "split_source": dataset_draft.split_source(project, dpo_sid, plan),
+            "decision_scope": decision.get("scope", ""),
             "model": meta.get("model") or "unknown",
             "stage": meta.get("source") or "dpo",
             "sample_weight": 1,
@@ -764,6 +807,7 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
         "sessions": sessions,
         "split": split_map,
         "split_plan": draft.get("split_plan") or {},
+        "scope_decisions": draft.get("scope_decisions") or {},
         "summary": {
             "candidates": len(rows),
             "included": sum(1 for row in rows if row["included"]),
@@ -796,7 +840,7 @@ def draft_sample(sample_id: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[s
             continue
         rec = gold_rows[0]
         project = rec.get("project_group") or entry.get("project_group", "unknown")
-        split = split_map.get(project, "train")
+        split = _split_for(split_map, draft, project, sid)
         annotation = read_json(Path(entry.get("annotation_file", "")), default={}) or {}
         evaluated = evaluate_session_synthesis(rec, annotation, cfg, split=split)
         candidates = list(evaluated["windows_sgpt"])
@@ -805,26 +849,35 @@ def draft_sample(sample_id: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[s
         for sample in candidates:
             if str(sample.get("sample_id") or "") != sample_id:
                 continue
-            decision = dataset_draft.decision_for(sample_id, draft)
+            decision = dataset_draft.exclusion_for(sample_id, project, sid, draft)
             out = dict(sample)
             out["_draft"] = {
                 "included": decision["action"] != "exclude",
                 "decision": decision["action"],
+                "decision_scope": decision.get("scope", ""),
                 "decision_reason": decision.get("reason", ""),
                 "decision_at": decision.get("at"),
             }
             return out
-    dpo_candidates, _ = synthesize_dpo_candidates(records, cfg, split_map)
+    session_splits = _session_splits(records, split_map, draft)
+    dpo_candidates, _ = synthesize_dpo_candidates(records, cfg, split_map, session_splits)
     pair = next((p for p in dpo_candidates if str(p.get("sample_id") or "") == sample_id), None)
     if pair is not None:
         legacy = _load_dpo_exclusions(dirs["state"])
-        decision = dataset_draft.dpo_decision_for(sample_id, draft, legacy)
+        meta = pair.get("metadata") or {}
+        decision = dataset_draft.exclusion_for(
+            sample_id,
+            str(meta.get("project_group") or "unknown"),
+            str(meta.get("session_id") or ""),
+            draft, legacy, is_dpo=True,
+        )
         verdict = judge.cached_dpo_verdicts([pair], cfg).get(sample_id) or {"verdict": "pending", "reason": ""}
         manually_excluded = decision["action"] == "exclude"
         out = dict(pair)
         out["_draft"] = {
             "included": not manually_excluded and verdict["verdict"] in ("good", "swap", "bypassed"),
             "decision": decision["action"],
+            "decision_scope": decision.get("scope", ""),
             "gate_status": verdict["verdict"],
             "decision_reason": decision.get("reason", "") if manually_excluded else verdict.get("reason", ""),
             "decision_at": decision.get("at"),
@@ -853,9 +906,10 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         draft = dataset_draft.load_draft(cfg)
     input_hash = dataset_draft.plan_fingerprint(cfg, draft, include_aux_outputs=False)
 
+    session_splits = _session_splits(records, split_map, draft)
     gold_trajs: List[Dict[str, Any]] = []
     step_pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-    dpo_pairs, dpo_source_counts = synthesize_dpo_candidates(records, cfg, split_map)
+    dpo_pairs, dpo_source_counts = synthesize_dpo_candidates(records, cfg, split_map, session_splits)
     diagnostics: List[Dict[str, Any]] = []
     session_funnels: Dict[str, Any] = {}
     draft_excluded = {"sft": 0, "trajectory": 0, "dpo": 0}
@@ -874,7 +928,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     for sid, entry in sorted(records.items()):
         label = entry.get("label", "pending")
         project = entry.get("project_group", "unknown")
-        split = split_map.get(project, "train")
+        split = session_splits.get(sid, "train")
         gold_file = Path(entry["gold_file"])
         rows = read_jsonl(gold_file)
         if not rows:
@@ -947,7 +1001,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         eval_res = item["eval_res"]
         project = item["project"]
         for w_sgpt, w_oai in zip(eval_res["windows_sgpt"], eval_res["windows_oai"]):
-            if dataset_draft.decision_for(str(w_sgpt.get("sample_id") or ""), draft)["action"] == "exclude":
+            if dataset_draft.exclusion_for(str(w_sgpt.get("sample_id") or ""), project, item["sid"], draft)["action"] == "exclude":
                 draft_excluded["sft"] += 1
                 continue
             st_name = w_sgpt["metadata"]["stage"]
@@ -964,7 +1018,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         traj = item["eval_res"].get("gold_traj")
         if not traj:
             continue
-        if dataset_draft.decision_for(str(traj.get("sample_id") or ""), draft)["action"] == "exclude":
+        if dataset_draft.exclusion_for(str(traj.get("sample_id") or ""), item["project"], item["sid"], draft)["action"] == "exclude":
             draft_excluded["trajectory"] += 1
             continue
         gold_trajs.append(traj)
@@ -977,7 +1031,13 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     # 通用草稿账本也覆盖 Stage 3 新生成的 DPO；显式 auto 可撤销旧排除。
     kept_by_draft = []
     for pair in dpo_pairs:
-        decision = dataset_draft.dpo_decision_for(str(pair.get("sample_id") or ""), draft, excluded_pairs)
+        md0 = pair.get("metadata") or {}
+        decision = dataset_draft.exclusion_for(
+            str(pair.get("sample_id") or ""),
+            str(md0.get("project_group") or "unknown"),
+            str(md0.get("session_id") or ""),
+            draft, excluded_pairs, is_dpo=True,
+        )
         if decision["action"] == "exclude":
             draft_excluded["dpo"] += 1
             md = pair.get("metadata") or {}

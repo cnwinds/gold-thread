@@ -1037,29 +1037,22 @@
   .train-main .scroll{max-height:none}
   .train-main td{font-size:12px;vertical-align:top}
   .train-main .clip{max-width:360px}
-  /* 草稿不是「左栏选文件」。切分与 Build 并排，样本表占满下一行。 */
-  .train-draft-shell{
-    grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr);
-    grid-template-rows:auto minmax(168px,320px) minmax(0,1fr);
-  }
-  .train-draft-shell .train-split,
-  .train-draft-shell #draftBuild{min-width:0;min-height:0;overflow:auto;border-bottom:1px solid var(--line-soft)}
-  .train-draft-shell .train-split{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--line-soft)}
-  .train-draft-shell .train-split-body{flex:1;min-height:0;overflow:auto}
-  .train-draft-shell .train-split-tools{flex:none;border-top:1px solid var(--line-soft)}
-  .train-draft-shell .train-split table{width:100%}
-  .train-draft-shell .train-split td.mono{overflow-wrap:anywhere}
-  .train-draft-shell .train-main{grid-column:1 / -1;min-height:0}
-  @media (max-width:860px){
-    .train-draft-shell{
-      grid-template-columns:minmax(0,1fr);
-      grid-template-rows:auto auto auto minmax(280px,1fr);
-      height:auto;overflow:visible;
-    }
-    .train-draft-shell .train-split{border-right:none;max-height:320px}
-    .train-draft-shell #draftBuild{max-height:220px}
-    .train-draft-shell .train-main{min-height:360px}
-  }
+  /* 训练数据层级树：分组 → 黄金会话 → 切片样本，停用与切分向下继承 */
+  .train-tree-shell{display:flex;flex-direction:column;gap:14px}
+  .tree-node{border:1px solid var(--line-soft);border-radius:10px;background:var(--ink-1);overflow:hidden}
+  .tree-node.off{opacity:.62}
+  .tree-head{display:flex;gap:10px;align-items:center;padding:11px 14px;flex-wrap:wrap}
+  .tree-head .tree-title{font-weight:600;font-size:13.5px}
+  .tree-children{padding:2px 14px 12px 30px}
+  .tree-session{border-top:1px solid var(--line-soft);padding:9px 0}
+  .tree-session-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .tree-samples{padding:6px 0 4px 30px}
+  .tree-sample{display:flex;gap:10px;align-items:center;padding:6px 8px;border-radius:6px;flex-wrap:wrap;cursor:pointer}
+  .tree-sample:hover{background:rgba(255,255,255,.03)}
+  .tree-sample.off{opacity:.55}
+  .tree-toggle{flex:none;width:26px;min-height:26px;padding:0;font-family:var(--f-mono)}
+  .tree-counts{font-size:12px;color:var(--text-2)}
+  .tree-layer-note{font-size:11.5px;color:var(--amber)}
 
   /* 任务：列表负责定位，详情负责解释与下一步 */
   .tasks-shell{grid-template-columns:330px minmax(0,1fr);gap:16px;min-height:560px;align-items:start}
@@ -1427,7 +1420,7 @@ const PAGES = {
   config:   ["配置", "按分组调整常用参数；高级参数与 YAML 源码保留在同一工作区。"],
 };
 
-let STATE = { tab: "overview", overview: null, tasksSelectedId: "", raw: {project:"", model:"", adopted:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {project:"", model:"", output:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {workspace:"draft", name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", kind:"", decision:"", fileq:"", scope:"all", splitPlan:null, replanPreview:null, builds:[]}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
+let STATE = { tab: "overview", overview: null, tasksSelectedId: "", raw: {project:"", model:"", adopted:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {project:"", model:"", output:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {workspace:"draft", name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", kind:"", decision:"", fileq:"", scope:"all", splitPlan:null, replanPreview:null, builds:[], groupBy:"project", expanded:null, treeData:null}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
 /** 交付打包作业 UI 状态（独立于 pipeline stage jobs） */
 let PACK = { running: false, jobId: null, startedAt: null, elapsed: 0, phase: "", error: null, result: null, timer: null,
   profile: localStorage.getItem("gt.exportProfile") || "", profileChosen: !!localStorage.getItem("gt.exportProfile") };
@@ -2903,8 +2896,14 @@ async function loadGold() {
         <td class="muted" style="font-size:12px">${esc(s.dominant_model || "未知")}</td>
         <td><div class="table-progress"><span class="num">${fmt(lin.gold_steps)} 步</span><span class="arrow">→</span>${sftInto}</div></td>
         <td><div class="table-progress"><span class="num">${fmt(lin.dpo_made)} 对</span><span class="arrow">→</span>${dpoInto}</div><div class="table-detail">${esc(partTxt)}</div></td>
-        <td>${lin.split ? `<span class="chip ${esc(lin.split)}">${esc(lin.split)}</span>` : `<span class="faint">—</span>`}</td>
-        <td class="table-action"><button class="ghost slim" data-gold-open="${esc(s.session_id)}">查看血缘</button></td>
+        <td><select data-gold-split="${esc(s.session_id)}" aria-label="训练切分">
+          <option value="train" ${lin.split==="train"?"selected":""}>train</option>
+          <option value="eval" ${lin.split==="eval"?"selected":""}>eval</option></select>
+          ${s.dataset_excluded ? `<span class="chip" style="margin-left:4px">已停用${s.exclusion_scope === "project" ? "（项目层）" : ""}</span>` : ""}</td>
+        <td class="table-action">${s.dataset_excluded && s.exclusion_scope === "project"
+          ? `<span class="faint" style="font-size:11px">在训练数据页恢复项目</span>`
+          : `<button class="ghost slim" data-gold-usage="${esc(s.session_id)}" data-gold-usage-action="${s.dataset_excluded ? "auto" : "exclude"}">${s.dataset_excluded ? "恢复使用" : "标记不使用"}</button>`}
+          <button class="ghost slim" data-gold-open="${esc(s.session_id)}">查看血缘</button></td>
       </tr>`;}).join("") || emptyRow(6, f.output || f.model || f.project || f.q ? "没有符合当前筛选的黄金会话" : "还没有黄金数据。请先在原始数据页分析会话。")}
       </tbody></table></div>
     </div>`;
@@ -2914,6 +2913,14 @@ async function loadGold() {
   $("#goldSearch").onkeydown = e => { if (e.key==="Enter"){ STATE.gold.q = e.target.value; loadGold(); } };
   $("#goldReload").onclick = loadGold;
   $$("#view-gold [data-gold-open]").forEach(b => b.onclick = e => { e.stopPropagation(); openGold(b.dataset.goldOpen); });
+  $$("#view-gold [data-gold-usage]").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    goldSetUsage(b.dataset.goldUsage, b.dataset.goldUsageAction).catch(err => toast(err.message, "err"));
+  });
+  $$("#view-gold [data-gold-split]").forEach(sel => {
+    sel.onclick = e => e.stopPropagation();
+    sel.onchange = e => { e.stopPropagation(); goldSetSessionSplit(sel.dataset.goldSplit, sel.value).catch(err => toast(err.message, "err")); };
+  });
   bindRows("#view-gold", tr => openGold(tr.dataset.sid));
   if (STATE.pendingGold) {
     const sid = STATE.pendingGold;
@@ -2922,6 +2929,19 @@ async function loadGold() {
   }
 }
 
+async function goldSetUsage(sid, action) {
+  await api("/api/dataset/draft/scopes", {method: "PUT", body: JSON.stringify({
+    updates: [{scope: "session", id: sid, action, reason: action === "exclude" ? "黄金数据页标记不使用" : ""}],
+  })});
+  toast(action === "exclude" ? "已标记不使用，这条会话的切片不会进入训练数据" : "已恢复使用", "ok");
+  loadGold();
+  refreshMeta().catch(() => {});
+}
+async function goldSetSessionSplit(sid, split) {
+  await api("/api/dataset/draft/split", {method: "PUT", body: JSON.stringify({session_assignments: {[sid]: split}})});
+  toast(`会话已改为 ${split}，它的切片一并变更`, "ok");
+  loadGold();
+}
 async function goldSetStepGate(mid, step) {
   const sid = STATE.drawerData?.record?.session_id;
   if (!sid || !mid) return;
@@ -3584,28 +3604,157 @@ async function setDraftDecisions(updates) {
   syncDraftSelection();
   await loadTrainDraft();
 }
-function renderSplitWorkspace(plan, projectStats) {
-  plan = plan || {};
-  const stats = projectStats || {};
-  const assignments = plan.assignments || {};
-  const rows = Object.keys(assignments).sort().map(p => {
-    const st = stats[p] || {};
-    const split = assignments[p] || "train";
-    return `<tr><td class="mono">${esc(p)}</td><td><select data-split-project="${esc(p)}" aria-label="项目切分">
-      <option value="train" ${split==="train"?"selected":""}>train</option><option value="eval" ${split==="eval"?"selected":""}>eval</option></select></td>
-      <td class="n">${fmt(st.included || 0)}</td><td class="n faint">${fmt(st.excluded || 0)}</td><td class="n">${fmt(st.sessions || 0)}</td></tr>`;
-  }).join("") || `<tr><td colspan="5" class="empty">暂无项目</td></tr>`;
-  const ratio = Number(plan.eval_ratio ?? 0);
-  const seed = Number(plan.seed ?? 42);
-  return `<div class="workspace-panel train-split">
-    <div class="panel-h"><h3>Split Plan</h3><span class="hint">服务端账本 · eval_ratio ${esc(String(ratio))} · seed ${fmt(seed)}</span></div>
-    <div class="panel-b train-split-body"><table><thead><tr><th>项目</th><th>切分</th><th>纳入</th><th>排除</th><th>会话</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="toolbar train-split-tools">
-      <label class="faint">eval_ratio <input id="draftEvalRatio" type="number" min="0" max="1" step="0.05" value="${esc(String(ratio))}" style="width:72px"></label>
-      <label class="faint">seed <input id="draftSeed" type="number" step="1" value="${fmt(seed)}" style="width:72px"></label>
-      <button type="button" class="ghost" id="draftReplanPreview">预览重切分</button>
-      <button type="button" class="primary" id="draftReplanSave" disabled>应用重切分</button>
-    </div></div>`;
+function treeCountsText(c) {
+  c = c || {};
+  return `候选 ${fmt(c.candidates || 0)} · 纳入 ${fmt(c.included || 0)} · 停用 ${fmt(c.excluded || 0)} · 门控未过 ${fmt(c.gate_excluded || 0)}`;
+}
+function treeSampleHtml(r) {
+  const scopeZh = {project: "项目层", session: "会话层", sample: "样本层"};
+  const off = !r.included;
+  const layerNote = off && r.decision === "exclude" && r.decision_scope && r.decision_scope !== "sample"
+    ? `<span class="tree-layer-note">在${scopeZh[r.decision_scope] || "上层"}停用</span>` : "";
+  const gate = r.gate_status && r.gate_status !== "passed" && r.gate_status !== "good"
+    ? `<span class="chip">${esc(r.gate_status)}</span>` : "";
+  const toggle = r.decision === "exclude" && (!r.decision_scope || r.decision_scope === "sample")
+    ? `<button type="button" class="ghost slim" data-sample-toggle="${esc(r.sample_id)}" data-sample-action="auto">恢复</button>`
+    : (r.included
+      ? `<button type="button" class="ghost slim" data-sample-toggle="${esc(r.sample_id)}" data-sample-action="exclude">停用</button>` : "");
+  return `<div class="tree-sample ${off ? "off" : ""}" data-sample-open="${esc(r.sample_id)}" title="${esc(r.sample_id)}">
+    <span class="chip">${esc(DRAFT_KIND_ZH[r.kind] || r.kind)}</span>
+    <span class="mono muted" style="font-size:11px">${esc(short(r.sample_id, 44))}</span>
+    ${r.stage ? `<span class="faint" style="font-size:11px">${esc(r.stage)}</span>` : ""}
+    <span class="chip ${esc(r.split || "")}">${esc(r.split || "–")}</span>
+    <span class="chip ${r.included ? "train" : ""}">${r.included ? "纳入" : "停用"}</span>${gate}${layerNote}
+    <span class="grow"></span>${toggle}</div>`;
+}
+function treeSessionHtml(node, groupBy) {
+  const tf = STATE.train;
+  const key = "s:" + node.session_id;
+  const open = !!(tf.expanded && tf.expanded[key]);
+  const scopeZh = {project: "项目层", session: "会话层"};
+  let usage = "";
+  if (node.excluded && node.exclusion_scope === "project") {
+    usage = `<span class="tree-layer-note">项目已停用，在项目层恢复</span>`;
+  } else if (node.own_excluded || (node.excluded && node.exclusion_scope === "session")) {
+    usage = `<button type="button" class="ghost slim" data-scope-toggle="session" data-scope-id="${esc(node.session_id)}" data-scope-action="auto">恢复会话</button>`;
+  } else if (!node.excluded) {
+    usage = `<button type="button" class="ghost slim" data-scope-toggle="session" data-scope-id="${esc(node.session_id)}" data-scope-action="exclude">停用会话</button>`;
+  }
+  const splitCtl = `<select data-session-split="${esc(node.session_id)}" aria-label="会话切分">
+      <option value="train" ${node.split==="train"?"selected":""}>train</option>
+      <option value="eval" ${node.split==="eval"?"selected":""}>eval</option></select>
+    ${node.split_source === "session"
+      ? `<button type="button" class="ghost slim" data-session-split-inherit="${esc(node.session_id)}">随上层</button>`
+      : `<span class="faint" style="font-size:11px">随${groupBy === "project" ? "项目" : "上层"}</span>`}`;
+  const q = (tf.q || "").trim().toLowerCase();
+  const samples = q
+    ? node.samples.filter(r => (r.sample_id + " " + r.kind).toLowerCase().includes(q))
+    : node.samples;
+  if (q && !samples.length && !(node.session_id + " " + node.project_group).toLowerCase().includes(q)) return "";
+  return `<div class="tree-session">
+    <div class="tree-session-head">
+      <button type="button" class="tree-toggle" data-tree-toggle="${esc(key)}" aria-label="展开会话">${open ? "−" : "+"}</button>
+      <span class="mono" style="font-size:12px">${esc(node.session_id.slice(0, 8))}</span>
+      <span class="faint">${esc(node.project_group || "")}</span>
+      ${node.effective_state ? `<span class="chip">${esc(node.effective_state)}</span>` : ""}
+      <span class="tree-counts">${treeCountsText(node.counts)}</span>
+      <span class="grow"></span>${splitCtl}${usage}
+    </div>
+    ${open ? `<div class="tree-samples">${samples.map(treeSampleHtml).join("") || `<div class="faint" style="padding:6px 8px">没有切片样本</div>`}</div>` : ""}
+  </div>`;
+}
+function treeGroupHtml(g) {
+  const tf = STATE.train;
+  const key = "g:" + g.key;
+  const open = !!(tf.expanded && tf.expanded[key]);
+  const isProject = tf.groupBy === "project";
+  const off = isProject && g.own_excluded;
+  const usage = !isProject ? "" : (off
+    ? `<button type="button" class="ghost slim" data-scope-toggle="project" data-scope-id="${esc(g.key)}" data-scope-action="auto">恢复项目</button>`
+    : `<button type="button" class="ghost slim" data-scope-toggle="project" data-scope-id="${esc(g.key)}" data-scope-action="exclude">停用项目</button>`);
+  const splitCtl = !isProject ? "" : `<select data-project-split="${esc(g.key)}" aria-label="项目切分">
+      <option value="train" ${g.split==="train"?"selected":""}>train</option>
+      <option value="eval" ${g.split==="eval"?"selected":""}>eval</option></select>`;
+  const sessions = g.sessions.map(n => treeSessionHtml(n, tf.groupBy)).join("");
+  if ((tf.q || "").trim() && !sessions) return "";
+  return `<div class="tree-node ${off ? "off" : ""}">
+    <div class="tree-head">
+      <button type="button" class="tree-toggle" data-tree-toggle="${esc(key)}" aria-label="展开分组">${open ? "−" : "+"}</button>
+      <span class="tree-title">${esc(g.title)}</span>
+      <span class="faint">${fmt(g.sessions.length)} 个黄金会话</span>
+      <span class="tree-counts">${treeCountsText(g.counts)}</span>
+      <span class="grow"></span>${splitCtl}${usage}
+    </div>
+    ${open ? `<div class="tree-children">${sessions || `<div class="faint">没有会话</div>`}</div>` : ""}
+  </div>`;
+}
+function renderTrainTree() {
+  const host = $("#trainTreeBody");
+  if (!host || !STATE.train.treeData) return;
+  const groups = STATE.train.treeData.groups || [];
+  host.innerHTML = groups.map(treeGroupHtml).join("") || `<div class="empty">没有黄金会话。请先在黄金数据页完成分析。</div>`;
+  bindTrainTree(host);
+}
+async function setScopeDecision(scope, id, action) {
+  const label = scope === "project" ? "项目" : "会话";
+  await api("/api/dataset/draft/scopes", {method: "PUT", body: JSON.stringify({
+    updates: [{scope, id, action, reason: action === "exclude" ? `控制台在${label}层停用` : ""}],
+  })});
+  toast(action === "exclude" ? `已停用${label}，下面的切片不会进入训练集` : `已恢复${label}`, "ok");
+  await loadTrainDraft();
+}
+async function setSessionSplit(sessionId, split) {
+  const body = split === "inherit"
+    ? {session_assignments: {[sessionId]: "inherit"}}
+    : {session_assignments: {[sessionId]: split}};
+  await api("/api/dataset/draft/split", {method: "PUT", body: JSON.stringify(body)});
+  toast(split === "inherit" ? "会话切分已随上层" : `会话已改为 ${split}，下面的切片一并变更`, "ok");
+  await loadTrainDraft();
+}
+async function setProjectSplit(project, split) {
+  await api("/api/dataset/draft/split", {method: "PUT", body: JSON.stringify({assignments: {[project]: split}})});
+  toast(`项目已改为 ${split}，没有单独设置的会话一并变更`, "ok");
+  await loadTrainDraft();
+}
+function bindTrainTree(host) {
+  host.querySelectorAll("[data-tree-toggle]").forEach(btn => {
+    btn.onclick = () => {
+      const key = btn.dataset.treeToggle;
+      STATE.train.expanded[key] = !STATE.train.expanded[key];
+      renderTrainTree();
+    };
+  });
+  host.querySelectorAll("[data-scope-toggle]").forEach(btn => {
+    btn.onclick = () => setScopeDecision(btn.dataset.scopeToggle, btn.dataset.scopeId, btn.dataset.scopeAction)
+      .catch(e => toast(e.message, "err"));
+  });
+  host.querySelectorAll("[data-project-split]").forEach(sel => {
+    sel.onclick = e => e.stopPropagation();
+    sel.onchange = () => setProjectSplit(sel.dataset.projectSplit, sel.value).catch(e => toast(e.message, "err"));
+  });
+  host.querySelectorAll("[data-session-split]").forEach(sel => {
+    sel.onclick = e => e.stopPropagation();
+    sel.onchange = () => setSessionSplit(sel.dataset.sessionSplit, sel.value).catch(e => toast(e.message, "err"));
+  });
+  host.querySelectorAll("[data-session-split-inherit]").forEach(btn => {
+    btn.onclick = () => setSessionSplit(btn.dataset.sessionSplitInherit, "inherit").catch(e => toast(e.message, "err"));
+  });
+  host.querySelectorAll("[data-sample-toggle]").forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      setDraftDecisions([{
+        sample_id: btn.dataset.sampleToggle,
+        action: btn.dataset.sampleAction,
+        reason: btn.dataset.sampleAction === "exclude" ? "控制台在样本层停用" : "",
+      }]).catch(err => toast(err.message, "err"));
+    };
+  });
+  host.querySelectorAll("[data-sample-open]").forEach(el => {
+    el.onclick = e => {
+      if (e.target.closest("button") || e.target.closest("select")) return;
+      openDraftSample(el.dataset.sampleOpen);
+    };
+  });
 }
 function buildWorkspace(lastBuild, builds) {
   const lb = lastBuild || {};
@@ -3627,36 +3776,6 @@ async function loadTrainBuilds() {
   const reload = $("#draftBuildReload");
   if (reload) reload.onclick = () => loadTrainBuilds().catch(e => toast(e.message, "err"));
 }
-async function replanSplit(dryRun) {
-  const plan = STATE.train.splitPlan || {};
-  const ratio = Number($("#draftEvalRatio")?.value ?? plan.eval_ratio ?? 0);
-  const seed = Number($("#draftSeed")?.value ?? plan.seed ?? 42);
-  const body = {eval_ratio: ratio, seed, dry_run: !!dryRun};
-  if (!dryRun) body.expected_hash = (STATE.train.replanPreview && STATE.train.replanPreview.base_hash) || undefined;
-  const preview = await api("/api/dataset/draft/split/replan", {method:"POST", body: JSON.stringify(body)});
-  if (dryRun) {
-    STATE.train.replanPreview = preview;
-    const saveBtn = $("#draftReplanSave");
-    if (saveBtn) saveBtn.disabled = !replanNeedsSave(preview, plan);
-    toast(Object.keys(preview.changes || {}).length ? `预览 ${Object.keys(preview.changes).length} 项变更` : "预览：切分参数无项目变更", "ok");
-    return preview;
-  }
-  STATE.train.replanPreview = null;
-  await loadTrainDraft();
-  return preview;
-}
-function draftRow(r, idx) {
-  const kind = r.kind || "sft";
-  const inc = r.included;
-  const gate = r.gate_status || "";
-  return `<tr class="clickable ${inc ? "" : "faint"}" data-draft-row="1" data-sample-id="${esc(r.sample_id)}" data-draft-decision="${esc(r.decision || "auto")}" tabindex="0">
-    <td class="n faint">${idx + 1}</td>
-    <td><div class="mono muted" style="font-size:11px">${esc(short(r.sample_id, 28))}</div><div class="sid faint">${esc(r.project_group || "")}</div></td>
-    <td><span class="chip">${esc(DRAFT_KIND_ZH[kind] || kind)}</span>${kind==="dpo" ? `<div class="faint" style="margin-top:3px">${esc(r.decision_reason || gate)}</div>` : ""}</td>
-    <td>${esc(r.split || "–")}</td>
-    <td><span class="chip ${inc ? "train" : ""}">${inc ? "纳入" : "排除"}</span>${gate && gate !== "passed" && gate !== "good" ? `<span class="chip" style="margin-left:4px">${esc(gate)}</span>` : ""}</td>
-    <td><button type="button" class="ghost" data-draft-toggle="${esc(r.sample_id)}" data-draft-decision="${esc(r.decision === "exclude" ? "auto" : "exclude")}">${r.decision === "exclude" ? "恢复" : "排除"}</button></td></tr>`;
-}
 async function openDraftSample(sampleId) {
   openDrawer("草稿样本", short(sampleId, 32));
   const seq = DRAWER_REQUEST_SEQ;
@@ -3674,7 +3793,11 @@ async function openDraftSample(sampleId) {
   const draft = row._draft || {};
   const kind = row.kind || (String(sampleId).startsWith("dpo::") ? "dpo" : "sft");
   $("#drawerBody").innerHTML = renderTrainDetail(row, kind === "trajectory" ? "trajectory" : kind, draft.build_file || "");
-  setDrawerFoot(`<button type="button" data-draft-toggle="${esc(sampleId)}" data-draft-decision="${esc(draft.included ? "exclude" : "auto")}">${draft.included ? "排除此样本" : "恢复纳入"}</button>
+  const layerOff = !draft.included && draft.decision_scope && draft.decision_scope !== "sample";
+  setDrawerFoot(layerOff
+    ? `<span class="faint">这条样本在${draft.decision_scope === "project" ? "项目" : "会话"}层停用，先在上层恢复</span>
+    <button onclick="showJson(STATE.drawerData)">查看 JSON</button>`
+    : `<button type="button" data-draft-toggle="${esc(sampleId)}" data-draft-decision="${esc(draft.included ? "exclude" : "auto")}">${draft.included ? "停用此样本" : "恢复纳入"}</button>
     <button onclick="showJson(STATE.drawerData)">查看 JSON</button>`);
 }
 async function openBuildDetail(buildId) {
@@ -3720,79 +3843,63 @@ async function loadTrainDraft() {
   const request = {id: ++TRAIN_REQUEST_SEQ, workspace: "draft"};
   STATE.train.workspace = "draft";
   const tf = STATE.train;
-  const params = new URLSearchParams({offset: tf.offset, limit: 50, q: tf.q || "", project: tf.project || "", split: tf.split || "", kind: tf.kind || "", decision: tf.decision || ""});
-  let draft;
+  let tree;
   try {
-    draft = await api("/api/dataset/draft?" + params.toString());
+    tree = await api("/api/dataset/draft/tree?group_by=" + encodeURIComponent(tf.groupBy || "project"));
   } catch (e) {
     if (!trainRequestCurrent(request)) return;
-    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>无法加载草稿</h3><p>${esc(e.message)}</p><button class="primary" onclick="runStage('stage3',false)">运行 Stage 3</button></div></div>`;
+    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>无法加载训练数据</h3><p>${esc(e.message)}</p><button class="primary" onclick="runStage('stage3',false)">运行 Stage 3</button></div></div>`;
     return;
   }
   if (!trainRequestCurrent(request)) return;
-  document.body.classList.toggle("dirty", !!draft.dirty);
-  STATE.train.splitPlan = draft.split_plan || {};
-  STATE.train.splitPlanHash = draft.base_hash || draft.plan_hash || "";
-  STATE.train.lastBuild = draft.last_build || null;
-  const summary = draft.summary || {};
+  document.body.classList.toggle("dirty", !!tree.dirty);
+  STATE.train.splitPlan = tree.split_plan || {};
+  STATE.train.lastBuild = tree.last_build || null;
+  STATE.train.treeData = tree;
+  if (!tf.expanded) {
+    tf.expanded = {};
+    const first = (tree.groups || [])[0];
+    if (first) tf.expanded["g:" + first.key] = true;
+  }
+  const summary = tree.summary || {};
   const pending = summary.pending_evaluations || 0;
-  const end = Math.min(draft.offset + (draft.rows || []).length, draft.total || 0);
-  const projects = draft.projects || [];
-  tf.selectedIds = tf.selectedIds || [];
   $("#view-train").innerHTML = `
-    <div class="train-shell train-draft-shell">
+    <div class="train-tree-shell">
       <div class="train-plan train-draft-status">
-        <b>服务端草稿</b>
-        <span class="faint">候选 ${fmt(summary.candidates || 0)} · 纳入 ${fmt(summary.included || 0)} · 排除 ${fmt(summary.excluded || 0)}</span>
-        <span class="chip ${pending ? "warn" : ""}">pending_evaluations ${fmt(pending)}</span>
+        <b>训练数据</b>
+        <span class="faint">${treeCountsText(summary)}</span>
+        <span class="chip ${pending ? "warn" : ""}">待复核 ${fmt(pending)}</span>
+        ${tree.dirty ? `<span class="chip warn">有未生成的修改</span>` : `<span class="chip train">与最新 Build 一致</span>`}
         <span class="grow"></span>
-        <button type="button" class="ghost" id="trainTabDraft" data-train-tab="draft">决策预览</button>
         <button type="button" class="ghost" id="trainTabFiles" data-train-tab="files">历史文件</button>
-        <button type="button" class="primary" onclick="runStage('stage3',false)">运行 Stage 3</button>
-        <button type="button" class="ghost" onclick="runStage('dataset_evaluate',false)">dataset_evaluate</button>
+        <button type="button" class="ghost" onclick="runStage('dataset_evaluate',false)">DPO 评估</button>
+        <button type="button" class="primary" onclick="runStage('stage3',false)">生成训练文件</button>
+        <button type="button" class="ghost" onclick="jumpToRuns()">去交付中心打包</button>
       </div>
-      ${renderSplitWorkspace(draft.split_plan, draft.project_stats)}
-      ${buildWorkspace(draft.last_build, STATE.train.builds)}
-      <div class="train-main workspace-panel">
+      <section class="panel workspace-panel">
+        <div class="panel-h"><h3>黄金会话 → 切片样本</h3>
+          <span class="hint">在一层停用或改切分，下面的会话和切片一并生效</span><span class="grow"></span>
+          <div class="seg-ctl" role="group" aria-label="分组方式">
+            <button type="button" data-group-by="project" class="${tf.groupBy !== "split" ? "on" : ""}">按项目</button>
+            <button type="button" data-group-by="split" class="${tf.groupBy === "split" ? "on" : ""}">按 train / eval</button>
+          </div>
+        </div>
         <div class="toolbar">
-          <select id="dsProject" aria-label="按项目筛选"><option value="">全部项目</option>${projects.map(p => `<option value="${esc(p)}" ${tf.project === p ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>
-          <select id="dsSplit" aria-label="按训练切分筛选"><option value="">全部切分</option><option value="train" ${tf.split === "train" ? "selected" : ""}>train</option><option value="eval" ${tf.split === "eval" ? "selected" : ""}>eval</option></select>
-          <div class="filter-search"><input type="text" id="dsSearch" placeholder="搜索样本，回车确认" value="${esc(tf.q || "")}"></div>
+          <div class="filter-search"><input type="text" id="dsSearch" placeholder="搜索会话或样本，回车确认" value="${esc(tf.q || "")}"></div>
           <span class="grow"></span>
           <button type="button" class="ghost" id="dsReload">刷新</button>
         </div>
-        <div class="scroll"><table><thead><tr><th class="n">#</th><th>样本 / 项目</th><th>类型</th><th>切分</th><th>状态</th><th>决策</th></tr></thead><tbody>
-          ${(draft.rows || []).map((r, i) => draftRow(r, draft.offset + i)).join("") || emptyRow(6, tf.q || tf.project || tf.split ? "没有匹配的样本" : "草稿为空，请先完成 Stage 2/3")}
-        </tbody></table></div>
-        <div class="toolbar bottom">
-          <span class="count"><b>${draft.total ? fmt(draft.offset + 1) : 0}–${fmt(end)}</b>，共 ${fmt(draft.total || 0)} 条 · DPO 偏好对按 gate 与账本过滤</span>
-          <span class="grow"></span>
-          <button type="button" id="dsPrev" ${draft.offset <= 0 ? "disabled" : ""}>上一页</button>
-          <button type="button" id="dsNext" ${end >= (draft.total || 0) ? "disabled" : ""}>下一页</button>
-        </div>
-      </div>
+        <div class="panel-b" id="trainTreeBody"></div>
+      </section>
+      ${buildWorkspace(tree.last_build, STATE.train.builds)}
     </div>`;
-  syncDraftSelection();
+  renderTrainTree();
   loadTrainBuilds().catch(() => {});
-  $("#dsProject").onchange = e => { tf.project = e.target.value; tf.offset = 0; loadTrainDraft(); };
-  $("#dsSplit").onchange = e => { tf.split = e.target.value; tf.offset = 0; loadTrainDraft(); };
-  $("#dsSearch").onkeydown = e => { if (e.key === "Enter") { tf.q = e.target.value; tf.offset = 0; loadTrainDraft(); } };
+  $$("#view-train [data-group-by]").forEach(btn => {
+    btn.onclick = () => { tf.groupBy = btn.dataset.groupBy; tf.expanded = null; loadTrainDraft(); };
+  });
+  $("#dsSearch").onkeydown = e => { if (e.key === "Enter") { tf.q = e.target.value; renderTrainTree(); } };
   $("#dsReload").onclick = () => loadTrainDraft();
-  $("#dsPrev").onclick = () => { tf.offset = Math.max(0, tf.offset - 50); loadTrainDraft(); };
-  $("#dsNext").onclick = () => { tf.offset += 50; loadTrainDraft(); };
-  $("#draftReplanPreview")?.addEventListener("click", () => replanSplit(true).catch(e => toast(e.message, "err")));
-  $("#draftReplanSave")?.addEventListener("click", () => replanSplit(false).catch(e => toast(e.message, "err")));
-  $$("#view-train [data-split-project]").forEach(sel => {
-    sel.onchange = async () => {
-      const assignments = {...(STATE.train.splitPlan?.assignments || {}), [sel.dataset.splitProject]: sel.value};
-      await api("/api/dataset/draft/split", {method:"PUT", body: JSON.stringify({assignments})});
-      await loadTrainDraft();
-    };
-  });
-  $$("#view-train [data-draft-toggle]").forEach(btn => {
-    btn.onclick = () => setDraftDecisions([{sample_id: btn.dataset.draftToggle, action: btn.dataset.draftDecision, reason: "控制台切换"}]).catch(e => toast(e.message, "err"));
-  });
-  bindRows("#view-train", tr => { if (tr.dataset.sampleId) openDraftSample(tr.dataset.sampleId); });
   $("#trainTabFiles")?.addEventListener("click", () => loadTrainFiles());
 }
 async function loadTrain() { return loadTrainDraft(); }

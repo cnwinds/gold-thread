@@ -134,6 +134,93 @@ class DatasetDraftApiTests(unittest.TestCase):
         self.assertIn(sample_id, {row["sample_id"] for row in restored})
         self.assertTrue(self._draft_row(sample_id)["included"])
 
+    def _set_scope(self, scope: str, ident: str, action: str):
+        response = self.client.put(
+            "/api/dataset/draft/scopes",
+            json={"updates": [{"scope": scope, "id": ident, "action": action, "reason": "测试层级停用"}]},
+        )
+        self.assertEqual(200, response.status_code, response.text)
+
+    def test_session_scope_exclusion_cascades_to_samples_and_build(self):
+        self._set_scope("session", "s1", "exclude")
+        row = self._draft_row("step::s1::a1")
+        self.assertFalse(row["included"])
+        self.assertEqual("exclude", row["decision"])
+        self.assertEqual("session", row["decision_scope"])
+        self.assertTrue(self._draft_row("step::s2::a1")["included"])
+
+        stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)
+        sharegpt = read_jsonl(self.dirs["train"] / "sft_step_windows_sharegpt.jsonl")
+        self.assertNotIn("step::s1::a1", {r["sample_id"] for r in sharegpt})
+        self.assertIn("step::s2::a1", {r["sample_id"] for r in sharegpt})
+        trajectories = read_jsonl(self.dirs["train"] / "sft_gold_trajectories_sharegpt.jsonl")
+        self.assertNotIn("traj::s1", {r["sample_id"] for r in trajectories})
+
+        self._set_scope("session", "s1", "auto")
+        self.assertTrue(self._draft_row("step::s1::a1")["included"])
+        stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)
+        restored = read_jsonl(self.dirs["train"] / "sft_step_windows_sharegpt.jsonl")
+        self.assertIn("step::s1::a1", {r["sample_id"] for r in restored})
+
+    def test_project_scope_exclusion_covers_its_sessions_only(self):
+        self._set_scope("project", "game::alpha", "exclude")
+        row = self._draft_row("step::s1::a1")
+        self.assertFalse(row["included"])
+        self.assertEqual("project", row["decision_scope"])
+        self.assertTrue(self._draft_row("step::s2::a1")["included"])
+
+        gold = self.client.get("/api/gold/sessions").json()["sessions"]
+        by_id = {s["session_id"]: s for s in gold}
+        self.assertTrue(by_id["s1"]["dataset_excluded"])
+        self.assertEqual("project", by_id["s1"]["exclusion_scope"])
+        self.assertFalse(by_id["s2"]["dataset_excluded"])
+
+    def test_session_split_override_moves_only_that_session(self):
+        response = self.client.put(
+            "/api/dataset/draft/split",
+            json={"session_assignments": {"s1": "eval"}},
+        )
+        self.assertEqual(200, response.status_code, response.text)
+        row = self._draft_row("step::s1::a1")
+        self.assertEqual("eval", row["split"])
+        self.assertEqual("session", row["split_source"])
+        self.assertEqual("train", self._draft_row("step::s2::a1")["split"])
+
+        stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)
+        eval_rows = read_jsonl(self.dirs["train"] / "sft_step_windows_sharegpt.eval.jsonl")
+        train_rows = read_jsonl(self.dirs["train"] / "sft_step_windows_sharegpt.train.jsonl")
+        self.assertIn("step::s1::a1", {r["sample_id"] for r in eval_rows})
+        self.assertNotIn("step::s1::a1", {r["sample_id"] for r in train_rows})
+        self.assertIn("step::s2::a1", {r["sample_id"] for r in train_rows})
+
+        cleared = self.client.put(
+            "/api/dataset/draft/split",
+            json={"session_assignments": {"s1": "inherit"}},
+        )
+        self.assertEqual(200, cleared.status_code, cleared.text)
+        self.assertEqual("train", self._draft_row("step::s1::a1")["split"])
+
+    def test_tree_groups_gold_sessions_then_samples(self):
+        self._set_scope("session", "s2", "exclude")
+        response = self.client.get("/api/dataset/draft/tree")
+        self.assertEqual(200, response.status_code, response.text)
+        body = response.json()
+        groups = {g["key"]: g for g in body["groups"]}
+        self.assertEqual({"game::alpha", "game::beta"}, set(groups))
+        alpha = groups["game::alpha"]
+        self.assertEqual(1, len(alpha["sessions"]))
+        session = alpha["sessions"][0]
+        self.assertEqual("s1", session["session_id"])
+        self.assertTrue(session["samples"])
+        self.assertEqual(session["counts"]["candidates"], len(session["samples"]))
+        beta_session = groups["game::beta"]["sessions"][0]
+        self.assertTrue(beta_session["excluded"])
+        self.assertEqual(0, beta_session["counts"]["included"])
+
+        by_split = self.client.get("/api/dataset/draft/tree", params={"group_by": "split"})
+        self.assertEqual(200, by_split.status_code, by_split.text)
+        self.assertEqual({"train"}, {g["key"] for g in by_split.json()["groups"]})
+
     def test_existing_projects_keep_split_when_a_new_project_appears(self):
         self.cfg["synth"]["eval_ratio"] = 0.5
         initial_response = self.client.get("/api/dataset/draft")

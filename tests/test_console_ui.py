@@ -41,10 +41,12 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             "gold": (
                 'id="goldProject"', 'id="goldModel"', 'id="goldOutput"', 'id="goldSearch"',
                 'data-gold-open="${esc(s.session_id)}"', "goldSetStepGate",
+                "goldSetUsage", "data-gold-split",
             ),
             "train": (
                 'id="dsProject"', 'id="dsSplit"', 'id="dsSearch"',
-                "loadTrainDraft", "setDraftDecisions", "renderSplitWorkspace",
+                "loadTrainDraft", "setDraftDecisions", "renderTrainTree",
+                "treeGroupHtml", "data-scope-toggle", "data-session-split",
             ),
             "tasks": ("taskRowHtml", "pollTaskLogs", "taskOpenAction"),
             "delivery": ("selectExportProfile", "exportPackage", "downloadZip"),
@@ -58,23 +60,24 @@ class ConsoleWorkspaceTests(unittest.TestCase):
     def test_train_draft_uses_server_decisions_not_local_file_switches(self) -> None:
         for snippet in (
             'api("/api/dataset/draft', 'function setDraftDecisions(',
-            'function renderSplitWorkspace(', 'function replanSplit(',
-            'body.dirty', 'data-draft-decision', 'id="draftBuild"',
-            'trainRequestCurrent', 'expected_hash', 'syncDraftSelection',
-            'dataset_evaluate', 'pending_evaluations', 'DPO 偏好对',
-            'train-split-tools', 'function trainTableHead(',
+            'api("/api/dataset/draft/tree', 'function renderTrainTree(',
+            'function treeGroupHtml(', 'function treeSessionHtml(', 'function treeSampleHtml(',
+            'function setScopeDecision(', 'data-scope-toggle', 'data-session-split',
+            'data-project-split', 'data-sample-toggle', 'function bindTrainTree(',
+            'body.dirty', 'id="draftBuild"',
+            'trainRequestCurrent', 'syncDraftSelection',
+            'pending_evaluations', 'DPO 偏好对',
             'loadTrainBuilds', 'buildWorkspace', 'build_id',
             'onTaskFinished(j)', 'RUNS_REQUEST_SEQ', 'DRAWER_REQUEST_SEQ',
             'e.target.closest("[data-draft-toggle]")',
+            'function goldSetUsage(', 'function goldSetSessionSplit(',
         ):
             self.assertIn(snippet, HTML)
         self.assertNotIn("gt.trainInclude", HTML)
         self.assertNotIn("function setTrainInclude", HTML)
-        self.assertIn(".train-draft-shell .train-main{grid-column:1 / -1", HTML)
-        self.assertIn("grid-template-rows:auto minmax(168px,320px) minmax(0,1fr)", HTML)
-        desktop = HTML.index("grid-template-rows:auto minmax(168px,320px) minmax(0,1fr)")
-        mobile = HTML.index("grid-template-rows:auto auto auto minmax(280px,1fr)")
-        self.assertGreater(mobile, desktop)
+        self.assertNotIn("function renderSplitWorkspace(", HTML)
+        self.assertNotIn("预览重切分", HTML)
+        self.assertIn(".tree-node{", HTML)
         self.assertIn(".ds-row{display:grid;grid-template-columns:minmax(0,1fr) auto", HTML)
         self.assertIn("function trainTableHead(", HTML)
         self.assertIn("${trainTableHead(kind)}", HTML)
