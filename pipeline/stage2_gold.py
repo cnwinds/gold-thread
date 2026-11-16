@@ -18,13 +18,14 @@ from . import judge
 from . import steps as stepcat
 from .common import pilog
 from .common.config import load_config, section_hash, stage_dirs
-from .common.format import to_sharegpt
+from .common.format import default_tools_json, to_sharegpt
 from .common.quality import (
     LOW_LEVEL_MISTAKE_OUTPUT_REGEX,
     NEXT_STEP_OOPS_REGEX,
     analyze_step_quality,
     compact_thinking,
     evaluate_effective_step,
+    rewrite_preserves_language,
 )
 from .common.store import (
     dump_index,
@@ -363,6 +364,8 @@ def _rewrite_ok(new: str, msg: Dict[str, Any]) -> bool:
     new = (new or "").strip()
     if len(new) < 10:
         return False
+    if not rewrite_preserves_language(old, new):
+        return False
     cap = max(int(len(old) * 1.2), 400)
     return len(new) <= cap
 
@@ -605,6 +608,7 @@ def _dpo_from_pruned(
                 "conversations": convs,
                 "chosen": chosen[0],
                 "rejected": rejected[0],
+                "tools": default_tools_json(),
                 "metadata": {
                     "source": "stage2_pruned",
                     "reason": pd["reason"],

@@ -323,20 +323,26 @@ class SessionDeleteApiTests(unittest.TestCase):
                 self.assertEqual(409, response.status_code)
                 self.assertIn("正在删除会话", response.json()["detail"])
 
-    def test_delete_job_conflicts_with_other_writers(self) -> None:
+    def test_delete_job_queues_when_other_writers_running(self) -> None:
+        from unittest.mock import patch
+
         running = Job("stage1", False)
         with JOBS_LOCK:
             JOBS[running.id] = running
-        with self.assertRaises(HTTPException) as ctx:
-            _start("delete", False, {"sessions": [SID]})
-        self.assertEqual(409, ctx.exception.status_code)
+        with patch("server.app.task_registry.register_job"), patch(
+            "server.app.threading.Thread"
+        ):
+            queued = _start("delete", False, {"sessions": [SID]})
+        self.assertEqual("queued", queued.status)
         with JOBS_LOCK:
             JOBS.clear()
             deleting = Job("delete", False, {"sessions": [SID]})
             JOBS[deleting.id] = deleting
-        with self.assertRaises(HTTPException) as reverse:
-            _start("stage1", False)
-        self.assertEqual(409, reverse.exception.status_code)
+        with patch("server.app.task_registry.register_job"), patch(
+            "server.app.threading.Thread"
+        ):
+            reverse = _start("stage1", False)
+        self.assertEqual("queued", reverse.status)
 
     def test_delete_task_has_no_link_to_deleted_session(self) -> None:
         job = Job("delete", False, {"sessions": [SID]})

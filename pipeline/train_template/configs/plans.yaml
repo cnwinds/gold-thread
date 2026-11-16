@@ -35,6 +35,7 @@ sft:
     auto_select: false
     on_oom: null
 
+  # 本机 d9dbbbd1 数据：12288/10240 全量中途 OOM；优先靠开训前探测+余量选档，8k/6k 作稳妥兜底
   - id: sft_single
     min_gpus: 1
     max_procs: 1
@@ -43,7 +44,7 @@ sft:
     cutoff_len: 12288
     global_batch: 4
     status: verified
-    note: "单卡实测约 20 s/步，峰值约 76GB；16384 首步 OOM"
+    note: "单卡；旧数据约 76GB。新数据可能中途 OOM，开训前探测+probe_max_peak_gb 余量会自动降级"
     auto_select: true
     on_oom: sft_single_10k
 
@@ -55,7 +56,7 @@ sft:
     cutoff_len: 10240
     global_batch: 4
     status: estimated
-    note: "单卡退路；保留全部 548 条（3 条长观察结果被压缩）"
+    note: "单卡退路；本机新数据全量曾中途 OOM，探测峰值过高时继续降"
     auto_select: false
     on_oom: sft_single_8k
 
@@ -67,7 +68,19 @@ sft:
     cutoff_len: 8192
     global_batch: 4
     status: estimated
-    note: "单卡最后退路；保留 547/548 条"
+    note: "单卡稳妥档；本机新数据曾跑过前几十步未 OOM"
+    auto_select: false
+    on_oom: sft_single_6k
+
+  - id: sft_single_6k
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    deepspeed: null
+    cutoff_len: 6144
+    global_batch: 4
+    status: estimated
+    note: "单卡最后兜底，优先保证跑完"
     auto_select: false
     on_oom: null
 
@@ -98,17 +111,31 @@ dpo:
   - id: dpo_z3_offload
     min_gpus: 2
     min_gpu_mem_gb: 75
+    min_ram_gb: 128
     deepspeed: ds_z3_offload.json
     cutoff_len: 8192
     global_batch: 4
     status: estimated
     note: "ZeRO-3 + 参数卸载到 CPU，显存最宽裕，比 dpo_z3 慢约 20-40%；需要主机内存 ≥ 128GB"
     auto_select: false
+    on_oom: dpo_z3_offload_6k
+
+  - id: dpo_z3_offload_6k
+    min_gpus: 2
+    min_gpu_mem_gb: 75
+    min_ram_gb: 128
+    deepspeed: ds_z3_offload.json
+    cutoff_len: 6144
+    global_batch: 4
+    status: estimated
+    note: "多卡卸载最后一档；再不行才退到不卸载的 dpo_ddp（5120）"
+    auto_select: false
     on_oom: dpo_ddp
 
   - id: dpo_z3_offload_10k
     min_gpus: 2
     min_gpu_mem_gb: 75
+    min_ram_gb: 128
     deepspeed: ds_z3_offload.json
     cutoff_len: 10240
     global_batch: 4
@@ -140,6 +167,60 @@ dpo:
     auto_select: false
     on_oom: null
 
+  # 单卡：27B 权重卸载到 CPU 内存（ZeRO-3 offload_param），显存只留激活，长度余量与多卡卸载相同
+  - id: dpo_single_offload_10k
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    min_ram_gb: 128
+    deepspeed: ds_z3_offload.json
+    cutoff_len: 10240
+    global_batch: 4
+    status: estimated
+    note: "单卡 ZeRO-3 + 参数卸载到 CPU（权重约 54GB 放主机内存）。每卡激活与 dpo_z3_offload_10k 相同；比多卡慢约一倍"
+    auto_select: true
+    on_oom: dpo_single_offload_8k
+
+  - id: dpo_single_offload_8k
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    min_ram_gb: 128
+    deepspeed: ds_z3_offload.json
+    cutoff_len: 8192
+    global_batch: 4
+    status: estimated
+    note: "单卡卸载退路"
+    auto_select: false
+    on_oom: dpo_single_offload_6k
+
+  - id: dpo_single_offload_6k
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    min_ram_gb: 128
+    deepspeed: ds_z3_offload.json
+    cutoff_len: 6144
+    global_batch: 4
+    status: estimated
+    note: "单卡卸载退路"
+    auto_select: false
+    on_oom: dpo_single_offload_4k
+
+  - id: dpo_single_offload_4k
+    min_gpus: 1
+    max_procs: 1
+    min_gpu_mem_gb: 75
+    min_ram_gb: 128
+    deepspeed: ds_z3_offload.json
+    cutoff_len: 4096
+    global_batch: 4
+    env: {LOWMEM_DPO_CHUNK: "512"}
+    status: estimated
+    note: "单卡卸载最后一档"
+    auto_select: false
+    on_oom: null
+
   - id: dpo_single
     min_gpus: 1
     max_procs: 1
@@ -148,7 +229,7 @@ dpo:
     cutoff_len: 5120
     global_batch: 4
     status: verified
-    note: "单卡实测：5120 余量约 5GB（保留 65/100 训练对）；6144 峰值 77.9GB；8192 OOM"
+    note: "不卸载（主机内存不足 128GB 时才会选到）。单卡实测：5120 余量约 5GB；6144 峰值 77.9GB；8192 OOM"
     auto_select: true
     on_oom: dpo_single_4k
 

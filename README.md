@@ -194,7 +194,7 @@ LLaMA-Factory 的 `SharegptDatasetConverter` 要求严格 `user/assistant` 交�
 - **原始数据**：采集（pi/Cursor）· 已加入会话库 · 分析/重新分析 · 改标签 · 回合清洗
 - **黄金数据**：每会话 SFT 窗口 vs DPO 对去向 · 质量报告 · 血缘
 - **训练数据**：将要生成的数据集 · 样本回到 sid
-- **梳理与交付**：运行管线 · 选 export profile 打包 · 历史 zip
+- **交付**：选 export profile 打包最新 Build · 历史 zip（说明 / 长度分布 / 按格式下载 / 删除）
 - **配置**：在线编辑 `pipeline.yaml`
 
 （无独立「审核」侧栏；历史 `review.py` CLI 仍可跑模型评审，见 `python -m pipeline.run review`。）

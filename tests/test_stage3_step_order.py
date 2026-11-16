@@ -92,10 +92,9 @@ class Stage3StepOrderTests(unittest.TestCase):
             "pipeline.stage3_synth.evaluate_session_synthesis", return_value=eval_res
         ), mock.patch("pipeline.stage3_synth.judge.enabled", return_value=False), mock.patch(
             "pipeline.stage3_synth.write_handoff", return_value={}
-        ), mock.patch(
-            "pipeline.package.build_delivery_zip", return_value={"zip_name": "x.zip"}
-        ):
+        ), mock.patch("pipeline.package.build_delivery_zip") as package_mock:
             stage3_synth.run(force=False, log=lines.append, cfg=cfg)
+            package_mock.assert_not_called()
 
         visible = [x for x in lines if not str(x).startswith("@@STEP ")]
         begins = [i for i, x in enumerate(visible) if str(x).startswith("▶ 开始 ·") and (

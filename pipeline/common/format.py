@@ -19,6 +19,23 @@ from typing import Any, Dict, List, Optional
 TOOL_CALL_STYLES = ("hermes-json", "coder-xml")
 
 
+def default_tools_json() -> str:
+    """ShareGPT / LLaMA-Factory 样本的 ``tools`` 列（与推理侧同一套函数声明）。"""
+    from .pilog import DEFAULT_TOOLS
+
+    return json.dumps(DEFAULT_TOOLS, ensure_ascii=False)
+
+
+def ensure_tools_column(row: Dict[str, Any]) -> Dict[str, Any]:
+    """缺 ``tools`` 时补上默认工具定义；已有非空值不改。"""
+    tools = row.get("tools")
+    if tools not in (None, ""):
+        return row
+    out = dict(row)
+    out["tools"] = default_tools_json()
+    return out
+
+
 def _render_tc_hermes(name: str, arguments: Dict[str, Any]) -> str:
     return (
         "<tool_call>\n"

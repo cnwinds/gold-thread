@@ -176,6 +176,8 @@ def _normalize_response(value: Any) -> Any:
 
 def normalize_sharegpt_row(row: Dict[str, Any], *, ranking: bool) -> Optional[Dict[str, Any]]:
     """规整一条样本。结构仍不合法时返回 None（调用方应丢弃并记录）。"""
+    from pipeline.common.format import ensure_tools_column
+
     out = dict(row)
     out["conversations"] = normalize_messages(row.get("conversations") or [])
     if ranking:
@@ -185,7 +187,7 @@ def normalize_sharegpt_row(row: Dict[str, Any], *, ranking: bool) -> Optional[Di
             out["rejected"] = _normalize_response(out.get("rejected"))
     if alignment_error(out["conversations"], ranking=ranking):
         return None
-    return out
+    return ensure_tools_column(out)
 
 
 def rows_are_aligned(rows: Sequence[Dict[str, Any]], *, ranking: bool) -> bool:

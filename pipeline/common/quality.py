@@ -175,6 +175,46 @@ def evaluate_effective_step(
     return eff_q
 
 
+_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def thinking_script_counts(text: str) -> tuple[int, int]:
+    """返回 (汉字数, 拉丁字母数)。"""
+    s = text or ""
+    return len(_HAN_RE.findall(s)), len(_LATIN_RE.findall(s))
+
+
+def dominant_thinking_lang(text: str, *, min_chars: int = 12) -> str:
+    """主导语种：zh / en / mixed / unknown。"""
+    zh, en = thinking_script_counts(text)
+    total = zh + en
+    if total < min_chars:
+        return "unknown"
+    zh_ratio = zh / total
+    if zh_ratio >= 0.65:
+        return "zh"
+    if zh_ratio <= 0.35:
+        return "en"
+    return "mixed"
+
+
+def rewrite_preserves_language(old: str, new: str) -> bool:
+    """改写不得把清晰的中/英语种翻成另一种；原文 mixed/unknown 不拦。"""
+    origin = dominant_thinking_lang(old)
+    if origin in ("unknown", "mixed"):
+        return True
+    rewritten = dominant_thinking_lang(new)
+    if rewritten in ("unknown", origin):
+        return True
+    if rewritten == "mixed":
+        zh, en = thinking_script_counts(new)
+        total = zh + en or 1
+        other = zh if origin == "en" else en
+        return (other / total) <= 0.25
+    return False
+
+
 def compact_thinking(thinking: str, target_max_chars: int = 1600) -> str:
     """启发式压缩：保留首段（观测）+ 中段无自我推翻内容 + 末两段（收敛结论）。"""
     if not thinking or len(thinking) <= target_max_chars:

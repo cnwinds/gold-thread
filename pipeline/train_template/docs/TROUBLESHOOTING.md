@@ -71,7 +71,7 @@
 
 ### GPU 显存不足（CUDA OOM）
 
-- 编号：`cuda_oom`；阶段：sft, dpo, eval；命中 1 次，最近 2026-11-06 03:57:16
+- 编号：`cuda_oom`；阶段：sft, dpo, eval；命中 4 次，最近 2026-11-16 03:49:13
 - 日志特征：`CUDA out of memory`、`OutOfMemoryError`、`cuMemAlloc failed`、`Allocation on device`
 - 原因：当前方案的 cutoff_len 对这张卡太长。梯度累积不影响峰值。
 - 自动处理：自动换下一个方案
@@ -192,6 +192,13 @@
 - 编号：`merge_cpu_oom`；阶段：merge；命中 0 次
 - 原因：合并 27B 时 CPU 内存峰值约 60GB。
 - 人工处理：保证可用内存 ≥ 64GB，保留 --export_size 5；不要在内存不足时反复重试把盘写满。
+
+### 推理服务：vLLM 启动时捕获 CUDA graph 阶段 OOM
+
+- 编号：`vllm_cudagraph_oom`；阶段：serve；命中 0 次
+- 日志特征：`Capturing CUDA graphs.*OOM`
+- 原因：没加 --language-model-only 时会加载视觉塔，并按图片输入做 encoder 显存 profiling，--gpu-memory-utilization 0.90 在捕获 CUDA graph 时显存耗尽（A800 80GB 实测，2026-11-09）。
+- 人工处理：按 docs/DEPLOY.md 的命令启动：--language-model-only --gpu-memory-utilization 0.94 --max-model-len auto --max-num-seqs 8，并设置 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True。A800 80GB 上 KV cache 19.5 GiB，auto 取到完整 262144 上下文，整卡约 74GB，已验证可用，不用再逐档探测。需要图片输入时去掉 --language-model-only，并把利用率降到 0.85 左右、max-model-len 设小一些。
 
 ## 未识别问题（待解决）
 

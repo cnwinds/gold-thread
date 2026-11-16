@@ -1,4 +1,5 @@
 # 本机路径、项目设置与全局开关。换机器、做新训练包都只改这个文件。
+# 本目录是模板：不要直接开训。复制到 packages/<包名>/ 后改路径再训（见 TEMPLATE.md / docs/LAYOUT.md）。
 
 # ---------- 项目：用这个目录做新的训练包时改这一段 ----------
 project:
@@ -12,33 +13,31 @@ project:
     eval: {eval: gt_sft_eval_lf}           # autotrain.py eval 与合并后冒烟用的验证集
 
 # ---------- 本机路径 ----------
-# 本机存储：
-#   /model             只读共享存储，只放下载的底座
-#   /data              机器本地盘：训练中间数据（过滤后的数据、checkpoint），换机器就不要了
-#   /cloud/cloud-ssd1  挂载盘：成果（最终 adapter、合并模型、运行记录），训练完整块盘挂到别的机器部署
-# /data/models、/data/saves 是指向 /model、挂载盘的旧软链接，这里一律写真实路径。
+# 复制成 packages/<包名>/ 后务必改成：
+#   work_dir:   /data/work/<包名>
+#   saves_dir:  /cloud/cloud-ssd1/packages/<包名>/saves
+#   merged_dir: /cloud/cloud-ssd1/packages/<包名>/models
 
-python: /usr/local/miniconda3/envs/py312/bin/python   # 训练环境解释器。用别的 python 启动 autotrain 会自动切到这个
-base_model: /model/ModelScope/Qwen/Qwen3.8-27B   # 原始底座（只读）
-sft_merged: ""                                   # DPO 的底座。留空 = 自动用最近一次成功合并的 SFT 模型
-work_dir: /data/goldthread/work                  # 本地盘：<运行名>/data_<cutoff> 与 <运行名>/output（checkpoint）
-saves_dir: /cloud/cloud-ssd1/saves/goldthread    # 挂载盘：训练成功后发布的最终 adapter（不含 checkpoint），每个几百 MB
-merged_dir: /cloud/cloud-ssd1/models             # 挂载盘：合并后的整模，每个约 52GB，目录名 = Qwen3.8-27B-goldthread-<阶段>-<运行名>
+python: /usr/local/miniconda3/envs/py312/bin/python
+base_model: /model/ModelScope/Qwen/Qwen3.8-27B
+sft_merged: ""
+work_dir: /data/work/_template
+saves_dir: /cloud/cloud-ssd1/packages/_template/saves
+merged_dir: /cloud/cloud-ssd1/packages/_template/models
 
-# 长度过滤用的 tokenizer（与打包时一致，计数比 27B 自带 tokenizer 偏保守）。
-# 不存在时自动退回训练模型自带的 tokenizer。
 length_tokenizer: /model/ModelScope/Qwen/Qwen2.5-0.5B-Instruct
+llamafactory_dir: /opt/LLaMA-Factory
 
-llamafactory_dir: /opt/LLaMA-Factory             # setup_env.sh 安装位置
-
-# 磁盘余量：开训前检查 work_dir 与 saves_dir；合并前检查 merged_dir，不够就跳过合并（之后可用 autotrain.py merge 补）
 min_free_gb_work: 20
 min_free_gb_saves: 2
 min_free_gb_merge: 53
-clean_work_on_success: true   # 成功发布 adapter 后删除本地 work_dir/<运行名>；失败的运行一律保留现场
+clean_work_on_success: true
 
-# 自动处理
-max_attempts: 4               # 单次 autotrain 最多尝试次数（含首次）
-auto_fix_install: true        # 允许按问题库自动执行 pip 安装类修复
-gpu_busy_mb: 2048             # GPU 已用显存超过这个值视为被占用，不参与训练
-timeout_hours: 8              # 单次尝试超时
+max_attempts: 4
+auto_fix_install: true
+gpu_busy_mb: 2048
+timeout_hours: 8
+probe_before_train: true   # 正式 sft/dpo 开训前先探测；可用 --no-probe 跳过
+probe_max_peak_gb: 70      # 探测时训练进程打印的 max_memory_allocated 达到该值就继续降 cutoff；80GB 卡留约 10GB 给缓存与碎片
+train_longest_first: true  # 全量按 token 从长到短，尽早暴露 OOM
+fill_missing_tools_from_sft: true  # DPO 行缺 tools 且 SFT 全部行共用一份工具定义时，在过滤副本里补上（data/ 不改）

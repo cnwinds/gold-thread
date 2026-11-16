@@ -223,6 +223,15 @@ class DeliveryZipTests(unittest.TestCase):
                 f"goldthread-train-{result['package_hash']}.zip",
             )
             self.assertEqual(8, len(result["package_hash"]))
+            self.assertIn(f"{PACK}/data/length_stats.json", names)
+            length_stats = json.loads(
+                (_at(unzipped, "data", "length_stats.json")).read_text(encoding="utf-8")
+            )
+            self.assertTrue(length_stats["ok"])
+            self.assertEqual("pack", length_stats["source"])
+            self.assertEqual("tokens", length_stats["unit"])
+            self.assertIn("sft.train", length_stats["datasets"])
+            self.assertEqual(1, length_stats["datasets"]["sft.train"]["count"])
             man = json.loads((_at(unzipped, "data", "MANIFEST.json")).read_text(encoding="utf-8"))
             self.assertEqual(result["package_hash"], man["package_hash"])
             self.assertEqual(result["config_hash"], man["config_hash"])
@@ -640,6 +649,201 @@ class DeliveryListingTests(unittest.TestCase):
         from server.app import _package_layout_note
         self.assertEqual("goldthread-train 模板", _package_layout_note("goldthread-train-bbbbbbbb.zip"))
         self.assertEqual("交付包", _package_layout_note("goldthread-delivery-aaaaaaaa.zip"))
+
+    def test_zip_docs_and_length_stats_from_pack(self):
+        from server.app import _zip_doc_markdown, _zip_length_stats
+        from unittest.mock import patch
+        from pipeline.common.length_stats import (
+            build_length_stats,
+            dumps_length_stats,
+            sidecar_path,
+        )
+
+        class _FakeTok:
+            def encode(self, text, add_special_tokens=False):  # noqa: ARG002
+                class _Ids:
+                    # 每 4 字符约 1 token，便于拉开短/长样本
+                    ids = list(range(max(1, len(text) // 4)))
+                return _Ids()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            zpath = Path(tmp) / "goldthread-train-cccccccc.zip"
+            short = {
+                "sample_id": "s1",
+                "conversations": [
+                    {"from": "human", "value": "短问"},
+                    {"from": "gpt", "value": "短答"},
+                ],
+            }
+            long = {
+                "sample_id": "s2",
+                "conversations": [
+                    {"from": "human", "value": "长问" * 4000},
+                    {"from": "gpt", "value": "长答" * 4000},
+                ],
+            }
+            with patch("pipeline.common.seqlength.find_tokenizer", return_value=(_FakeTok(), "fake-tok")):
+                packed = build_length_stats(
+                    {"sft.train.lf.jsonl": [short, long]},
+                    length_gate={"_skip": {"skip_reason": "demo"}},
+                    source="pack",
+                )
+            with zipfile.ZipFile(zpath, "w") as zf:
+                zf.writestr(
+                    "goldthread-train/data/MANIFEST.json",
+                    json.dumps({
+                        "package_hash": "cccccccc",
+                        "build_id": "build-demo",
+                        "length_gate": {"_skip": {"skip_reason": "demo"}},
+                    }),
+                )
+                zf.writestr("goldthread-train/README.md", "# 训练包说明\n\n用于测试。\n")
+                zf.writestr(
+                    "goldthread-train/data/sft.train.lf.jsonl",
+                    json.dumps(short, ensure_ascii=False) + "\n" + json.dumps(long, ensure_ascii=False) + "\n",
+                )
+                zf.writestr(
+                    "goldthread-train/data/length_stats.json",
+                    dumps_length_stats(packed),
+                )
+            docs = _zip_doc_markdown(zpath, build_id="")
+            self.assertIn("训练包说明", docs["markdown"])
+            self.assertTrue(any(n.endswith("README.md") for n in docs["docs"]))
+            # 有静态文件时不得再调用分词器
+            with patch("pipeline.common.seqlength.find_tokenizer", side_effect=AssertionError("must read static")):
+                stats = _zip_length_stats(zpath)
+            self.assertTrue(stats["ok"])
+            self.assertEqual("pack", stats["source"])
+            self.assertEqual("tokens", stats["unit"])
+            self.assertFalse(stats["estimated"])
+            self.assertEqual("fake-tok", stats["tokenizer"])
+            hist = stats["datasets"]["sft.train"]
+            self.assertEqual(2, hist["count"])
+            self.assertEqual(2, sum(b["count"] for b in hist["bins"]))
+            self.assertGreater(hist["max"], hist["mean"])
+            self.assertGreaterEqual(hist["max"], 2048)
+            labels = [b["label"] for b in hist["bins"]]
+            self.assertIn("8k–10k", labels)
+            self.assertIn("10k–12k", labels)
+            self.assertIn("over_10k", hist)
+            self.assertTrue(any(b["count"] for b in hist["bins"] if b["lo"] == 0))
+            self.assertTrue(any(b["count"] for b in hist["bins"] if b["hi"] > 2048 and b["count"]))
+            self.assertEqual("demo", stats["length_gate"]["_skip"]["skip_reason"])
+
+            # 旧包：无静态文件时回退计算并写 sidecar，之后只读 sidecar
+            legacy = Path(tmp) / "goldthread-train-dddddddd.zip"
+            with zipfile.ZipFile(legacy, "w") as zf:
+                zf.writestr(
+                    "goldthread-train/data/MANIFEST.json",
+                    json.dumps({"package_hash": "dddddddd", "length_gate": {}}),
+                )
+                zf.writestr(
+                    "goldthread-train/data/sft.train.lf.jsonl",
+                    json.dumps(short, ensure_ascii=False) + "\n",
+                )
+            with patch("pipeline.common.seqlength.find_tokenizer", return_value=(_FakeTok(), "fake-tok")):
+                legacy_stats = _zip_length_stats(legacy)
+            self.assertTrue(legacy_stats["ok"])
+            self.assertEqual("legacy", legacy_stats["source"])
+            self.assertTrue(sidecar_path(legacy).is_file())
+            with patch("pipeline.common.seqlength.find_tokenizer", side_effect=AssertionError("sidecar")):
+                again = _zip_length_stats(legacy)
+            self.assertEqual("sidecar", again["source"])
+            self.assertEqual(1, again["datasets"]["sft.train"]["count"])
+
+    def test_history_includes_static_length_preview(self):
+        from unittest.mock import patch
+        from pipeline.common.length_stats import build_length_stats, dumps_length_stats, pack_length_preview
+        from server.app import export_history
+
+        class _FakeTok:
+            def encode(self, text, add_special_tokens=False):  # noqa: ARG002
+                class _Ids:
+                    ids = list(range(max(1, len(text) // 4)))
+                return _Ids()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            delivery = Path(tmp)
+            zpath = delivery / "goldthread-train-eeeeeeee.zip"
+            row = {
+                "sample_id": "s1",
+                "conversations": [
+                    {"from": "human", "value": "问" * 200},
+                    {"from": "gpt", "value": "答" * 200},
+                ],
+            }
+            with patch("pipeline.common.seqlength.find_tokenizer", return_value=(_FakeTok(), "fake-tok")):
+                stats = build_length_stats({"sft.train.lf.jsonl": [row]}, source="pack")
+            preview = pack_length_preview(stats)
+            self.assertIsNotNone(preview)
+            self.assertEqual(1, preview["sft"]["count"])
+            self.assertTrue(preview["sft"]["bins"])
+            self.assertTrue(preview["sft"]["dense"])
+            self.assertGreaterEqual(len(preview["sft"]["bins"]), 16)
+            self.assertIn("spark", stats["datasets"]["sft.train"])
+            with zipfile.ZipFile(zpath, "w") as zf:
+                zf.writestr(
+                    "goldthread-train/data/MANIFEST.json",
+                    json.dumps({
+                        "package_hash": "eeeeeeee",
+                        "counts": {"sft.train.lf.jsonl": 1},
+                        "format_contract": {"label": "Qwen XML", "profile": "qwen-xml"},
+                    }),
+                )
+                zf.writestr("goldthread-train/data/length_stats.json", dumps_length_stats(stats))
+            with patch("server.app._delivery_dir", return_value=delivery):
+                hist = export_history()
+            self.assertEqual(1, hist["total"])
+            pack = hist["packs"][0]
+            self.assertEqual(zpath.name, pack["name"])
+            self.assertIsNotNone(pack["length"])
+            self.assertEqual(1, pack["length"]["sft"]["count"])
+            self.assertTrue(pack["length"]["sft"]["dense"])
+            self.assertEqual(
+                len(stats["datasets"]["sft.train"]["spark"]),
+                len(pack["length"]["sft"]["bins"]),
+            )
+
+    def test_export_pack_delete_removes_zip_and_sidecar(self):
+        from unittest.mock import patch
+        from pipeline.common.length_stats import sidecar_path, write_length_stats_sidecar
+        from server.app import export_pack_delete
+        from fastapi import HTTPException
+
+        with tempfile.TemporaryDirectory() as tmp:
+            delivery = Path(tmp)
+            zpath = delivery / "goldthread-train-deadbeef.zip"
+            zpath.write_bytes(b"PK\x03\x04fake")
+            write_length_stats_sidecar(zpath, {
+                "version": 1,
+                "ok": True,
+                "source": "sidecar",
+                "datasets": {},
+            })
+            side = sidecar_path(zpath)
+            self.assertTrue(side.is_file())
+            with patch("server.app._delivery_dir", return_value=delivery):
+                out = export_pack_delete(name=zpath.name)
+            self.assertTrue(out["ok"])
+            self.assertEqual(zpath.name, out["name"])
+            self.assertFalse(zpath.exists())
+            self.assertFalse(side.exists())
+            with patch("server.app._delivery_dir", return_value=delivery):
+                with self.assertRaises(HTTPException) as ctx:
+                    export_pack_delete(name=zpath.name)
+            self.assertEqual(404, ctx.exception.status_code)
+
+    def test_export_pack_delete_rejects_path_traversal(self):
+        from unittest.mock import patch
+        from server.app import export_pack_delete
+        from fastapi import HTTPException
+
+        with tempfile.TemporaryDirectory() as tmp:
+            delivery = Path(tmp)
+            with patch("server.app._delivery_dir", return_value=delivery):
+                with self.assertRaises(HTTPException) as ctx:
+                    export_pack_delete(name="../outside.zip")
+            self.assertEqual(400, ctx.exception.status_code)
 
 
 if __name__ == "__main__":

@@ -394,7 +394,8 @@ def dpo_decision_for(
     return {"action": "auto", "reason": ""}
 
 
-SCOPE_KINDS = ("project", "session")
+SCOPE_KINDS = ("project", "session", "session_sft", "session_dpo")
+KIND_SCOPES = ("session_sft", "session_dpo")
 
 
 def scope_key(scope: str, ident: str) -> str:
@@ -413,6 +414,10 @@ def _scope_entry(draft: Dict[str, Any], scope: str, ident: str) -> Dict[str, Any
     }
 
 
+def kind_scope_for(*, is_dpo: bool = False) -> str:
+    return "session_dpo" if is_dpo else "session_sft"
+
+
 def exclusion_for(
     sample_id: str,
     project: str,
@@ -422,11 +427,16 @@ def exclusion_for(
     *,
     is_dpo: bool = False,
 ) -> Dict[str, Any]:
-    """按 项目 → 会话 → 样本 查人工停用。上层停用时下层样本一律停用。
+    """按 项目 → 会话 → 会话×种类 → 样本 查人工停用。上层停用时下层样本一律停用。
 
     返回的 ``scope`` 说明是哪一层做的决定，界面据此提示「在会话层恢复」。
     """
-    for scope, ident in (("project", project), ("session", session_id)):
+    kind_scope = kind_scope_for(is_dpo=is_dpo)
+    for scope, ident in (
+        ("project", project),
+        ("session", session_id),
+        (kind_scope, session_id),
+    ):
         if not ident:
             continue
         entry = _scope_entry(draft, scope, ident)
@@ -444,10 +454,16 @@ def exclusion_for(
 def layer_exclusion(
     draft: Dict[str, Any], scope: str, ident: str, project: str = ""
 ) -> Dict[str, Any]:
-    """某一层本身或它的上层是否被停用（会话层还要看所属项目）。"""
-    chain = [("project", ident)] if scope == "project" else [
-        ("project", project), ("session", ident),
-    ]
+    """某一层本身或它的上层是否被停用（会话层还要看所属项目）。
+
+    ``scope`` 可为 ``project`` / ``session`` / ``session_sft`` / ``session_dpo``。
+    """
+    if scope == "project":
+        chain = [("project", ident)]
+    elif scope in KIND_SCOPES:
+        chain = [("project", project), ("session", ident), (scope, ident)]
+    else:
+        chain = [("project", project), ("session", ident)]
     for kind, key in chain:
         if not key:
             continue
@@ -455,6 +471,23 @@ def layer_exclusion(
         if entry["action"] == "exclude":
             return {**entry, "scope": kind}
     return {"action": "auto", "reason": "", "scope": ""}
+
+
+def session_kind_exclusions(
+    draft: Dict[str, Any], session_id: str, project: str = ""
+) -> Dict[str, Any]:
+    """黄金页用的会话停用摘要：整会话 / 仅 SFT / 仅 DPO。"""
+    session = layer_exclusion(draft, "session", session_id, project)
+    sft = layer_exclusion(draft, "session_sft", session_id, project)
+    dpo = layer_exclusion(draft, "session_dpo", session_id, project)
+    return {
+        "session_excluded": session["action"] == "exclude",
+        "session_exclusion_scope": session.get("scope", ""),
+        "sft_excluded": sft["action"] == "exclude",
+        "sft_exclusion_scope": sft.get("scope", ""),
+        "dpo_excluded": dpo["action"] == "exclude",
+        "dpo_exclusion_scope": dpo.get("scope", ""),
+    }
 
 
 def update_scope_decisions(
@@ -470,7 +503,7 @@ def update_scope_decisions(
             ident = str(item.get("id") or "").strip()
             action = str(item.get("action") or "").strip()
             if scope not in SCOPE_KINDS:
-                raise ValueError("scope 必须是 project|session")
+                raise ValueError("scope 必须是 project|session|session_sft|session_dpo")
             if not ident:
                 raise ValueError("id 不能为空")
             if action not in ("exclude", "auto"):

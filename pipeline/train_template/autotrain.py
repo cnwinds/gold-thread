@@ -12,7 +12,10 @@
     python autotrain.py record-issue ...    # 新问题解决后登记（见 --help）
 
 训练常用参数：--plan <id> 指定方案；--gpus 0,1 指定卡；--dry-run 只生成配置和数据不启动；
---max-samples 20 快速试跑（不合并）；--no-merge / --no-smoke 跳过合并 / 冒烟。
+--max-samples 20 快速试跑（不合并）；--probe 只做最长样本显存探测；--no-probe 跳过开训前自动探测；
+--no-merge / --no-smoke 跳过合并 / 冒烟。
+
+正式 sft/dpo 默认会先用最长样本做显存探测，沿 on_oom 降级链找到本机能稳住的 cutoff，再全量训练，避免训到一半才 OOM。
 """
 from __future__ import annotations
 
@@ -175,6 +178,8 @@ def usable_gpus(hw: dict, plan: dict, ignore_busy: bool) -> list[int]:
 def fit_plan(plan: dict, hw: dict, ignore_busy: bool) -> list[int] | None:
     gpus = usable_gpus(hw, plan, ignore_busy)
     if len(gpus) < plan.get("min_gpus", 1):
+        return None
+    if hw.get("ram_gb", 0) < plan.get("min_ram_gb", 0):
         return None
     return gpus[: plan.get("max_procs") or len(gpus)]
 
@@ -716,10 +721,12 @@ class Run:
             self.name += "x"
         self.dir = RUNS / self.name
         self.attempts: list[dict] = []
+        self.probes: list[dict] = []
         self.packages: dict = {}
-        self.data_dirs: dict[int, Path] = {}
+        self.data_dirs: dict[str, Path] = {}
         self.work = Path(self.cfg["work_dir"]) / self.name
         self.train_dir = str(self.work / "output")
+        self.probe_dir = str(self.work / "probe_output")
         self.output_dir = str(Path(self.cfg["saves_dir"]) / self.name)
         self.trial = bool(getattr(args, "max_samples", None) or getattr(args, "probe", False))
 
@@ -739,36 +746,68 @@ class Run:
             return m
         return self.args.model or self.cfg["base_model"]
 
-    def prepare_data(self, cutoff: int) -> Path:
-        if cutoff in self.data_dirs:
-            return self.data_dirs[cutoff]
+    def shared_sft_tools(self) -> str | None:
+        """SFT 全部行共用同一份工具定义时返回它，用来补 DPO 行缺的 tools；否则 None。"""
+        if self.stage != "dpo" or not self.cfg.get("fill_missing_tools_from_sft", True):
+            return None
+        info = json.loads((DATA / "dataset_info.json").read_text(encoding="utf-8"))
+        entry = info.get(project()["datasets"]["sft"]["train"]) or {}
+        col = (entry.get("columns") or {}).get("tools")
+        path = DATA / entry.get("file_name", "")
+        if not col or not path.is_file():
+            return None
+        seen = set()
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    t = json.loads(line).get(col)
+                    seen.add(t if isinstance(t, str) else json.dumps(t, ensure_ascii=False))
+        if len(seen) != 1 or not next(iter(seen)):
+            return None
+        return next(iter(seen))
+
+    def prepare_data(self, cutoff: int, *, probe_mode: bool = False) -> Path:
+        key = f"{cutoff}_probe" if probe_mode else str(cutoff)
+        if key in self.data_dirs:
+            return self.data_dirs[key]
         sys.path.insert(0, str(TOOLS))
-        from filter_by_cutoff import filter_into_dir
+        from filter_by_cutoff import filter_into_dir, sort_jsonl_by_tokens
 
         tok = self.cfg.get("length_tokenizer") or ""
         if not tok or not Path(tok).exists():
             tok = self.model
-        dst = self.work / f"data_{cutoff}"
-        say(f"按 cutoff_len={cutoff} 过滤数据 → {dst}")
-        summary = filter_into_dir(DATA, dst, stage_keys(self.stage), cutoff, tok)
-        if getattr(self.args, "probe", False):
+        longest_first = bool(
+            probe_mode
+            or getattr(self.args, "probe", False)
+            or self.cfg.get("train_longest_first", True)
+        )
+        dst = self.work / (f"data_{cutoff}_probe" if probe_mode else f"data_{cutoff}")
+        say(f"按 cutoff_len={cutoff} 过滤数据 → {dst}"
+            + ("（按 token 从长到短，便于尽早暴露 OOM）" if longest_first else ""))
+        summary = filter_into_dir(DATA, dst, stage_keys(self.stage), cutoff, tok,
+                                  fill_tools=self.shared_sft_tools())
+        if longest_first:
             info = json.loads((dst / "dataset_info.json").read_text(encoding="utf-8"))
-            train = dst / info[stage_keys(self.stage)[0]]["file_name"]
-            lines = [ln for ln in train.read_text(encoding="utf-8").splitlines() if ln.strip()]
-            lines.sort(key=len, reverse=True)
-            train.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            train_key = stage_keys(self.stage)[0]
+            train = dst / info[train_key]["file_name"]
+            ranking = bool(info[train_key].get("ranking"))
+            tops = sort_jsonl_by_tokens(train, tok, ranking=ranking, reverse=True)
+            say(f"token 最长样本约 {tops}")
         text = json.dumps(summary, ensure_ascii=False, indent=2)
         (dst / "filter_summary.json").write_text(text, encoding="utf-8")
-        (self.dir / f"filter_summary_{cutoff}.json").write_text(text, encoding="utf-8")
-        self.data_dirs[cutoff] = dst
+        if not probe_mode:
+            (self.dir / f"filter_summary_{cutoff}.json").write_text(text, encoding="utf-8")
+        self.data_dirs[key] = dst
         return dst
 
-    def build_yaml(self, plan: dict, nproc: int, yaml_over: dict, n: int) -> Path:
+    def build_yaml(self, plan: dict, nproc: int, yaml_over: dict, n: int, *,
+                   probe_mode: bool = False, tag: str = "attempt") -> Path:
+        probe_mode = bool(probe_mode or getattr(self.args, "probe", False))
         y = load_yaml(CONFIGS / STAGE_CONFIG[self.stage])
         y["model_name_or_path"] = self.model
-        y["dataset_dir"] = str(self.prepare_data(plan["cutoff_len"]))
+        y["dataset_dir"] = str(self.prepare_data(plan["cutoff_len"], probe_mode=probe_mode))
         y["cutoff_len"] = plan["cutoff_len"]
-        y["output_dir"] = self.train_dir
+        y["output_dir"] = self.probe_dir if probe_mode else self.train_dir
         y["template"] = template()
         ds = project()["datasets"][self.stage]
         if ds.get("train"):
@@ -783,22 +822,100 @@ class Run:
             y["deepspeed"] = str(CONFIGS / plan["deepspeed"])
         else:
             y.pop("deepspeed", None)
-        if self.args.max_samples:
+        if self.args.max_samples and not probe_mode:
             y["max_samples"] = self.args.max_samples
-        if getattr(self.args, "probe", False):
-            y["max_samples"] = int(plan.get("global_batch", 4)) * 2
+        if probe_mode:
+            # 多取几条最长样本，多跑几步，减少「探测过、全量中途才 OOM」
+            gb = int(plan.get("global_batch", 4))
+            y["max_samples"] = max(gb * 4, 16)
             y["num_train_epochs"] = 1
             y["save_strategy"] = "no"
-        if self.args.epochs:
+            y["overwrite_output_dir"] = True
+        if self.args.epochs and not probe_mode:
             y["num_train_epochs"] = self.args.epochs
+        if self.stage in ("sft", "dpo") and self.cfg.get("train_longest_first", True):
+            # 数据文件已按 token 从长到短排好；默认 RandomSampler 会打乱，必须关掉才真正最长优先
+            y["disable_shuffling"] = True
         y.update(yaml_over)
-        path = self.dir / f"attempt-{n}.yaml"
+        path = self.dir / f"{tag}-{n}.yaml"
         dump_yaml(y, path)
         return path
 
-    def command(self, yaml_path: Path, gpus: list[int]) -> list[str]:
+    def _downgrade_plan(self, plan: dict, hw: dict, why: str) -> tuple[dict, list[int]]:
+        nxt = plan.get("on_oom")
+        new_gpus = fit_plan(find_plan(self.stage, nxt), hw, True) if nxt else None
+        if not nxt or new_gpus is None:
+            raise SystemExit(
+                f"{why}；{plan['id']} cutoff={plan['cutoff_len']} 已无更短方案。"
+                f"可手动指定方案，或放宽 settings.yaml 的 probe_max_peak_gb。")
+        say(f"{why} → 降级到 {nxt}（cutoff={find_plan(self.stage, nxt)['cutoff_len']}）", "yellow")
+        return find_plan(self.stage, nxt), new_gpus
+
+    def find_safe_plan(self, plan: dict, gpus: list[int], hw: dict,
+                       yaml_over: dict, env_over: dict) -> tuple[dict, list[int]]:
+        """开训前用 token 最长样本试跑，并要求显存峰值留余量，再全量训练。"""
+        margin = float(self.cfg.get("probe_max_peak_gb", 70))
+        say(f"开训前探测：token 最长样本试跑；张量峰值（max_memory_allocated）须 < {margin}GB…")
+        self.write_status(phase="probe", plan=plan["id"], attempt=0)
+        n = 0
+        while True:
+            n += 1
+            yaml_path = self.build_yaml(plan, len(gpus), yaml_over, n, probe_mode=True, tag="probe")
+            env = {**os.environ, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+                   "CUDA_VISIBLE_DEVICES": ",".join(map(str, gpus)),
+                   **{k: str(v) for k, v in (plan.get("env") or {}).items()}, **env_over}
+            cmd = self.command(yaml_path, gpus, plan)
+            log_path = self.dir / f"probe-{n}.log"
+            rec = {"n": n, "plan": plan["id"], "gpus": gpus, "cutoff_len": plan["cutoff_len"],
+                   "yaml": str(yaml_path), "log": str(log_path.relative_to(ROOT)),
+                   "started": now()}
+            self.probes.append(rec)
+            self.save_meta()
+            say(f"探测 {n}：方案 {plan['id']} cutoff={plan['cutoff_len']}，日志 {rec['log']}")
+            res = self.launch(cmd, env, log_path, gpus)
+            rec.update(res)
+            self.save_meta()
+            # 探测用 save_strategy=no，不一定写出 adapter；以 rc==0 为准（勿用 succeeded，它检查的是正式 output/）
+            if res["rc"] == 0 and not res.get("timed_out"):
+                # nvidia-smi 读数含缓存与碎片，波动大；优先用训练进程打印的 max_memory_allocated
+                log_text = log_path.read_text(encoding="utf-8", errors="replace")
+                allocated = [float(x) for x in re.findall(r"峰值显存=([\d.]+)GB", log_text)]
+                peak = max(allocated) if allocated else float(res.get("gpu_peak_gb") or 0)
+                rec["alloc_peak_gb"] = peak
+                if peak >= margin:
+                    rec["issue"] = "probe_peak_too_high"
+                    self.save_meta()
+                    if plan.get("on_oom"):
+                        plan, gpus = self._downgrade_plan(
+                            plan, hw, f"探测通过但峰值 {peak}GB ≥ 余量上限 {margin}GB")
+                        continue
+                    say(f"探测通过但峰值 {peak}GB ≥ {margin}GB，且已无更短方案；"
+                        f"仍用 {plan['id']} cutoff={plan['cutoff_len']} 开训"
+                        f"（已按 token 从长到短，若 OOM 会尽早失败）。", "yellow")
+                    return plan, gpus
+                say(f"探测通过：{plan['id']} cutoff={plan['cutoff_len']}，"
+                    f"峰值 {peak}GB < {margin}GB，用时 {res['seconds']}s。开始全量训练"
+                    f"（样本已按 token 从长到短，若仍 OOM 会尽早失败）。", "green")
+                return plan, gpus
+
+            log_text = log_path.read_text(encoding="utf-8", errors="replace")
+            issue = diagnose(log_text, res["rc"], res["timed_out"], self.stage)
+            rec["issue"] = issue["id"] if issue else None
+            self.save_meta()
+            if issue and issue["id"] == "cuda_oom":
+                bump_issue(issue["id"])
+                plan, gpus = self._downgrade_plan(
+                    plan, hw, f"探测 OOM（{plan['id']} cutoff={plan['cutoff_len']}）")
+                continue
+            if issue:
+                bump_issue(issue["id"])
+                raise SystemExit(f"开训前探测失败（{issue['id']}）：{issue['diagnosis']}。{issue.get('manual', '')}")
+            raise SystemExit(f"开训前探测失败（rc={res['rc']}），见 {rec['log']}")
+
+    def command(self, yaml_path: Path, gpus: list[int], plan: dict | None = None) -> list[str]:
         script = str(TOOLS / "train_lowmem.py")
-        if len(gpus) == 1:
+        # DeepSpeed（含单卡 ZeRO-3 CPU 卸载）需要分布式环境变量，单卡也走 torchrun
+        if len(gpus) == 1 and not (plan or {}).get("deepspeed"):
             return [PY, "-u", script, str(yaml_path)]
         return [PY, "-m", "torch.distributed.run", "--nproc_per_node", str(len(gpus)),
                 "--master_port", str(free_port()), script, str(yaml_path)]
@@ -991,12 +1108,25 @@ class Run:
         max_attempts = int(cfg.get("max_attempts", 4))
         result = "failed"
 
+        # 正式全量训练前：用最长样本探测，避免训到一半才 OOM 再整轮重来
+        auto_probe = (
+            self.stage in ("sft", "dpo")
+            and not self.trial
+            and not a.dry_run
+            and not getattr(a, "no_probe", False)
+            and bool(self.cfg.get("probe_before_train", True))
+        )
+        if auto_probe:
+            plan, gpus = self.find_safe_plan(plan, gpus, hw, yaml_over, env_over)
+            say(f"全量训练将使用：{plan['id']} cutoff={plan['cutoff_len']} GPU {gpus}")
+            self.write_status(state="running", phase="train", plan=plan["id"])
+
         for n in range(1, max_attempts + 1):
             yaml_path = self.build_yaml(plan, len(gpus), yaml_over, n)
             env = {**os.environ, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, gpus)),
                    **{k: str(v) for k, v in (plan.get("env") or {}).items()}, **env_over}
-            cmd = self.command(yaml_path, gpus)
+            cmd = self.command(yaml_path, gpus, plan)
             log_path = self.dir / f"attempt-{n}.log"
             attempt = {"n": n, "plan": plan["id"], "gpus": gpus, "cutoff_len": plan["cutoff_len"],
                        "yaml": str(yaml_path), "log": str(log_path.relative_to(ROOT)),
@@ -1100,7 +1230,7 @@ class Run:
         (self.dir / "run.json").write_text(json.dumps({
             "run": self.name, "stage": self.stage, "model": getattr(self, "model", None),
             "output_dir": self.output_dir, "work_dir": str(self.work),
-            "packages": self.packages, "attempts": self.attempts,
+            "packages": self.packages, "probes": self.probes, "attempts": self.attempts,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def finish(self, result: str, merged: str | None, smoke: dict | None) -> None:
@@ -1209,7 +1339,9 @@ def main() -> int:
         p.add_argument("--max-samples", type=int, help="只取前 N 条快速试跑（不合并）")
         p.add_argument("--epochs", type=float, help="覆盖 num_train_epochs")
         p.add_argument("--probe", action="store_true",
-                       help="显存探测：只用最长的 2×global_batch 条跑 1 轮，爆显存会沿降级链继续探测；不发布不合并")
+                       help="只做显存探测：最长的 2×global_batch 条跑 1 轮，沿降级链找可用 cutoff；不发布不合并")
+        p.add_argument("--no-probe", action="store_true",
+                       help="跳过开训前自动探测（默认会先探测再全量训练）")
         p.add_argument("--no-merge", action="store_true")
         p.add_argument("--no-smoke", action="store_true")
 

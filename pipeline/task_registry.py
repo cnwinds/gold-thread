@@ -28,12 +28,16 @@ def _load_store(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {"tasks": tasks}
 
 
+def _is_active_status(status: Any) -> bool:
+    return status in ("running", "queued")
+
+
 def _save_store(store: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> None:
     tasks: List[Dict[str, Any]] = list(store.get("tasks") or [])
-    running = [t for t in tasks if t.get("status") == "running" and not t.get("dismissed")]
-    rest = [t for t in tasks if t.get("status") != "running" or t.get("dismissed")]
+    active = [t for t in tasks if _is_active_status(t.get("status")) and not t.get("dismissed")]
+    rest = [t for t in tasks if not _is_active_status(t.get("status")) or t.get("dismissed")]
     rest.sort(key=lambda t: t.get("finished_at") or t.get("created_at") or "", reverse=True)
-    capped = running + rest[: max(0, MAX_TASKS - len(running))]
+    capped = active + rest[: max(0, MAX_TASKS - len(active))]
     write_json_atomic(tasks_path(cfg), {"tasks": capped})
 
 
@@ -117,8 +121,8 @@ def describe_task(stage: str, force: bool, extra: Optional[Dict[str, Any]] = Non
         affects = ["overview", "train"]
         links = {"open_tab": "train"}
     elif stage == "stage3":
-        title = "训练集合成" + ("（全量）" if force else "（增量）")
-        affects = ["overview", "train"]
+        title = "评估并合成训练集" + ("（全量）" if force else "（增量）")
+        affects = ["overview", "gold", "train"]
         links = {"open_tab": "train"}
     elif stage == "all":
         title = "全流程" + ("（全量重建）" if force else "")
@@ -216,11 +220,11 @@ def sync_job(job: Any, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
 
 def reconcile_stale(active_ids: Set[str], cfg: Optional[Dict[str, Any]] = None) -> int:
-    """内存中无对应 Job 的 running 任务标为 stale。"""
+    """内存中无对应 Job 的 running/queued 任务标为 stale。"""
     store = _load_store(cfg)
     n = 0
     for t in store["tasks"]:
-        if t.get("status") == "running" and t.get("id") not in active_ids:
+        if _is_active_status(t.get("status")) and t.get("id") not in active_ids:
             t["status"] = "stale"
             t["error"] = t.get("error") or "服务已重启或任务已中断"
             t["finished_at"] = t.get("finished_at") or now_iso()
@@ -270,12 +274,17 @@ def list_tasks(
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     out: List[Dict[str, Any]] = []
     running_n = 0
+    queued_n = 0
     for t in store["tasks"]:
         if t.get("dismissed"):
             continue
         st = t.get("status")
         if st == "running":
             running_n += 1
+            out.append(t)
+            continue
+        if st == "queued":
+            queued_n += 1
             out.append(t)
             continue
         ts = t.get("finished_at") or t.get("created_at") or ""
@@ -288,10 +297,18 @@ def list_tasks(
         if dt >= cutoff or st == "stale":
             out.append(t)
     running = [t for t in out if t.get("status") == "running"]
-    other = [t for t in out if t.get("status") != "running"]
+    queued = sorted(
+        [t for t in out if t.get("status") == "queued"],
+        key=lambda x: x.get("created_at") or "",
+    )
+    other = [t for t in out if t.get("status") not in ("running", "queued")]
     other.sort(key=lambda x: x.get("finished_at") or x.get("created_at") or "", reverse=True)
-    merged = running + other
-    return {"running": running_n, "tasks": [_public_task(t) for t in merged[:limit]]}
+    merged = running + queued + other
+    return {
+        "running": running_n,
+        "queued": queued_n,
+        "tasks": [_public_task(t) for t in merged[:limit]],
+    }
 
 
 def enrich_with_live_job(task: Dict[str, Any], job: Any) -> Dict[str, Any]:

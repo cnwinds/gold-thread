@@ -14,7 +14,7 @@ import traceback
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from contextlib import asynccontextmanager
 
@@ -109,8 +109,13 @@ class Job:
             try:
                 p = json.loads(msg[7:])
                 p["at"] = now_iso()
-                self.progress = p
                 sid = p.get("id")
+                meta = stepcat.STEP_BY_ID.get(sid or "") or {}
+                if not p.get("label"):
+                    base = meta.get("label") or sid or ""
+                    extra = (p.get("msg") or "").strip()
+                    p["label"] = f"{base} · {extra}" if base and extra and extra != base else (extra or base)
+                self.progress = p
                 if sid and sid not in self.done_steps:
                     d, t = p.get("done"), p.get("total")
                     if d is not None and t is not None and t > 0 and d >= t:
@@ -156,6 +161,77 @@ class Job:
 
 JOBS: Dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
+
+# 会改写原始 / 黄金 / 训练工作区的阶段：彼此互斥，冲突时入队串行。
+_GOLD_WRITE_STAGES = frozenset(
+    {"stage2", "stage3", "dataset_evaluate", "all", "analyze", "classify", "collect"}
+)
+
+
+def _jobs_clash(a_stage: str, b_stage: str) -> bool:
+    return (
+        a_stage == b_stage
+        or a_stage == "all"
+        or b_stage == "all"
+        or a_stage == "delete"
+        or b_stage == "delete"
+        or (a_stage in _GOLD_WRITE_STAGES and b_stage in _GOLD_WRITE_STAGES)
+        or (a_stage == "package" and b_stage in {"stage3", "all"})
+        or (b_stage == "package" and a_stage in {"stage3", "all"})
+    )
+
+
+def _active_blocker(stage: str, *, exclude_id: Optional[str] = None) -> Optional[Job]:
+    """返回与 stage 冲突的 running/queued 作业（若有）。"""
+    for j in JOBS.values():
+        if exclude_id and j.id == exclude_id:
+            continue
+        if j.status not in ("running", "queued"):
+            continue
+        if _jobs_clash(stage, j.stage):
+            return j
+    return None
+
+
+def _launch_job_thread(job: Job) -> None:
+    threading.Thread(target=_run_job, args=(job,), daemon=True).start()
+
+
+def _evaluate_dpo_or_raise(log, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """构建前显式跑完 DPO 评估；仍有 pending/failed 则失败可见。"""
+    evaluation = stage3_synth.evaluate_dpo_pending(log=log, cfg=cfg)
+    if evaluation.get("pending") or evaluation.get("failed"):
+        raise RuntimeError(
+            f"DPO 评估未全部完成：剩余 {evaluation.get('pending', 0)}，失败 {evaluation.get('failed', 0)}"
+        )
+    return evaluation
+
+
+def _pump_queue() -> None:
+    """当前作业结束后，按创建顺序启动下一批互不冲突的排队作业。"""
+    to_start: List[Job] = []
+    with JOBS_LOCK:
+        queued = sorted(
+            (j for j in JOBS.values() if j.status == "queued"),
+            key=lambda j: j.created_at or "",
+        )
+        running = [j for j in JOBS.values() if j.status == "running"]
+        for q in queued:
+            if any(_jobs_clash(q.stage, r.stage) for r in running):
+                continue
+            if any(_jobs_clash(q.stage, s.stage) for s in to_start):
+                continue
+            q.status = "running"
+            to_start.append(q)
+    cfg = load_config() if to_start else None
+    for q in to_start:
+        q.log(f"[{q.stage}] 出队，开始执行")
+        if cfg is not None:
+            try:
+                task_registry.sync_job(q, cfg)
+            except Exception:  # noqa: BLE001
+                pass
+        _launch_job_thread(q)
 
 
 def _run_job(job: Job) -> None:
@@ -205,22 +281,17 @@ def _run_job(job: Job) -> None:
                 )
             job.result = result
         elif job.stage == "stage3":
-            job.result = stage3_synth.run(force=job.force, log=job.log, cfg=cfg)
+            # 与全流程一致：构建前先评估，用户不必先跳到训练页单独点「DPO 评估」。
+            job.log("[stage3] 先评估待复核 DPO，再合成训练集")
+            evaluation = _evaluate_dpo_or_raise(job.log, cfg)
+            r3 = stage3_synth.run(force=job.force, log=job.log, cfg=cfg)
+            job.result = {"dpo_evaluation": evaluation, "stage3": r3}
         elif job.stage == "dataset_evaluate":
-            result = stage3_synth.evaluate_dpo_pending(log=job.log, cfg=cfg)
-            if result.get("pending") or result.get("failed"):
-                raise RuntimeError(
-                    f"DPO 评估未全部完成：剩余 {result.get('pending', 0)}，失败 {result.get('failed', 0)}"
-                )
-            job.result = result
+            job.result = _evaluate_dpo_or_raise(job.log, cfg)
         elif job.stage == "all":
             r1 = stage1_extract.run(force=job.force, log=job.log, cfg=cfg)
             r2 = stage2_gold.run(force=job.force, log=job.log, cfg=cfg)
-            evaluation = stage3_synth.evaluate_dpo_pending(log=job.log, cfg=cfg)
-            if evaluation.get("pending") or evaluation.get("failed"):
-                raise RuntimeError(
-                    f"DPO 评估未全部完成：剩余 {evaluation.get('pending', 0)}，失败 {evaluation.get('failed', 0)}"
-                )
+            evaluation = _evaluate_dpo_or_raise(job.log, cfg)
             r3 = stage3_synth.run(force=job.force, log=job.log, cfg=cfg)
             job.result = {"stage1": r1, "stage2": r2, "dpo_evaluation": evaluation, "stage3": r3}
         elif job.stage == "review":
@@ -229,21 +300,13 @@ def _run_job(job: Job) -> None:
                 session_ids=job.extra.get("sessions"), force=job.force, log=job.log, cfg=cfg
             )
             # 评审完成后先刷新 DPO 评估，再构建；门禁失败必须让任务失败可见。
-            evaluation = stage3_synth.evaluate_dpo_pending(log=job.log, cfg=cfg)
-            if evaluation.get("pending") or evaluation.get("failed"):
-                raise RuntimeError(
-                    f"DPO 评估未全部完成：剩余 {evaluation.get('pending', 0)}，失败 {evaluation.get('failed', 0)}"
-                )
+            _evaluate_dpo_or_raise(job.log, cfg)
             stage3_synth.run(force=False, log=job.log, cfg=cfg)
             job.result = res
         elif job.stage == "refine":
             from pipeline.review import run_refine
             res = run_refine((job.extra.get("sessions") or [None])[0], log=job.log, cfg=cfg)
-            evaluation = stage3_synth.evaluate_dpo_pending(log=job.log, cfg=cfg)
-            if evaluation.get("pending") or evaluation.get("failed"):
-                raise RuntimeError(
-                    f"DPO 评估未全部完成：剩余 {evaluation.get('pending', 0)}，失败 {evaluation.get('failed', 0)}"
-                )
+            _evaluate_dpo_or_raise(job.log, cfg)
             stage3_synth.run(force=False, log=job.log, cfg=cfg)
             job.result = res
         elif job.stage == "classify":
@@ -294,6 +357,10 @@ def _run_job(job: Job) -> None:
             task_registry.sync_job(job, cfg)
         except Exception:  # noqa: BLE001
             pass
+        try:
+            _pump_queue()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _persist_job(job: Job) -> None:
@@ -317,34 +384,40 @@ def _persist_job(job: Job) -> None:
 
 
 def _start(stage: str, force: bool, extra: Optional[Dict[str, Any]] = None) -> Job:
+    job = Job(stage, force, extra)
+    start_now = False
     with JOBS_LOCK:
-        gold_write = {"stage2", "stage3", "dataset_evaluate", "all", "analyze", "classify", "collect"}
-        for j in JOBS.values():
-            clash = (
-                j.stage == stage or stage == "all" or j.stage == "all"
-                or stage == "delete" or j.stage == "delete"
-                or (j.stage in gold_write and stage in gold_write)
-                or (j.stage == "package" and stage in {"stage3", "all"})
-                or (stage == "package" and j.stage in {"stage3", "all"})
-            )
-            if j.status == "running" and clash:
-                raise HTTPException(409, f"已有作业在运行: {j.stage} ({j.id})")
-        job = Job(stage, force, extra)
+        blocker = _active_blocker(stage)
+        if blocker:
+            job.status = "queued"
+            job.log(f"[{stage}] 已加入排队（等待 {blocker.stage} {blocker.id}）")
+        else:
+            job.status = "running"
+            start_now = True
         JOBS[job.id] = job
     try:
         task_registry.register_job(job, load_config())
     except Exception:  # noqa: BLE001
         pass
-    threading.Thread(target=_run_job, args=(job,), daemon=True).start()
+    if start_now:
+        _launch_job_thread(job)
     return job
 
 
 def _assert_no_delete_running() -> None:
     """同步写接口与后台级联删除互斥，避免旧索引覆盖删除结果。"""
     with JOBS_LOCK:
-        running = next((j for j in JOBS.values() if j.stage == "delete" and j.status == "running"), None)
-    if running:
-        raise HTTPException(409, f"正在删除会话，请稍后再试: {running.id}")
+        blocking = next(
+            (
+                j
+                for j in JOBS.values()
+                if j.stage == "delete" and j.status in ("running", "queued")
+            ),
+            None,
+        )
+    if blocking:
+        state = "正在删除会话" if blocking.status == "running" else "删除任务排队中"
+        raise HTTPException(409, f"{state}，请稍后再试: {blocking.id}")
 
 
 # ---------------------------------------------------------------------------
@@ -634,9 +707,9 @@ def _runbook_state() -> Dict[str, Any]:
             mb = z.stat().st_size / (1024 * 1024)
             put("s3.package", "done", z.name, f"{mb:.1f} MB · {_package_layout_note(z.name)}")
         elif ho.exists():
-            put("s3.package", "ready", "待打包", "运行 stage3 或点「生成交付包」")
+            put("s3.package", "ready", "待打包", "到「交付」页选格式并生成交付包")
         else:
-            put("s3.package", "todo", "等待 handoff", "")
+            put("s3.package", "todo", "等待构建", "先在训练数据页构建训练集")
     else:
         for sid in ("s3.gate", "s3.windows", "s3.traj", "s3.dpo_review",
                     "s3.split", "s3.manifest", "s3.handoff", "s3.package"):
@@ -764,7 +837,7 @@ def run_stage(body: RunBody) -> Dict[str, Any]:
     if body.stage not in ("stage1", "stage2", "stage3", "dataset_evaluate", "all", "review", "refine", "classify"):
         raise HTTPException(400, "stage 必须是 stage1|stage2|stage3|dataset_evaluate|all|review|refine|classify")
     job = _start(body.stage, body.force, {"sessions": body.sessions})
-    return {"job_id": job.id}
+    return {"job_id": job.id, "status": job.status}
 
 
 @app.get("/api/jobs")
@@ -797,7 +870,8 @@ def list_tasks_api(limit: int = Query(50, ge=1, le=100)) -> Dict[str, Any]:
                 rec = task_registry.enrich_with_live_job(rec, job)
             enriched.append(rec)
     running_live = sum(1 for t in enriched if t.get("status") == "running")
-    return {"running": running_live, "tasks": enriched}
+    queued_live = sum(1 for t in enriched if t.get("status") == "queued")
+    return {"running": running_live, "queued": queued_live, "tasks": enriched}
 
 
 @app.get("/api/tasks/{task_id}")
@@ -1003,18 +1077,83 @@ def overview() -> Dict[str, Any]:
 # 原始数据 (Stage 1)
 # ---------------------------------------------------------------------------
 
-def _session_lineage(sid: str, entry: Dict[str, Any], funnels: Dict[str, Any]) -> Dict[str, Any]:
-    """一条黄金会话的去向：有用步 → SFT，弯路 → 这条会话的 DPO。"""
+def _dpo_source_bucket(source: str) -> str:
+    src = str(source or "")
+    if src == "stage2_pruned":
+        return "pruned"
+    if src == "review_rewrite":
+        return "review"
+    if src == "negative_step":
+        return "negative"
+    return ""
+
+
+def _dpo_written_by_session(train_root: Path) -> Dict[str, Dict[str, Any]]:
+    """按 session_id 统计训练集里实际写入的 DPO 偏好对（门禁后）。"""
+    path = Path(train_root) / "dpo_preference_pairs.jsonl"
+    out: Dict[str, Dict[str, Any]] = {}
+    if not path.is_file():
+        return out
+    for row in read_jsonl(path):
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        sid = str(meta.get("session_id") or row.get("session_id") or "")
+        if not sid:
+            continue
+        slot = out.setdefault(sid, {"total": 0, "parts": {"pruned": 0, "review": 0, "negative": 0}})
+        slot["total"] += 1
+        bucket = _dpo_source_bucket(str(meta.get("source") or row.get("source") or ""))
+        if bucket:
+            slot["parts"][bucket] += 1
+    return out
+
+
+def _session_lineage(
+    sid: str,
+    entry: Dict[str, Any],
+    funnels: Dict[str, Any],
+    dpo_written: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """一条黄金会话的去向：有用步 → SFT，弯路 → 这条会话的 DPO。
+
+    ``dpo_train`` 必须是训练集里实际写入的偏好对数，不能用门禁前的候选合计，
+    否则列表「→ N 对」会和详情页 DPO 标签页对不上。
+    """
     sf = funnels.get(sid) if isinstance(funnels, dict) else None
     sf = sf if isinstance(sf, dict) else {}
     funnel = sf.get("funnel") if isinstance(sf.get("funnel"), dict) else {}
     stats = entry.get("stats") if isinstance(entry.get("stats"), dict) else {}
     written = sid in (funnels or {})
-    parts = {
+    candidates = {
         "pruned": int(sf.get("dpo_pruned") or 0),
         "review": int(sf.get("dpo_review") or 0),
         "negative": int(sf.get("dpo_negative") or 0),
     }
+    written_info = None
+    if isinstance(dpo_written, dict):
+        written_info = dpo_written.get(sid)
+    if written_info is None and isinstance(sf.get("dpo_written"), int):
+        parts = sf.get("dpo_written_parts") if isinstance(sf.get("dpo_written_parts"), dict) else {}
+        written_info = {
+            "total": int(sf.get("dpo_written") or 0),
+            "parts": {
+                "pruned": int(parts.get("pruned") or 0),
+                "review": int(parts.get("review") or 0),
+                "negative": int(parts.get("negative") or 0),
+            },
+        }
+    if written and written_info is not None:
+        parts = {
+            "pruned": int((written_info.get("parts") or {}).get("pruned") or 0),
+            "review": int((written_info.get("parts") or {}).get("review") or 0),
+            "negative": int((written_info.get("parts") or {}).get("negative") or 0),
+        }
+        dpo_train = int(written_info.get("total") or (parts["pruned"] + parts["review"] + parts["negative"]))
+    elif written:
+        parts = candidates
+        dpo_train = parts["pruned"] + parts["review"] + parts["negative"]
+    else:
+        parts = candidates
+        dpo_train = None
     return {
         "gold_steps": stats.get("gold_steps"),
         "raw_steps": stats.get("raw_steps"),
@@ -1024,8 +1163,9 @@ def _session_lineage(sid: str, entry: Dict[str, Any], funnels: Dict[str, Any]) -
         "sft_windows": funnel.get("admitted_steps") if written else None,
         "sft_full": bool(sf.get("full_sft_allowed")) if written else False,
         "train_written": written,
-        "dpo_train": (parts["pruned"] + parts["review"] + parts["negative"]) if written else None,
+        "dpo_train": dpo_train,
         "dpo_parts": parts if written else None,
+        "dpo_candidates": candidates if written else None,
     }
 
 
@@ -1220,7 +1360,7 @@ def analyze_one(sid: str) -> Dict[str, Any]:
     if sid not in (index.get("sessions") or {}):
         raise HTTPException(404, "会话不存在")
     job = _start("analyze", True, {"sessions": [sid]})
-    return {"job_id": job.id}
+    return {"job_id": job.id, "status": job.status}
 
 
 @app.delete("/api/session/{sid}")
@@ -1239,7 +1379,7 @@ def delete_session_api(sid: str) -> Dict[str, Any]:
     if sid not in (raw_index.get("sessions") or {}) and sid not in (gold_index.get("sessions") or {}):
         raise HTTPException(404, "会话不存在")
     job = _start("delete", False, {"sessions": [sid]})
-    return {"job_id": job.id}
+    return {"job_id": job.id, "status": job.status}
 
 
 class CollectBody(BaseModel):
@@ -1283,7 +1423,7 @@ def collect_start(body: CollectBody) -> Dict[str, Any]:
         False,
         {"source": body.source, "ids": body.ids, "analyze": body.analyze},
     )
-    return {"job_id": job.id}
+    return {"job_id": job.id, "status": job.status}
 
 
 @app.get("/api/raw/session/{sid}/gold")
@@ -1307,6 +1447,7 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
     idx = load_index(dirs["gold"] / "index.json")
     train_stats = read_json(dirs["train"] / "stats.json", default={}) or {}
     session_funnels = train_stats.get("session_funnels") or {}
+    dpo_written = _dpo_written_by_session(dirs["train"])
     draft = dataset_draft.load_draft(cfg)
     split_plan = draft.get("split_plan") or {}
     rows = []
@@ -1325,9 +1466,10 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
         eff = curation.resolve(ann, cfg)
         rnd = curation.latest_round(ann)
         funnel_info = (session_funnels.get(sid) or {}).get("funnel") or {}
-        lineage = _session_lineage(sid, e, session_funnels)
+        lineage = _session_lineage(sid, e, session_funnels, dpo_written)
         project_group = e.get("project_group", "unknown")
         layer = dataset_draft.layer_exclusion(draft, "session", sid, project_group)
+        usage = dataset_draft.session_kind_exclusions(draft, sid, project_group)
         lineage["split"] = dataset_draft.effective_split(project_group, sid, split_plan)
         if output == "sft" and not (lineage["train_written"] and (lineage["sft_windows"] or 0) > 0):
             continue
@@ -1353,6 +1495,10 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
                 "dataset_excluded": layer["action"] == "exclude",
                 "exclusion_scope": layer.get("scope", ""),
                 "exclusion_reason": layer.get("reason", ""),
+                "sft_excluded": usage["sft_excluded"],
+                "sft_exclusion_scope": usage["sft_exclusion_scope"],
+                "dpo_excluded": usage["dpo_excluded"],
+                "dpo_exclusion_scope": usage["dpo_exclusion_scope"],
                 "split": lineage["split"],
                 "split_source": dataset_draft.split_source(project_group, sid, split_plan),
             }
@@ -1382,8 +1528,15 @@ def gold_session(sid: str) -> Dict[str, Any]:
         synth_preview = stage3_synth.preview_session_synthesis(sid, cfg=cfg)
     except Exception:  # noqa: BLE001
         synth_preview = {}
-    train_stats = read_json(stage_dirs(cfg)["train"] / "stats.json", default={}) or {}
+    train_root = stage_dirs(cfg)["train"]
+    train_stats = read_json(train_root / "stats.json", default={}) or {}
     funnels = train_stats.get("session_funnels") or {}
+    dpo_written = _dpo_written_by_session(train_root)
+    draft = dataset_draft.load_draft(cfg)
+    project_group = str(e.get("project_group") or rows[0].get("project_group") or "unknown")
+    layer = dataset_draft.layer_exclusion(draft, "session", sid, project_group)
+    usage = dataset_draft.session_kind_exclusions(draft, sid, project_group)
+    lineage = _session_lineage(sid, e, funnels, dpo_written)
     return {
         "record": rows[0],
         "annotation": ann,
@@ -1393,7 +1546,14 @@ def gold_session(sid: str) -> Dict[str, Any]:
         "dpo": read_jsonl(Path(e["dpo_file"])) if e.get("dpo_file") else [],
         "diagnostics": read_jsonl(Path(e["diag_file"])) if e.get("diag_file") else [],
         "synthesis_preview": synth_preview,
-        "lineage": _session_lineage(sid, e, funnels),
+        "lineage": lineage,
+        "dataset_excluded": layer["action"] == "exclude",
+        "exclusion_scope": layer.get("scope", ""),
+        "exclusion_reason": layer.get("reason", ""),
+        "sft_excluded": usage["sft_excluded"],
+        "sft_exclusion_scope": usage["sft_exclusion_scope"],
+        "dpo_excluded": usage["dpo_excluded"],
+        "dpo_exclusion_scope": usage["dpo_exclusion_scope"],
     }
 
 
@@ -1671,6 +1831,78 @@ def _zip_manifest(path: Optional[Path]) -> Dict[str, Any]:
         return {}
 
 
+def _zip_length_stats(path: Path) -> Dict[str, Any]:
+    """优先读包内 ``data/length_stats.json``；旧包才回退计算并写 sidecar。"""
+    from pipeline.common import length_stats as ls  # noqa: PLC0415
+
+    packed = ls.read_length_stats_from_zip(path)
+    if packed:
+        return packed
+    side = ls.read_length_stats_sidecar(path)
+    if side:
+        return side
+    try:
+        files = ls.rows_from_zip_lf(path)
+        man = _zip_manifest(path)
+        stats = ls.build_length_stats(
+            files,
+            length_gate=man.get("length_gate") if isinstance(man.get("length_gate"), dict) else {},
+            source="legacy",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc), "datasets": {}}
+    if stats.get("ok"):
+        try:
+            ls.write_length_stats_sidecar(path, stats)
+        except OSError:
+            pass
+    return stats
+
+
+def _zip_doc_markdown(path: Path, build_id: str = "") -> Dict[str, Any]:
+    """包说明：优先该 Build 的 handoff.md，其次 zip 内 README，最后才回退工作区 handoff。"""
+    import zipfile  # noqa: PLC0415
+
+    cfg = load_config()
+    source = ""
+    markdown = ""
+    if build_id:
+        try:
+            build_dir, _ = dataset_build.resolve_build(cfg, build_id)
+            handoff = build_dir / "handoff.md"
+            if handoff.is_file():
+                markdown = handoff.read_text(encoding="utf-8")
+                source = str(handoff)
+        except (FileNotFoundError, ValueError):
+            pass
+    docs: List[str] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+            docs = sorted(
+                n for n in names
+                if n.lower().endswith(".md") and not n.endswith("/")
+            )
+            if not markdown:
+                for arc in (
+                    "goldthread-train/README.md",
+                    "README.md",
+                    "goldthread-train/docs/DEPLOY.md",
+                ):
+                    if arc in names:
+                        markdown = zf.read(arc).decode("utf-8", errors="replace")
+                        source = arc
+                        break
+    except Exception:  # noqa: BLE001
+        docs = []
+    if not markdown:
+        train_ho = stage_dirs(cfg)["train"] / "handoff.md"
+        if train_ho.is_file():
+            markdown = train_ho.read_text(encoding="utf-8")
+            source = str(train_ho)
+    return {"markdown": markdown, "source": source, "docs": docs}
+
+
 @app.post("/api/export/package")
 def export_package(body: Optional[ExportPackageBody] = None) -> Dict[str, Any]:
     """异步生成交付 zip（复用 Job 轮询；约 15–30 秒）。
@@ -1753,7 +1985,12 @@ def _resolve_delivery_zip(delivery_dir: Path, name: str = "") -> Path:
 
 @app.get("/api/export/history")
 def export_history() -> Dict[str, Any]:
-    """交付目录里的全部 zip，新的在前。"""
+    """交付目录里的全部 zip，新的在前。
+
+    ``length`` 来自包内/旁路静态统计，列表阶段不分词。
+    """
+    from pipeline.common import length_stats as ls  # noqa: PLC0415
+
     delivery_dir = _delivery_dir()
     rows = []
     if delivery_dir.exists():
@@ -1762,6 +1999,7 @@ def export_history() -> Dict[str, Any]:
             man = _zip_manifest(z)
             fmt = man.get("format_contract") if isinstance(man.get("format_contract"), dict) else {}
             counts = man.get("counts") if isinstance(man.get("counts"), dict) else {}
+            length = ls.pack_length_preview(ls.read_length_stats_static(z))
             rows.append({
                 "name": z.name,
                 "size_bytes": z.stat().st_size,
@@ -1776,8 +2014,38 @@ def export_history() -> Dict[str, Any]:
                 "sft_eval": counts.get("sft.eval.lf.jsonl"),
                 "dpo_train": counts.get("dpo.train.lf.jsonl"),
                 "dpo_eval": counts.get("dpo.eval.lf.jsonl"),
+                "length": length,
             })
     return {"total": len(rows), "packs": rows}
+
+
+@app.get("/api/export/pack/docs")
+def export_pack_docs(name: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """某个历史包的说明文档（handoff / README）。"""
+    z = _resolve_delivery_zip(_delivery_dir(), name)
+    man = _zip_manifest(z)
+    build_id = str(man.get("build_id") or "")
+    docs = _zip_doc_markdown(z, build_id=build_id)
+    return {
+        "name": z.name,
+        "build_id": build_id,
+        "package_hash": man.get("package_hash") or "",
+        **docs,
+    }
+
+
+@app.get("/api/export/pack/length-stats")
+def export_pack_length_stats(name: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """某个历史包的训练内容长度分布。"""
+    z = _resolve_delivery_zip(_delivery_dir(), name)
+    man = _zip_manifest(z)
+    stats = _zip_length_stats(z)
+    return {
+        "name": z.name,
+        "build_id": man.get("build_id") or "",
+        "package_hash": man.get("package_hash") or "",
+        **stats,
+    }
 
 
 @app.get("/api/export/download")
@@ -1793,6 +2061,27 @@ def export_download(name: str = ""):
             "Pragma": "no-cache",
         },
     )
+
+
+@app.delete("/api/export/pack")
+def export_pack_delete(name: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """删除某个历史交付 zip（及旁路 length_stats sidecar）。"""
+    from pipeline.common import length_stats as ls  # noqa: PLC0415
+
+    z = _resolve_delivery_zip(_delivery_dir(), name)
+    side = ls.sidecar_path(z)
+    deleted = [z.name]
+    try:
+        z.unlink()
+    except OSError as exc:
+        raise HTTPException(500, f"删除失败：{exc}") from exc
+    if side.is_file():
+        try:
+            side.unlink()
+            deleted.append(side.name)
+        except OSError:
+            pass
+    return {"ok": True, "name": z.name, "deleted": deleted}
 
 
 @app.get("/api/dataset/builds")
@@ -1973,25 +2262,96 @@ def dataset_draft_preview(
     }
 
 
+def _draft_tree_counts(samples: List[Dict[str, Any]]) -> Dict[str, int]:
+    return {
+        "candidates": len(samples),
+        "included": sum(1 for r in samples if r["included"]),
+        "excluded": sum(1 for r in samples if not r["included"] and r["decision"] == "exclude"),
+        "gate_excluded": sum(1 for r in samples if not r["included"] and r["decision"] != "exclude"),
+        "sft": sum(1 for r in samples if r["kind"] == "sft"),
+        "trajectory": sum(1 for r in samples if r["kind"] == "trajectory"),
+        "dpo": sum(1 for r in samples if r["kind"] == "dpo"),
+    }
+
+
+def _draft_sample_actionable(row: Dict[str, Any]) -> bool:
+    """与控制台树行「恢复 / 停用」按钮条件一致：能点操作的排前面。"""
+    if row.get("included"):
+        return True
+    scope = str(row.get("decision_scope") or "")
+    return row.get("decision") == "exclude" and scope in ("", "sample")
+
+
+def _nest_kind_buckets(child_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """轨迹下固定挂 SFT、DPO 两个可展开节点。"""
+    buckets: Dict[str, List[Dict[str, Any]]] = {"sft": [], "dpo": []}
+    for row in child_rows:
+        kind = str(row.get("kind") or "")
+        if kind in buckets:
+            buckets[kind].append(row)
+    for kind in ("sft", "dpo"):
+        # 能点「恢复/停用」的在前；其中已纳入优先，再按步序；门禁丢弃等无法点的沉底。
+        buckets[kind].sort(key=lambda r: (
+            not _draft_sample_actionable(r),
+            not bool(r.get("included")),
+            r.get("ref_step") is None,
+            int(r.get("ref_step") or 0),
+            str(r.get("sample_id") or ""),
+        ))
+    return [
+        {
+            "kind": kind,
+            "counts": _draft_tree_counts(buckets[kind]),
+            "samples": buckets[kind],
+        }
+        for kind in ("sft", "dpo")
+    ]
+
+
+def _nest_session_trajectories(sid: str, samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """会话下挂轨迹；轨迹下再挂 SFT / DPO 节点，其下才是切片样本。"""
+    traj_rows = [r for r in samples if r.get("kind") == "trajectory"]
+    child_rows = [r for r in samples if r.get("kind") != "trajectory"]
+    if not samples:
+        return []
+    if not traj_rows:
+        return [{
+            "trajectory_id": f"traj::{sid}" if sid else "traj::unknown",
+            "sample": None,
+            "counts": _draft_tree_counts(child_rows),
+            "kinds": _nest_kind_buckets(child_rows),
+        }]
+    trajectories: List[Dict[str, Any]] = []
+    for index, traj in enumerate(traj_rows):
+        kids = child_rows if index == 0 else []
+        trajectories.append({
+            "trajectory_id": str(traj.get("sample_id") or f"traj::{sid}"),
+            "sample": traj,
+            "counts": _draft_tree_counts([traj, *kids]),
+            "kinds": _nest_kind_buckets(kids),
+        })
+    return trajectories
+
+
+def _flatten_session_samples(node: Dict[str, Any]) -> List[Dict[str, Any]]:
+    flat: List[Dict[str, Any]] = []
+    for traj in node.get("trajectories") or []:
+        if traj.get("sample"):
+            flat.append(traj["sample"])
+        for bucket in traj.get("kinds") or []:
+            flat.extend(bucket.get("samples") or [])
+        flat.extend(traj.get("samples") or [])
+    return flat
+
+
 @app.get("/api/dataset/draft/tree")
 def dataset_draft_tree(group_by: str = "project") -> Dict[str, Any]:
-    """层级树：分组 → 黄金会话 → 已切片样本。停用与切分都沿这棵树向下生效。"""
+    """层级树：分组 → 黄金会话 → 轨迹 → SFT/DPO 节点 → 切片。停用与切分都沿这棵树向下生效。"""
     if group_by not in ("project", "split"):
         raise HTTPException(400, "group_by 必须是 project|split")
     preview = stage3_synth.draft_preview(load_config())
     plan = preview.get("split_plan") or {}
     scopes = preview.get("scope_decisions") or {}
-
-    def counts(samples: List[Dict[str, Any]]) -> Dict[str, int]:
-        return {
-            "candidates": len(samples),
-            "included": sum(1 for r in samples if r["included"]),
-            "excluded": sum(1 for r in samples if not r["included"] and r["decision"] == "exclude"),
-            "gate_excluded": sum(1 for r in samples if not r["included"] and r["decision"] != "exclude"),
-            "sft": sum(1 for r in samples if r["kind"] == "sft"),
-            "trajectory": sum(1 for r in samples if r["kind"] == "trajectory"),
-            "dpo": sum(1 for r in samples if r["kind"] == "dpo"),
-        }
 
     by_session: Dict[str, List[Dict[str, Any]]] = {}
     for row in preview["rows"]:
@@ -2001,6 +2361,9 @@ def dataset_draft_tree(group_by: str = "project") -> Dict[str, Any]:
     for info in preview["sessions"]:
         sid = str(info["session_id"])
         samples = by_session.pop(sid, [])
+        usage = dataset_draft.session_kind_exclusions(
+            {"scope_decisions": scopes}, sid, info["project_group"]
+        )
         session_nodes[sid] = {
             "session_id": sid,
             "project_group": info["project_group"],
@@ -2010,24 +2373,36 @@ def dataset_draft_tree(group_by: str = "project") -> Dict[str, Any]:
             "exclusion_scope": info.get("exclusion_scope", ""),
             "exclusion_reason": info.get("exclusion_reason", ""),
             "own_excluded": (scopes.get(f"session:{sid}") or {}).get("action") == "exclude",
+            "sft_excluded": usage["sft_excluded"],
+            "dpo_excluded": usage["dpo_excluded"],
+            "sft_exclusion_scope": usage["sft_exclusion_scope"],
+            "dpo_exclusion_scope": usage["dpo_exclusion_scope"],
             "effective_state": info.get("effective_state", ""),
-            "counts": counts(samples),
-            "samples": samples,
+            "counts": _draft_tree_counts(samples),
+            "trajectories": _nest_session_trajectories(sid, samples),
         }
     for sid, samples in by_session.items():
         first = samples[0]
+        project_group = first.get("project_group", "unknown")
+        usage = dataset_draft.session_kind_exclusions(
+            {"scope_decisions": scopes}, sid, project_group
+        )
         session_nodes[sid] = {
             "session_id": sid,
-            "project_group": first.get("project_group", "unknown"),
+            "project_group": project_group,
             "split": first.get("split", "train"),
             "split_source": first.get("split_source", "project"),
             "excluded": False,
             "exclusion_scope": "",
             "exclusion_reason": "",
             "own_excluded": False,
+            "sft_excluded": usage["sft_excluded"],
+            "dpo_excluded": usage["dpo_excluded"],
+            "sft_exclusion_scope": usage["sft_exclusion_scope"],
+            "dpo_exclusion_scope": usage["dpo_exclusion_scope"],
             "effective_state": "",
-            "counts": counts(samples),
-            "samples": samples,
+            "counts": _draft_tree_counts(samples),
+            "trajectories": _nest_session_trajectories(sid, samples),
         }
 
     groups: Dict[str, Dict[str, Any]] = {}
@@ -2048,10 +2423,10 @@ def dataset_draft_tree(group_by: str = "project") -> Dict[str, Any]:
             "samples": [],
         })
         group["sessions"].append(node)
-        group["samples"].extend(node["samples"])
+        group["samples"].extend(_flatten_session_samples(node))
     out_groups = []
     for group in groups.values():
-        group["counts"] = counts(group.pop("samples"))
+        group["counts"] = _draft_tree_counts(group.pop("samples"))
         group["sessions"].sort(key=lambda n: n["session_id"])
         out_groups.append(group)
     out_groups.sort(key=lambda g: g["key"])
@@ -2195,28 +2570,45 @@ def dataset_rows(
         filtered.append((orig_idx, r))
 
     page = filtered[offset : offset + limit]
+    draft = dataset_draft.load_draft(cfg)
+    is_dpo = name.startswith("dpo")
+    legacy = stage3_synth._load_dpo_exclusions(stage_dirs(cfg)["state"]) if is_dpo else {}
+    out_rows = []
+    for orig_idx, r in page:
+        meta = r.get("metadata") if isinstance(r.get("metadata"), dict) else {
+            "session_id": r.get("session_id"),
+            "project_group": r.get("project_group"),
+            "split": r.get("split"),
+            "model": r.get("model"),
+            "quality_score": r.get("quality_score"),
+            "pathologies": r.get("pathologies", []),
+            "tool_calls": r.get("tool_calls", []),
+        }
+        sample_id = str(r.get("sample_id") or r.get("diagnostic_id") or "")
+        decision = dataset_draft.exclusion_for(
+            sample_id,
+            str(meta.get("project_group") or "unknown"),
+            str(meta.get("session_id") or ""),
+            draft,
+            legacy,
+            is_dpo=is_dpo,
+        )
+        out_rows.append({
+            "index": orig_idx,
+            "sample_id": sample_id,
+            "metadata": meta,
+            "preview": _preview(r, name),
+            "decision": decision.get("action") or "auto",
+            "decision_scope": decision.get("scope") or "",
+            "decision_reason": decision.get("reason") or "",
+            "included": decision.get("action") != "exclude",
+        })
     return {
         "name": name,
         "total": len(filtered),
         "unfiltered_total": len(all_rows),
         "offset": offset,
-        "rows": [
-            {
-                "index": orig_idx,
-                "sample_id": r.get("sample_id") or r.get("diagnostic_id"),
-                "metadata": r.get("metadata") or {
-                    "session_id": r.get("session_id"),
-                    "project_group": r.get("project_group"),
-                    "split": r.get("split"),
-                    "model": r.get("model"),
-                    "quality_score": r.get("quality_score"),
-                    "pathologies": r.get("pathologies", []),
-                    "tool_calls": r.get("tool_calls", []),
-                },
-                "preview": _preview(r, name),
-            }
-            for orig_idx, r in page
-        ],
+        "rows": out_rows,
     }
 
 
@@ -2303,6 +2695,7 @@ def _preview(row: Dict[str, Any], dataset_name: str = "") -> Dict[str, Any]:
             (m.get("value") for m in convs if m.get("from") in ("human", "user")),
             "",
         )
+        # body 已剥掉 tool；无思考时仅回退到非 tool 正文，tool 只出现在 *_tools
         return {
             "kind": "dpo",
             "turns": len(convs),

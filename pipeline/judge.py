@@ -29,9 +29,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .common.config import load_config
 from .common.llm import chat_json
+from .common.quality import dominant_thinking_lang
 from .common.store import read_json
 
-PROMPT_VERSION = "judge.v1"
+PROMPT_VERSION = "judge.v2"
 
 MAX_STEPS_KEPT = 0.6  # 单会话最多剪除比例（安全阀，由程序强制）
 
@@ -58,7 +59,7 @@ D. 真实业务探针排错【必须保留，严禁剪除】：遇到未知格�
 【纪律红线】
 - 严禁引入原文没有的偏移量、密钥、路径、版本号、结论；改写只能是"删减 + 措辞收敛"，不能新增事实。
 - 跨目录偷看（读/拷贝同级其他实验目录，如 /d/crack/xxx-glm/ 里读本不该读的东西）-> 该步标记 exclude（保留在流程中但排除出训练集）。
-- 语言必须与原文一致（英文原文输出英文）。
+- 语言必须与原文一致（英文原文输出英文，中文原文输出中文）；rewrite 的 rewritten 不得翻语种。
 - 段落结构沿用原文空行分段。"""
 
 STEPS_SYSTEM = f"""你是工程分析 Agent 训练数据的判断员。给你一条已按手册清洗过的会话里的若干步骤，你逐条决定它们该怎么处理。
@@ -77,7 +78,8 @@ STEPS_SYSTEM = f"""你是工程分析 Agent 训练数据的判断员。给你一
 1. 默认 keep。只有存在明确问题的步才动，宁可少动不可错删。
 2. D 类科学排错闭环、关键密钥/结构发现、并发侦察 -> 一律 keep。
 3. rewrite/压缩时必须保留全部事实（偏移量、字节数、密钥、路径、版本、结论），只删自我推翻与冗余。
-4. 只输出 JSON。"""
+4. rewrite 时 rewritten 必须与该步 thinking_lang（en/zh）一致；不得把英文 thinking 改成中文，也不得反过来。
+5. 只输出 JSON。"""
 
 STEPS_SCHEMA = """输出 JSON：
 {"decisions":[{"msg_id":"原 id","action":"keep|prune|fold|rewrite|exclude",
@@ -136,11 +138,23 @@ DPO_SYSTEM = f"""你是偏好数据复核员。给你若干偏好对（同一上
 - swap：两者对应关系反了（chosen 才是错的）。
 - drop：这对不成立——例如差别只是风格/长短偏好、rejected 其实没错、或两者都不对。
 宁可 drop 也不要放进错误的偏好信号。
+每条判定都必须写 reason（通过与不通过都要说明依据）。
 只输出 JSON。"""
 
 DPO_SCHEMA = """输出 JSON：
 {"pairs":[{"sample_id":"原 id","verdict":"good|swap|drop","reason":"不超过 20 字"}]}
-约束：只需返回非 good 的项；全部成立就输出 {"pairs":[]}。"""
+约束：必须逐条返回本批全部 sample_id；每条都要有 reason（通过也要写）。"""
+
+
+def _dpo_default_reason(verdict: str) -> str:
+    return {
+        "good": "偏好成立",
+        "swap": "chosen/rejected 应对调",
+        "drop": "偏好对不成立",
+        "pending": "尚未完成模型复核",
+        "review_failed": "模型复核失败，可重试",
+        "bypassed": "模型判断已关闭",
+    }.get(str(verdict or ""), "")
 
 
 # ---------------------------------------------------------------------------
@@ -320,12 +334,15 @@ _ITEM_THINK = 1100  # 单步送判的 thinking 截断（由 _jcfg 覆盖）
 
 
 def _step_payload(m: Dict[str, Any], no: int) -> Dict[str, Any]:
+    thinking = m.get("raw_thinking") or m.get("thinking") or ""
+    lang = dominant_thinking_lang(thinking)
     return {
         "msg_id": m.get("id"),
         "no": no,
         "turn": m.get("turn_index"),
-        "thinking": _clip(m.get("raw_thinking") or m.get("thinking"), int(_ITEM_THINK)),
-        "think_len": len((m.get("raw_thinking") or m.get("thinking") or "")),
+        "thinking": _clip(thinking, int(_ITEM_THINK)),
+        "think_len": len(thinking),
+        "thinking_lang": lang if lang in ("en", "zh") else "keep_original",
         "text": _clip(m.get("raw_text") or m.get("text"), 200),
         "tools": _tool_brief(m),
         "results": _result_brief(m),
@@ -617,12 +634,13 @@ def cached_dpo_verdicts(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any
         sample_id = str(pair.get("sample_id"))
         hit = cache.get(_vkey(model_id, "dpo", pair))
         if isinstance(hit, dict) and hit.get("verdict") in ("good", "swap", "drop", "review_failed"):
+            verdict = str(hit["verdict"])
             out[sample_id] = {
-                "verdict": hit["verdict"],
-                "reason": str(hit.get("reason") or ""),
+                "verdict": verdict,
+                "reason": str(hit.get("reason") or "").strip() or _dpo_default_reason(verdict),
             }
         else:
-            out[sample_id] = {"verdict": "pending", "reason": "尚未完成模型复核"}
+            out[sample_id] = {"verdict": "pending", "reason": _dpo_default_reason("pending")}
     return out
 
 
@@ -664,17 +682,23 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
             return
         if not isinstance(out.get("pairs"), list):
             return  # 结构不对：不写缓存，交由重试/下次运行处理
-        non_good = {str(it.get("sample_id")): it for it in out["pairs"]
-                    if isinstance(it, dict) and it.get("verdict") in ("swap", "drop")}
+        by_id = {
+            str(it.get("sample_id")): it for it in out["pairs"]
+            if isinstance(it, dict) and it.get("verdict") in ("good", "swap", "drop")
+        }
         with _clock:
             for p in batch:
                 sid = str(p.get("sample_id"))
-                if sid in non_good:
-                    it = non_good[sid]
-                    cache[_vkey(model_id, "dpo", p)] = {"verdict": it["verdict"],
-                                                        "reason": _clip(it.get("reason"), 60)}
+                it = by_id.get(sid)
+                if it:
+                    verdict = str(it["verdict"])
+                    reason = _clip(it.get("reason"), 60) or _dpo_default_reason(verdict)
+                    cache[_vkey(model_id, "dpo", p)] = {"verdict": verdict, "reason": reason}
                 else:
-                    cache[_vkey(model_id, "dpo", p)] = {"verdict": "good", "reason": ""}
+                    # 旧模型可能省略 good；兼容为通过并补默认理由
+                    cache[_vkey(model_id, "dpo", p)] = {
+                        "verdict": "good", "reason": _dpo_default_reason("good"),
+                    }
             try:
                 _wj(cpath, cache)
             except Exception:  # noqa: BLE001
@@ -696,11 +720,45 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
         _persist(batch, out)
         return out
 
+    from . import steps as stepcat  # noqa: PLC0415
+
     batches = _batched(pairs, j["dpo_batch"])
-    outs = _pmap(_one, batches, j["concurrency"])
+    total_pairs = len(pairs)
+    done_pairs = 0
+    progress_lock = threading.Lock()
+    started_at = time.monotonic()
+    last_visible = {"t": started_at, "n": 0}
+
+    def _bump(n: int) -> None:
+        """每批完成后推进进度条；可见日志按约 10% 或 15s 节流，避免刷屏。"""
+        nonlocal done_pairs
+        with progress_lock:
+            done_pairs += n
+            cur = done_pairs
+            now = time.monotonic()
+            elapsed = now - started_at
+            should_log = (
+                cur >= total_pairs
+                or cur - last_visible["n"] >= max(1, total_pairs // 10)
+                or now - last_visible["t"] >= 15
+            )
+            if should_log:
+                last_visible["t"] = now
+                last_visible["n"] = cur
+        elapsed_txt = stepcat.format_elapsed(elapsed)
+        stepcat.emit(
+            log, "s3.dpo_review", cur, total_pairs,
+            f"已评估 {cur}/{total_pairs} 对 · 耗时 {elapsed_txt}",
+        )
+        if should_log:
+            log(f"[judge] dpo 进度 {cur}/{total_pairs} 对 · 耗时 {elapsed_txt}")
+
+    stepcat.emit(log, "s3.dpo_review", 0, total_pairs, f"待评估 {total_pairs} 对")
+
     resolved: List[Dict[str, Any]] = []
     failed_ids: List[str] = []
-    for batch, out in zip(batches, outs):
+
+    def _resolve_batch(batch: List[Dict[str, Any]], out: Any) -> None:
         if not out and len(batch) > 1:
             # 批失败（常见于超时/JSON 截断）-> 拆成单对重试，避免整批静默放过
             log(f"[judge] dpo 批失败（{len(batch)} 对），拆单重试")
@@ -710,11 +768,35 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
                     failed_ids.append(str(p.get("sample_id")))
                 else:
                     resolved.append(o)
-            continue
+            return
         if not out:
             failed_ids.append(str(batch[0].get("sample_id")))
-            continue
+            return
         resolved.append(out)
+
+    workers = max(1, int(j["concurrency"]))
+    if workers == 1 or len(batches) <= 1:
+        for batch in batches:
+            try:
+                out = _one(batch)
+            except Exception:  # noqa: BLE001
+                out = None
+            _resolve_batch(batch, out)
+            _bump(len(batch))
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
+
+        with ThreadPoolExecutor(max_workers=min(workers, len(batches))) as ex:
+            futs = {ex.submit(_one, batch): batch for batch in batches}
+            for fut in as_completed(futs):
+                batch = futs[fut]
+                try:
+                    out = fut.result()
+                except Exception:  # noqa: BLE001
+                    out = None
+                _resolve_batch(batch, out)
+                _bump(len(batch))
+
     if failed_ids:
         log(f"[judge] dpo 复核失败 {len(failed_ids)} 对（已标记 review_failed，不静默放过）")
     for out in resolved:
@@ -724,16 +806,20 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
             sid, v = it.get("sample_id"), (it.get("verdict") or "").strip()
             if v not in ("swap", "drop"):
                 continue
-            out_map[str(sid)] = {"verdict": v, "reason": _clip(it.get("reason"), 60)}
+            out_map[str(sid)] = {
+                "verdict": v,
+                "reason": _clip(it.get("reason"), 60) or _dpo_default_reason(v),
+            }
     for fid in failed_ids:
-        out_map[fid] = {"verdict": "review_failed", "reason": "模型复核失败，需人工抽查"}
+        out_map[fid] = {"verdict": "review_failed", "reason": _dpo_default_reason("review_failed")}
     if failed_ids and _wj is not None:
         by_id = {str(p.get("sample_id")): p for p in pairs}
         with _clock:
             for fid in failed_ids:
                 if fid in by_id:
                     cache[_vkey(model_id, "dpo", by_id[fid])] = {
-                        "verdict": "review_failed", "reason": "模型复核失败，可重试",
+                        "verdict": "review_failed",
+                        "reason": _dpo_default_reason("review_failed"),
                     }
             try:
                 _wj(cpath, cache)

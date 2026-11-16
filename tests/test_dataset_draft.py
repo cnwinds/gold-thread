@@ -162,6 +162,70 @@ class DatasetDraftApiTests(unittest.TestCase):
         restored = read_jsonl(self.dirs["train"] / "sft_step_windows_sharegpt.jsonl")
         self.assertIn("step::s1::a1", {r["sample_id"] for r in restored})
 
+    def _write_s1_dpo_pair(self, sample_id: str = "dpo::s1::pair"):
+        write_jsonl_atomic(self.dirs["gold"] / "dpo_pairs.jsonl", [{
+            "sample_id": sample_id,
+            "conversations": [{"from": "human", "value": "分析文件"}],
+            "chosen": {"from": "gpt", "value": "先验证"},
+            "rejected": {"from": "gpt", "value": "直接猜"},
+            "metadata": {
+                "session_id": "s1",
+                "project_group": "game::alpha",
+                "source": "stage2_pruned",
+                "msg_id": "a1",
+            },
+        }])
+        index_path = self.dirs["gold"] / "index.json"
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        index["sessions"]["s1"]["dpo_count"] = 1
+        write_json_atomic(index_path, index)
+
+    def test_session_sft_scope_does_not_disable_dpo(self):
+        self._write_s1_dpo_pair()
+        self._set_scope("session_sft", "s1", "exclude")
+        sft = self._draft_row("step::s1::a1")
+        self.assertFalse(sft["included"])
+        self.assertEqual("session_sft", sft["decision_scope"])
+        # 同会话 DPO 不受 session_sft 影响
+        preview = self.client.get("/api/dataset/draft").json()
+        dpo_rows = [r for r in preview["rows"] if r.get("kind") == "dpo" and r.get("session_id") == "s1"]
+        self.assertTrue(dpo_rows)
+        self.assertTrue(all(r.get("included") for r in dpo_rows))
+
+        gold = self.client.get("/api/gold/sessions").json()["sessions"]
+        by_id = {s["session_id"]: s for s in gold}
+        self.assertTrue(by_id["s1"]["sft_excluded"])
+        self.assertFalse(by_id["s1"]["dpo_excluded"])
+        self.assertFalse(by_id["s1"]["dataset_excluded"])
+
+        stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)
+        sharegpt = read_jsonl(self.dirs["train"] / "sft_step_windows_sharegpt.jsonl")
+        self.assertNotIn("step::s1::a1", {r["sample_id"] for r in sharegpt})
+        dpo = read_jsonl(self.dirs["train"] / "dpo_preference_pairs.jsonl")
+        self.assertTrue(any(r.get("metadata", {}).get("session_id") == "s1" for r in dpo))
+
+        self._set_scope("session_sft", "s1", "auto")
+        self.assertTrue(self._draft_row("step::s1::a1")["included"])
+
+    def test_session_dpo_scope_does_not_disable_sft(self):
+        self._write_s1_dpo_pair()
+        self._set_scope("session_dpo", "s1", "exclude")
+        self.assertTrue(self._draft_row("step::s1::a1")["included"])
+        preview = self.client.get("/api/dataset/draft").json()
+        dpo_rows = [r for r in preview["rows"] if r.get("kind") == "dpo" and r.get("session_id") == "s1"]
+        self.assertTrue(dpo_rows)
+        self.assertTrue(all(not r.get("included") for r in dpo_rows))
+        self.assertTrue(all(r.get("decision_scope") == "session_dpo" for r in dpo_rows))
+
+        gold = {s["session_id"]: s for s in self.client.get("/api/gold/sessions").json()["sessions"]}
+        self.assertTrue(gold["s1"]["dpo_excluded"])
+        self.assertFalse(gold["s1"]["sft_excluded"])
+
+        detail = self.client.get("/api/gold/session/s1").json()
+        self.assertTrue(detail["dpo_excluded"])
+        self.assertFalse(detail["sft_excluded"])
+        self.assertFalse(detail["dataset_excluded"])
+
     def test_project_scope_exclusion_covers_its_sessions_only(self):
         self._set_scope("project", "game::alpha", "exclude")
         row = self._draft_row("step::s1::a1")
@@ -200,7 +264,123 @@ class DatasetDraftApiTests(unittest.TestCase):
         self.assertEqual(200, cleared.status_code, cleared.text)
         self.assertEqual("train", self._draft_row("step::s1::a1")["split"])
 
-    def test_tree_groups_gold_sessions_then_samples(self):
+    def test_tree_sft_samples_follow_trajectory_step_order(self):
+        """SFT 应按轨迹步序排列，不能按 msg UUID 字典序（否则看起来像打乱）。"""
+        gold_file = self.dirs["gold"] / "sessions" / "s1.gold.jsonl"
+        record = read_jsonl(gold_file)[0]
+        # 后出现的步用字典序更靠前的 id，若按 sample_id 排序会颠倒。
+        record["messages"] = [
+            {"id": "sys", "role": "system", "content": "system"},
+            {"id": "root", "role": "user", "content": "分析目标文件"},
+            _assistant("zz_first"),
+            {
+                **_assistant("aa_second"),
+                "thinking": "并行核查关键偏移并落盘。",
+                "tool_calls": [
+                    {"id": "c1", "name": "bash", "arguments": {"command": "python a.py"}},
+                    {"id": "c2", "name": "bash", "arguments": {"command": "python b.py"}},
+                ],
+            },
+        ]
+        record["stats"] = {"raw_steps": 2, "gold_steps": 2}
+        write_jsonl_atomic(gold_file, [record])
+
+        tree = self.client.get("/api/dataset/draft/tree").json()
+        alpha = next(g for g in tree["groups"] if g["key"] == "game::alpha")
+        sft = alpha["sessions"][0]["trajectories"][0]["kinds"][0]["samples"]
+        self.assertGreaterEqual(len(sft), 2)
+        self.assertEqual([1, 2], [r.get("ref_step") for r in sft[:2]])
+        self.assertTrue(str(sft[0]["title"]).startswith("第1步"))
+        self.assertTrue(str(sft[1]["title"]).startswith("第2步"))
+        self.assertEqual(
+            ["step::s1::zz_first", "step::s1::aa_second"],
+            [r["sample_id"] for r in sft[:2]],
+        )
+
+    def test_tree_actionable_samples_sort_before_inert(self):
+        """能点恢复/停用的在前；样本层手动停用仍可操作，排在门禁丢弃等无按钮项之前。"""
+        gold_file = self.dirs["gold"] / "sessions" / "s1.gold.jsonl"
+        record = read_jsonl(gold_file)[0]
+        record["messages"] = [
+            {"id": "sys", "role": "system", "content": "system"},
+            {"id": "root", "role": "user", "content": "分析目标文件"},
+            _assistant("step_a"),
+            _assistant("step_b"),
+            _assistant("step_c"),
+        ]
+        record["stats"] = {"raw_steps": 3, "gold_steps": 3}
+        write_jsonl_atomic(gold_file, [record])
+
+        self._set_decision("step::s1::step_b", "exclude")
+        write_jsonl_atomic(self.dirs["gold"] / "dpo_pairs.jsonl", [
+            {
+                "sample_id": "dpo::s1::good",
+                "conversations": [{"from": "human", "value": "分析文件"}],
+                "chosen": {"from": "gpt", "value": "先验证"},
+                "rejected": {"from": "gpt", "value": "直接猜"},
+                "metadata": {
+                    "session_id": "s1",
+                    "project_group": "game::alpha",
+                    "source": "stage2_pruned",
+                    "msg_id": "step_a",
+                },
+            },
+            {
+                "sample_id": "dpo::s1::manual_off",
+                "conversations": [{"from": "human", "value": "分析文件"}],
+                "chosen": {"from": "gpt", "value": "稳健做法"},
+                "rejected": {"from": "gpt", "value": "草率做法"},
+                "metadata": {
+                    "session_id": "s1",
+                    "project_group": "game::alpha",
+                    "source": "stage2_pruned",
+                    "msg_id": "step_c",
+                },
+            },
+            {
+                "sample_id": "dpo_neg::s1::empty",
+                "conversations": [{"from": "human", "value": "分析文件"}],
+                "chosen": {"from": "gpt", "value": ""},
+                "rejected": {"from": "gpt", "value": ""},
+                "metadata": {
+                    "session_id": "s1",
+                    "project_group": "game::alpha",
+                    "source": "negative_step",
+                    "msg_id": "step_b",
+                    "reason": "over_rumination_length",
+                },
+            },
+        ])
+        self.cfg["judge"] = {"enabled": False}
+        self._set_decision("dpo::s1::manual_off", "exclude")
+
+        tree = self.client.get("/api/dataset/draft/tree").json()
+        alpha = next(g for g in tree["groups"] if g["key"] == "game::alpha")
+        kinds = {k["kind"]: k["samples"] for k in alpha["sessions"][0]["trajectories"][0]["kinds"]}
+        sft = kinds["sft"]
+        dpo = kinds["dpo"]
+
+        # SFT：已纳入 → 样本层可恢复停用；三者都能操作，按纳入优先 + 步序。
+        self.assertEqual(
+            ["step::s1::step_a", "step::s1::step_c", "step::s1::step_b"],
+            [r["sample_id"] for r in sft if r["sample_id"].startswith("step::s1::step_")],
+        )
+        self.assertTrue(sft[0]["included"] and sft[1]["included"])
+        self.assertEqual("exclude", sft[2]["decision"])
+        self.assertIn(sft[2].get("decision_scope") or "sample", ("", "sample"))
+
+        # DPO：可停用的 good、可恢复的 manual_off 在前；空坏步无按钮沉底。
+        dpo_ids = [r["sample_id"] for r in dpo]
+        self.assertEqual(
+            ["dpo::s1::good", "dpo::s1::manual_off", "dpo_neg::s1::empty"],
+            dpo_ids,
+        )
+        self.assertTrue(dpo[0]["included"])
+        self.assertEqual("exclude", dpo[1]["decision"])
+        self.assertFalse(dpo[2]["included"])
+        self.assertNotEqual("exclude", dpo[2].get("decision"))
+
+    def test_tree_groups_gold_sessions_then_trajectories_then_samples(self):
         self._set_scope("session", "s2", "exclude")
         response = self.client.get("/api/dataset/draft/tree")
         self.assertEqual(200, response.status_code, response.text)
@@ -211,8 +391,23 @@ class DatasetDraftApiTests(unittest.TestCase):
         self.assertEqual(1, len(alpha["sessions"]))
         session = alpha["sessions"][0]
         self.assertEqual("s1", session["session_id"])
-        self.assertTrue(session["samples"])
-        self.assertEqual(session["counts"]["candidates"], len(session["samples"]))
+        self.assertNotIn("samples", session)
+        self.assertTrue(session["trajectories"])
+        traj = session["trajectories"][0]
+        self.assertEqual("traj::s1", traj["trajectory_id"])
+        self.assertIsNotNone(traj["sample"])
+        self.assertEqual("trajectory", traj["sample"]["kind"])
+        self.assertEqual(["sft", "dpo"], [b["kind"] for b in traj["kinds"]])
+        sft_bucket = traj["kinds"][0]
+        dpo_bucket = traj["kinds"][1]
+        self.assertTrue(any(r["kind"] == "sft" for r in sft_bucket["samples"]))
+        self.assertTrue(all(r["kind"] == "sft" for r in sft_bucket["samples"]))
+        self.assertTrue(all(r["kind"] == "dpo" for r in dpo_bucket["samples"]))
+        flat = ([traj["sample"]] if traj.get("sample") else []) + [
+            r for bucket in traj["kinds"] for r in bucket["samples"]
+        ]
+        self.assertEqual(session["counts"]["candidates"], len(flat))
+        self.assertEqual(traj["counts"]["candidates"], len(flat))
         beta_session = groups["game::beta"]["sessions"][0]
         self.assertTrue(beta_session["excluded"])
         self.assertEqual(0, beta_session["counts"]["included"])
@@ -582,7 +777,13 @@ class DatasetDraftApiTests(unittest.TestCase):
             "conversations": [{"from": "human", "value": "分析文件"}],
             "chosen": {"from": "gpt", "value": "先验证"},
             "rejected": {"from": "gpt", "value": "直接猜测"},
-            "metadata": {"session_id": "s1", "project_group": "game::alpha", "source": "stage2_pruned"},
+            "metadata": {
+                "session_id": "s1",
+                "project_group": "game::alpha",
+                "source": "stage2_pruned",
+                "rejected_msg_id": "a1",
+                "chosen_msg_id": "a1",
+            },
         }
         write_jsonl_atomic(self.dirs["gold"] / "dpo_pairs.jsonl", [pair])
         self.cfg["judge"] = {"enabled": True}
@@ -593,6 +794,16 @@ class DatasetDraftApiTests(unittest.TestCase):
         self.assertEqual(sample_id, row["sample_id"])
         self.assertFalse(row["included"])
         self.assertEqual("pending", row["gate_status"])
+        self.assertEqual("尚未完成模型复核", row["decision_reason"])
+        self.assertEqual("第1步（弯路）", row["title"])
+        self.assertEqual(1, row["ref_step"])
+        self.assertTrue(row["preview"]["chosen_gist"])
+        self.assertTrue(row["preview"]["rejected_gist"])
+        pending_detail = self.client.get("/api/dataset/draft/sample", params={"sample_id": sample_id}).json()
+        self.assertEqual("pending", pending_detail["_draft"]["gate_status"])
+        self.assertEqual("尚未完成模型复核", pending_detail["_draft"]["decision_reason"])
+        self.assertEqual("第1步（弯路）", pending_detail["_draft"]["title"])
+        self.assertEqual(1, pending_detail["_draft"]["ref_step"])
         with self.assertRaisesRegex(RuntimeError, "尚未完成模型复核"):
             stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)
 
@@ -635,14 +846,124 @@ class DatasetDraftApiTests(unittest.TestCase):
         self.assertTrue(rows["good"]["included"])
         self.assertTrue(rows["swap"]["included"])
         self.assertFalse(rows["drop"]["included"])
+        self.assertEqual("test", rows["good"]["decision_reason"])
+        self.assertEqual("test", rows["drop"]["decision_reason"])
         detail = self.client.get("/api/dataset/draft/sample", params={"sample_id": "dpo::s1::swap"}).json()
         self.assertEqual("rejected-swap", detail["chosen"]["value"])
+        self.assertEqual("swap", detail["_draft"]["gate_status"])
+        self.assertEqual("test", detail["_draft"]["decision_reason"])
+        drop_detail = self.client.get("/api/dataset/draft/sample", params={"sample_id": "dpo::s1::drop"}).json()
+        self.assertFalse(drop_detail["_draft"]["included"])
+        self.assertEqual("drop", drop_detail["_draft"]["gate_status"])
+        self.assertEqual("test", drop_detail["_draft"]["decision_reason"])
+        good_detail = self.client.get("/api/dataset/draft/sample", params={"sample_id": "dpo::s1::good"}).json()
+        self.assertTrue(good_detail["_draft"]["included"])
+        self.assertEqual("good", good_detail["_draft"]["gate_status"])
+        self.assertEqual("test", good_detail["_draft"]["decision_reason"])
 
         self._set_decision("dpo::s1::good", "exclude")
         stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)
         generated = {r["sample_id"]: r for r in read_jsonl(self.dirs["train"] / "dpo_preference_pairs.jsonl")}
         self.assertEqual({"dpo::s1::swap"}, set(generated))
         self.assertEqual("rejected-swap", generated["dpo::s1::swap"]["chosen"]["value"])
+
+    def test_empty_dpo_chosen_rejected_are_auto_disabled(self):
+        sample_id = "dpo_neg::s1::empty"
+        pair = {
+            "sample_id": sample_id,
+            "conversations": [{"from": "human", "value": "分析文件"}],
+            "chosen": {"from": "gpt", "value": ""},
+            "rejected": {"from": "gpt", "value": ""},
+            "metadata": {
+                "session_id": "s1",
+                "project_group": "game::alpha",
+                "source": "negative_step",
+                "msg_id": "a1",
+                "reason": "over_rumination_length",
+            },
+        }
+        write_jsonl_atomic(self.dirs["gold"] / "dpo_pairs.jsonl", [pair])
+        self.cfg["judge"] = {"enabled": False}
+
+        row = self.client.get("/api/dataset/draft", params={"kind": "dpo"}).json()["rows"][0]
+        self.assertEqual(sample_id, row["sample_id"])
+        self.assertFalse(row["included"])
+        self.assertEqual("invalid", row["gate_status"])
+        self.assertEqual("chosen/rejected 均为空", row["decision_reason"])
+        self.assertEqual("第1步（坏步）", row["title"])
+
+        detail = self.client.get("/api/dataset/draft/sample", params={"sample_id": sample_id}).json()
+        self.assertFalse(detail["_draft"]["included"])
+        self.assertEqual("invalid", detail["_draft"]["gate_status"])
+        self.assertEqual("chosen/rejected 均为空", detail["_draft"]["decision_reason"])
+
+        stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)
+        generated = read_jsonl(self.dirs["train"] / "dpo_preference_pairs.jsonl")
+        self.assertNotIn(sample_id, {r["sample_id"] for r in generated})
+
+    def test_negative_step_same_action_only_think_compress_is_auto_disabled(self):
+        sample_id = "dpo_neg::s1::same-action"
+        tools = '<tool_call>\n{"name": "bash", "arguments": {"command": "ls"}}\n</tool_call>'
+        pair = {
+            "sample_id": sample_id,
+            "conversations": [{"from": "human", "value": "分析文件"}],
+            "chosen": {"from": "gpt", "value": f"<think>\n短思考。\n</think>\n\n{tools}"},
+            "rejected": {"from": "gpt", "value": f"<think>\n很长很长的反复自我怀疑思考。\n</think>\n\n{tools}"},
+            "metadata": {
+                "session_id": "s1",
+                "project_group": "game::alpha",
+                "source": "negative_step",
+                "msg_id": "a1",
+                "reason": "over_rumination_length",
+                "pathologies": ["over_rumination_length"],
+            },
+        }
+        write_jsonl_atomic(self.dirs["gold"] / "dpo_pairs.jsonl", [pair])
+        self.cfg["judge"] = {"enabled": False}
+
+        row = self.client.get("/api/dataset/draft", params={"kind": "dpo"}).json()["rows"][0]
+        self.assertFalse(row["included"])
+        self.assertEqual("invalid", row["gate_status"])
+        self.assertEqual("同动作，仅压缩思维链", row["decision_reason"])
+        self.assertTrue(row["preview"]["same_action"])
+        self.assertIn("短思考", row["preview"]["chosen_gist"])
+        self.assertNotIn("<tool_call>", row["preview"]["chosen_gist"])
+        detail = self.client.get("/api/dataset/draft/sample", params={"sample_id": sample_id}).json()
+        self.assertEqual("dpo", detail.get("kind"))
+        self.assertIn("短思考", detail["chosen"]["value"])
+
+    def test_dpo_preview_gist_excludes_tools_when_think_missing(self):
+        """无思考内容时，摘要/预览不得把 tool 正文塞进 chosen/rejected 思考。"""
+        tools = '<tool_call>\n{"name": "bash", "arguments": {"command": "ls -la"}}\n</tool_call>'
+        pair = {
+            "sample_id": "dpo::s1::tool-only",
+            "conversations": [{"from": "human", "value": "分析文件"}],
+            "chosen": {"from": "gpt", "value": f"<think>\n\n</think>\n\n{tools}"},
+            "rejected": {"from": "gpt", "value": tools},
+            "metadata": {
+                "session_id": "s1",
+                "project_group": "game::alpha",
+                "source": "stage2_pruned",
+                "msg_id": "a1",
+            },
+        }
+        write_jsonl_atomic(self.dirs["gold"] / "dpo_pairs.jsonl", [pair])
+        self.cfg["judge"] = {"enabled": False}
+
+        row = self.client.get("/api/dataset/draft", params={"kind": "dpo"}).json()["rows"][0]
+        self.assertEqual("", row["preview"]["chosen_gist"])
+        self.assertEqual("", row["preview"]["rejected_gist"])
+        self.assertNotIn("tool_call", row["preview"]["chosen_gist"])
+        self.assertNotIn("bash", row["preview"]["rejected_gist"])
+        self.assertNotIn("ls -la", json.dumps(row["preview"], ensure_ascii=False))
+
+        from pipeline.stage3_synth import _think_display_text, _gist_text
+        self.assertEqual("", _think_display_text(tools))
+        self.assertEqual("", _think_display_text(f"<think>\n\n</think>\n\n{tools}"))
+        self.assertEqual("先验证再改", _think_display_text("先验证再改"))
+        self.assertEqual("", _gist_text(tools, prefer_think=True))
+        self.assertIn("短思考", _gist_text("<think>\n短思考\n</think>\n\n" + tools, prefer_think=True))
+        self.assertNotIn("tool_call", _gist_text("<think>\n短思考\n</think>\n\n" + tools, prefer_think=True))
 
     def test_failed_dpo_evaluation_is_visible_and_blocks_build_until_retried(self):
         pair = {
@@ -714,6 +1035,13 @@ class DatasetDraftApiTests(unittest.TestCase):
         self.assertNotEqual(first["build_id"], second["build_id"])
         rows = read_jsonl(self.dirs["root"] / "04_release" / "builds" / second["build_id"] / "negative_diagnostics.jsonl")
         self.assertIn("new_diag", rows[0]["pathologies"])
+
+    def test_stage3_does_not_auto_package(self):
+        self.package_mock.reset_mock()
+        result = stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)
+        self.assertTrue(result["build_id"])
+        self.assertIsNone(result.get("package"))
+        self.package_mock.assert_not_called()
 
     def test_missing_build_config_prevents_package_fallback(self):
         result = stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)

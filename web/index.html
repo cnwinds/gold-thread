@@ -134,7 +134,7 @@
   .tag{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);white-space:nowrap}
   .tag::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c,var(--text-3))}
   .t-positive{--c:var(--pos)} .t-negative{--c:var(--neg)} .t-pending{--c:var(--pend)}
-  .t-done{--c:var(--pos)} .t-failed{--c:var(--neg)} .t-running{--c:var(--gold)}
+  .t-done{--c:var(--pos)} .t-failed{--c:var(--neg)} .t-running{--c:var(--gold)} .t-queued{--c:var(--pend)}
   .t-gold{--c:var(--gold)} .t-reject{--c:var(--neg)} .t-stale{--c:var(--ore)}
   .t-running::before{animation:pulse 1.2s ease-in-out infinite}
   @keyframes pulse{50%{opacity:.25}}
@@ -445,6 +445,8 @@
   .diff-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .diff-cap{font-size:12px;color:var(--text-3);margin-bottom:4px}
   .diff{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.7;max-height:320px;overflow:auto;padding:10px 12px;background:#12151a;border:1px solid var(--line-soft);border-radius:8px;color:#d3cdbd}
+  .pref-block+.pref-block{margin-top:14px;padding-top:14px;border-top:1px dashed var(--line-soft)}
+  .pref-block .json{max-height:220px;overflow:auto;margin:0}
   .diff del{background:rgba(227,115,95,.28);text-decoration:none;border-radius:2px}
   .diff ins{background:rgba(143,196,127,.26);text-decoration:none;border-radius:2px}
   textarea.rev-editbox,textarea.rev-comment,textarea.rev-note{display:block;width:100%;resize:vertical;line-height:1.7}
@@ -793,6 +795,13 @@
   .pick-row:hover{background:rgba(255,255,255,.03)}
   .pick-row.on{background:rgba(95,185,196,.1);box-shadow:inset 2px 0 var(--mint)}
   .pick-title{font-size:12.5px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .pick-path{margin-top:3px;font-family:var(--f-mono);font-size:10.5px;line-height:1.35;color:var(--text-3);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pick-preview-head .preview-path{margin-top:8px;display:grid;gap:4px}
+  .pick-preview-head .preview-path .row{display:grid;grid-template-columns:3.2rem minmax(0,1fr);gap:8px;align-items:start;
+    font-size:11.5px;line-height:1.45}
+  .pick-preview-head .preview-path .k{color:var(--text-3)}
+  .pick-preview-head .preview-path .v{font-family:var(--f-mono);color:var(--text-2);overflow-wrap:anywhere}
   .train-rail{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line-soft);background:#181b21}
   .train-rail-h{padding:10px 10px 8px;border-bottom:1px solid var(--line-soft)}
   .train-rail-h input{width:100%}
@@ -977,6 +986,16 @@
   .table-progress .num{font-size:13px;color:var(--text)}
   .table-progress .arrow{color:var(--text-3);font-size:12px}
   .table-detail{font-size:11px;color:var(--text-3);margin-top:3px;line-height:1.45}
+  .col-dest{display:flex;flex-direction:column;align-items:flex-start;gap:5px;min-width:0}
+  .col-dest.is-off .table-progress{opacity:.48}
+  .col-dest.is-off .table-detail{opacity:.55}
+  .usage-badge{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;line-height:1;
+    padding:3px 8px 3px 6px;border-radius:5px;letter-spacing:.04em;font-weight:500;
+    border:1px solid transparent;white-space:nowrap}
+  .usage-badge i{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.9;flex:none}
+  .usage-badge.sft-off{color:#d4a194;background:rgba(227,115,95,.1);border-color:rgba(227,115,95,.32)}
+  .usage-badge.dpo-off{color:#c4b08a;background:rgba(196,160,90,.1);border-color:rgba(196,160,90,.3)}
+  .usage-badge.sess-off{color:var(--text-3);background:rgba(255,255,255,.04);border-color:var(--line-soft)}
   .status-stack{display:flex;flex-direction:column;align-items:flex-start;gap:5px}
   .status-stack .adopt{gap:6px}
   .status-stack .adopt .faint{font-size:10.5px}
@@ -1037,7 +1056,7 @@
   .train-main .scroll{max-height:none}
   .train-main td{font-size:12px;vertical-align:top}
   .train-main .clip{max-width:360px}
-  /* 训练数据层级树：分组 → 黄金会话 → 切片样本，停用与切分向下继承 */
+  /* 训练数据层级树：分组 → 黄金会话 → 轨迹 → SFT/DPO 节点 → 切片，停用与切分向下继承 */
   .train-tree-shell{display:flex;flex-direction:column;gap:14px}
   .tree-node{border:1px solid var(--line-soft);border-radius:10px;background:var(--ink-1);overflow:hidden}
   .tree-node.off{opacity:.62}
@@ -1046,10 +1065,29 @@
   .tree-children{padding:2px 14px 12px 30px}
   .tree-session{border-top:1px solid var(--line-soft);padding:9px 0}
   .tree-session-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .tree-trajectory{border-top:1px dashed var(--line-soft);padding:8px 0 4px}
+  .tree-trajectory:first-child{border-top:none}
+  .tree-trajectory-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:4px 0}
+  .tree-trajectory-head.clickable{cursor:pointer;border-radius:6px;padding:4px 8px;margin:0 -8px}
+  .tree-trajectory-head.clickable:hover{background:rgba(255,255,255,.03)}
+  .tree-trajectory.off > .tree-trajectory-head{opacity:.55}
+  .tree-kinds{padding:4px 0 2px 28px}
+  .tree-kind{padding:4px 0}
+  .tree-kind-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:3px 0}
   .tree-samples{padding:6px 0 4px 30px}
-  .tree-sample{display:flex;gap:10px;align-items:center;padding:6px 8px;border-radius:6px;flex-wrap:wrap;cursor:pointer}
+  .tree-sample{display:flex;gap:10px;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer;min-width:0}
   .tree-sample:hover{background:rgba(255,255,255,.03)}
-  .tree-sample.off{opacity:.55}
+  .tree-sample.off{opacity:.88}
+  .tree-sample-label{flex:none;font-size:13px;color:var(--text);font-weight:500;white-space:nowrap}
+  .tree-sample-meta{flex:1 1 auto;min-width:0;font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tree-sample-meta .bad{color:#e9a497}
+  .tree-sample-meta .good{color:#cbe4c2}
+  .tree-sample-status{flex:none;font-size:12px;color:var(--amber);white-space:nowrap;max-width:28%;overflow:hidden;text-overflow:ellipsis}
+  .tree-action{flex:none;min-width:52px;padding:5px 12px;font-size:12.5px;font-weight:600;border-radius:7px;line-height:1.2;cursor:pointer}
+  .tree-action.on{background:rgba(143,196,127,.16);border:1px solid rgba(143,196,127,.55);color:#d5ebcc}
+  .tree-action.on:hover{background:rgba(143,196,127,.26);border-color:#8fc47f;color:#eaf6e4}
+  .tree-action.off{background:rgba(227,115,95,.14);border:1px solid rgba(227,115,95,.55);color:#f0a091}
+  .tree-action.off:hover{background:rgba(227,115,95,.24);border-color:#e3735f;color:#f7c2b8}
   .tree-toggle{flex:none;width:26px;min-height:26px;padding:0;font-family:var(--f-mono)}
   .tree-counts{font-size:12px;color:var(--text-2)}
   .tree-layer-note{font-size:11.5px;color:var(--amber)}
@@ -1085,6 +1123,8 @@
   .task-log-head .grow{flex:1}
   .task-log{max-height:calc(100vh - 440px);min-height:240px;padding:14px 18px;background:#111419;line-height:1.7;font-size:11.5px}
   .task-log div{padding:2px 0}
+  .task-log .ts{display:inline-block;min-width:5.2em;margin-right:8px;color:var(--text-3);
+    font:10.5px/1.7 var(--f-mono);font-variant-numeric:tabular-nums}
 
   /* 配置与交付：保留工具属性，降低装饰与重复文案 */
   .cfg-shell{grid-template-columns:200px minmax(0,1fr);height:calc(100vh - 166px);min-height:560px}
@@ -1248,6 +1288,8 @@
   .gold-dataset{display:grid;grid-template-columns:292px minmax(0,1fr);height:calc(100vh - 196px);min-height:480px;
     border:1px solid var(--line-soft);border-radius:10px;overflow:hidden;background:var(--ink-0)}
   .gold-sample-list{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line-soft);background:var(--ink-1)}
+  .gold-sample-item-wrap{padding:0 8px 6px}
+  .gold-sample-item-wrap.off{opacity:.72}
   .gold-sample-list-h{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line-soft);
     font-size:11.5px;color:var(--text-3)}
   .gold-sample-list-h b{font-size:12.5px;font-weight:600;color:var(--text)}
@@ -1287,42 +1329,78 @@
     .gold-sample-list{max-height:250px;border-right:none;border-bottom:1px solid var(--line-soft)}
     .gold-sample-detail{overflow:visible;padding:14px}
   }
-  /* ---------- 交付：格式、当前包与历史包 ---------- */
-  .delivery-workspace{display:grid;grid-template-columns:minmax(0,.92fr) minmax(0,1.08fr);gap:18px;align-items:start;margin-bottom:18px}
-  .delivery-format-list{display:flex;flex-direction:column;gap:12px;padding:14px}
-  .delivery-format-list .fmt-opt{width:100%;min-height:0}
-  .delivery-current-body{padding:18px}
-  .delivery-pack-summary{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap}
-  .delivery-pack-summary>div:first-child{flex:1;min-width:220px}
-  .delivery-pack-summary b{font-size:14px;font-weight:600}
-  .delivery-pack-summary p{margin:5px 0 0;max-width:62ch;color:var(--text-2);font-size:12px;line-height:1.65}
-  .delivery-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}
-  .delivery-status{display:flex;flex-direction:column;gap:3px;margin:17px 0;padding:10px 12px;
-    background:var(--ink-0);border:1px solid var(--line-soft);border-radius:8px;font-size:12px;line-height:1.6}
-  .delivery-status>b{font-size:12.5px;font-weight:600}
-  .delivery-status span{display:block}
-  .delivery-status.ready{border-color:rgba(143,196,127,.28)}
-  .delivery-status.ready>b{color:var(--pos)}
-  .delivery-status.busy{border-color:rgba(95,185,196,.28)}
-  .delivery-status.busy>b{color:var(--mint)}
-  .delivery-status.error{border-color:rgba(227,115,95,.35)}
-  .delivery-status.error>b{color:var(--neg)}
-  .delivery-meta{display:grid;grid-template-columns:1fr 1fr;gap:13px 24px;margin:0}
-  .delivery-meta div{min-width:0}
-  .delivery-meta dt{font-size:11px;color:var(--text-3);margin-bottom:3px}
-  .delivery-meta dd{margin:0;font-size:12px;color:var(--text-2);overflow-wrap:anywhere}
-  .delivery-history .pack-hist{margin:0;padding:0 16px 16px}
-  .delivery-history .pack-hist>p{margin:10px 0 12px!important}
-  .delivery-history .scroll{max-height:520px!important;border:1px solid var(--line-soft);border-radius:8px}
-  .delivery-releases{margin-top:18px}
-  .delivery-releases .pack-hist{margin:0;padding:0 16px 16px}
-  @media (max-width:1100px){.delivery-workspace{grid-template-columns:1fr}.delivery-current-panel{margin-bottom:0}}
-  @media (max-width:680px){
-    .delivery-current-body{padding:14px}
-    .delivery-pack-summary{flex-direction:column}
-    .delivery-actions{justify-content:flex-start}
-    .delivery-meta{grid-template-columns:1fr}
-    .delivery-format-list{padding:10px}
+  /* ---------- 交付：历史包列表为主 ---------- */
+  .delivery-workspace{display:flex;flex-direction:column;gap:16px;margin-bottom:18px}
+  .delivery-new-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px}
+  .delivery-new-bar .grow{flex:1;min-width:12rem}
+  .delivery-pack-list{display:flex;flex-direction:column;gap:8px;padding:0 14px 14px}
+  .delivery-pack-card{
+    display:grid;grid-template-columns:minmax(10rem,.75fr) minmax(0,1.7fr) auto;
+    grid-template-areas:"info len actions";gap:8px 14px;align-items:center;
+    padding:10px 12px;border:1px solid var(--line-soft);border-radius:8px;background:rgba(255,255,255,.02)}
+  .delivery-pack-card .pack-info{grid-area:info;min-width:0}
+  .delivery-pack-card .pack-name{font-size:12.5px;font-weight:600;overflow-wrap:anywhere;line-height:1.35}
+  .delivery-pack-card .pack-meta{margin-top:2px;font-size:11px;color:var(--text-3);line-height:1.4}
+  .delivery-pack-card .pack-counts{margin-top:5px;display:flex;flex-wrap:wrap;gap:5px}
+  .delivery-pack-card .pack-counts .chip-n{
+    display:inline-flex;align-items:baseline;gap:3px;padding:1px 6px;border-radius:999px;
+    background:rgba(255,255,255,.04);border:1px solid var(--line-soft);font-size:10.5px;color:var(--text-3)}
+  .delivery-pack-card .pack-counts .chip-n b{font:600 11px/1 var(--f-num);color:var(--text-2)}
+  .delivery-pack-actions{grid-area:actions;display:flex;flex-direction:column;align-items:stretch;gap:5px}
+  .delivery-pack-actions select{min-width:8.5rem;max-width:12rem;padding:4px 26px 4px 8px;font-size:12px}
+  .delivery-pack-actions button.slim{padding:3px 8px}
+  .delivery-pack-card .pack-len{grid-area:len;min-width:0;display:flex;justify-content:flex-start}
+  .pack-len-chart{
+    position:relative;display:grid;gap:2px;padding:5px 7px 4px;border-radius:7px;width:100%;max-width:320px;
+    background:linear-gradient(180deg,rgba(95,185,196,.04),rgba(255,255,255,.01));
+    border:1px solid rgba(95,185,196,.12);cursor:pointer}
+  .pack-len-chart:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  .pack-len-chart:hover{border-color:rgba(95,185,196,.28)}
+  .pack-len-legend{
+    display:flex;align-items:center;gap:10px;font:9px/1 var(--f-num);color:var(--text-3)}
+  .pack-len-legend i{display:inline-block;width:12px;height:2px;border-radius:1px;vertical-align:middle;margin-right:4px}
+  .pack-len-legend .sft i{background:#7ecad3}
+  .pack-len-legend .dpo i{background:#b7c0ef}
+  .pack-len-plot{
+    position:relative;height:72px;border-bottom:1px solid rgba(255,255,255,.06);overflow:hidden}
+  .pack-len-plot svg{display:block;width:100%;height:100%}
+  .pack-len-plot .grid-v{stroke:rgba(255,255,255,.07);stroke-width:1;vector-effect:non-scaling-stroke}
+  .pack-len-plot .grid-cut{stroke:rgba(217,180,103,.65);stroke-width:1;stroke-dasharray:2 2;vector-effect:non-scaling-stroke}
+  .pack-len-plot .line-sft{fill:none;stroke:#7ecad3;stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+  .pack-len-plot .line-dpo{fill:none;stroke:#b7c0ef;stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+  .pack-len-plot .area-sft{fill:rgba(95,185,196,.12);stroke:none}
+  .pack-len-plot .area-dpo{fill:rgba(169,178,220,.12);stroke:none}
+  .pack-len-ruler{
+    position:relative;height:12px;margin-top:1px;font:8.5px/1 var(--f-num);color:var(--text-3);
+    font-variant-numeric:tabular-nums}
+  .pack-len-ruler>span{
+    position:absolute;top:3px;left:calc(var(--i) / var(--n) * 100%);transform:translateX(-50%);
+    white-space:nowrap}
+  .pack-len-ruler>span::before{
+    content:"";position:absolute;left:50%;top:-4px;width:1px;height:3px;background:rgba(255,255,255,.18);
+    transform:translateX(-50%)}
+  .pack-len-ruler>span.start{transform:none;left:0}
+  .pack-len-ruler>span.start::before{left:0;transform:none}
+  .pack-len-ruler>span.end{left:100%;transform:translateX(-100%)}
+  .pack-len-ruler>span.end::before{left:auto;right:0;transform:none}
+  .pack-len-ruler>span.cut{color:var(--gold);font-weight:600}
+  .pack-len-ruler>span.cut::before{background:rgba(217,180,103,.7);height:4px;top:-5px}
+  .pack-len-empty{
+    display:grid;place-items:center;min-height:72px;width:100%;max-width:320px;border-radius:7px;
+    border:1px dashed var(--line-soft);color:var(--text-3);font-size:11px;background:rgba(255,255,255,.01)}
+  .delivery-len-grid{display:grid;gap:14px}
+  .delivery-len-block h4{margin:0 0 8px;font-size:13px}
+  .delivery-len-bars{display:grid;gap:6px}
+  .delivery-len-row{display:grid;grid-template-columns:5.5rem minmax(0,1fr) 2.5rem;gap:8px;align-items:center;font-size:12px}
+  .delivery-len-row .bar{height:8px;border-radius:99px;background:rgba(255,255,255,.06);overflow:hidden}
+  .delivery-len-row .bar>i{display:block;height:100%;background:var(--mint);border-radius:99px}
+  .delivery-note{margin:8px 0 0;color:var(--gold);font-size:12px;line-height:1.5}
+  @media (max-width:1100px){
+    .delivery-pack-card{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"info actions" "len len"}
+  }
+  @media (max-width:900px){
+    .delivery-pack-card{grid-template-columns:1fr;grid-template-areas:"info" "len" "actions"}
+    .delivery-pack-actions{flex-direction:row;flex-wrap:wrap;justify-content:flex-start}
   }
 </style>
 </head>
@@ -1353,7 +1431,7 @@
         任务中心<em id="navTasksBadge"></em></button>
       <button data-tab="runs">
         <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5 3.5v9l7-4.5z" stroke-linejoin="round"/></svg>
-        梳理与交付</button>
+        交付</button>
       <button data-tab="config">
         <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.4" fill="var(--ink-1)"/><circle cx="10.5" cy="8" r="1.4" fill="var(--ink-1)"/><circle cx="5" cy="12" r="1.4" fill="var(--ink-1)"/></svg>
         配置</button>
@@ -1401,21 +1479,23 @@ const COLORS = {ore:"#8d9ab2", gold:"#d9b467", mint:"#5fb9c4", pos:"#8fc47f", ne
 
 const VERDICT_ZH = {gold:"入选黄金", reject:"剔除", revise:"需修订", maybe:"存疑", needs_review:"待人工复核"};
 const SCRIPT_ZH = {gold:"黄金", negative_source:"DPO 来源素材", raw_only:"仅保留原始", needs_review:"待复核", discard_recommended:"不建议训练", rejected:"步数不足"};
-const RUN_ZH = {done:"完成", failed:"失败", running:"运行中", stale:"已中断"};
+const RUN_ZH = {done:"完成", failed:"失败", running:"运行中", queued:"排队中", stale:"已中断"};
+const JOB_ACTIVE = st => st === "running" || st === "queued";
 const PATHO_ZH = {
   missing_thinking_block:"缺失思考块", tool_execution_error:"工具执行报错", over_rumination_length:"思考过长",
   over_rumination_doubt_loop:"反复自我怀疑", mental_hex_checkmark:"心算十六进制自证", tool_logical_failure:"工具逻辑失败",
   cross_dir_violation:"跨目录越界", hallucinated_source_search:"臆造源码搜索",
 };
 const PHASE = [["highlight","高光","#d9b467"],["opening","开局","#8d9ab2"],["key_decision","关键决策","#c9a46a"],["routine","常规推进","#5fb9c4"],["closing","收尾","#a9b2dc"]];
-const DPO_SRC_ZH = {stage2_pruned:"剪掉的弯路", negative_step:"来源会话中的坏步", review_rewrite:"复核改写", meowdoku_dpo_chain:"思维链缺陷"};
+const DPO_SRC_ZH = {stage2_pruned:"弯路", negative_step:"坏步", review_rewrite:"改写", meowdoku_dpo_chain:"链缺陷"};
+const DPO_GATE_ZH = {good:"通过", swap:"对调后纳入", drop:"丢弃", pending:"待复核", review_failed:"复核失败", bypassed:"已跳过", passed:"通过", invalid:"内容无效"};
 const SKIP_ZH = {non_crack_folder:"非目标目录", excluded_folder:"排除目录", empty:"空会话"};
 const PAGES = {
   overview: ["数据精炼工作台", "从源会话准入、回合清洗、黄金提纯到 SFT / DPO 生成：看清每一层的输入、损耗与最终产出。"],
   raw:      ["原始数据", "采集源会话、查看分析状态，以及回合清洗与黄金提纯进度。"],
   gold:     ["黄金数据", "查看每条会话的有用步、SFT 窗口和 DPO 偏好对，以及它们的训练去向。"],
-  train:    ["训练数据", "选择本批生成的数据文件，预览样本并回溯到来源黄金会话。"],
-  runs:     ["梳理与交付", "选择导出格式，按 goldthread-train 模板打包当前训练集，或查看历史打包结果。"],
+  train:    ["训练数据", "审核将要纳入的样本，构建不可变 Build；打包 zip 请到交付页。"],
+  runs:     ["交付", "历史交付包列表：看说明、长度分布，按格式下载或删除，也可用当前 Build 新建。"],
   tasks:    ["任务中心", "集中查看采集、分析、管线与打包任务的状态、日志和结果入口。"],
   config:   ["配置", "按分组调整常用参数；高级参数与 YAML 源码保留在同一工作区。"],
 };
@@ -1429,7 +1509,7 @@ const RAW_DRAWER = {sid:null, label:null, adopted:false, relabelBusy:false, rela
 const EFF_ZH = {approved:"人工通过", rejected:"人工驳回", auto_gold:"模型通过", auto_reject:"模型剔除", held:"待人工复核", stale:"过期待确认", unreviewed:"未评审", finalized:"定稿"};
 const EFF_GROUP = {queue: s => s==="held"||s==="stale", pass: s => s==="approved"||s==="auto_gold"||s==="finalized", block: s => s==="rejected"||s==="auto_reject", unreviewed: s => s==="unreviewed"};
 
-const TASK_HUB = { tasks: [], running: 0, pollTimer: null, notified: new Set(), watched: new Map(), logTimers: new Map() };
+const TASK_HUB = { tasks: [], running: 0, queued: 0, pollTimer: null, notified: new Set(), watched: new Map(), logTimers: new Map() };
 let RUNS_REQUEST_SEQ = 0;
 let TRAIN_REQUEST_SEQ = 0;
 let DRAWER_REQUEST_SEQ = 0;
@@ -1437,8 +1517,9 @@ let DRAWER_REQUEST_SEQ = 0;
 function updateTasksBadge() {
   const em = $("#navTasksBadge");
   if (!em) return;
-  if (TASK_HUB.running > 0) {
-    em.textContent = String(TASK_HUB.running);
+  const n = (TASK_HUB.running || 0) + (TASK_HUB.queued || 0);
+  if (n > 0) {
+    em.textContent = String(n);
     em.classList.add("on");
   } else {
     em.textContent = "";
@@ -1463,7 +1544,11 @@ function onTaskFinished(t) {
   }
   if (t.status === "done" && t.stage !== "package") {
     STATE.poured = true;
-    toast(`${t.title || t.stage} 已完成`, "ok");
+    if (t.stage === "stage3" || t.stage === "all") {
+      toast(`${t.title || t.stage} 已完成：Build 已固化，可到交付页打包`, "ok");
+    } else {
+      toast(`${t.title || t.stage} 已完成`, "ok");
+    }
   }
   else if (t.status === "failed") toast(`${t.title || t.stage} 失败：${t.error || ""}`, "err");
   else if (t.status === "stale") toast(`${t.title || t.stage} 已中断`, "err");
@@ -1471,10 +1556,11 @@ function onTaskFinished(t) {
 
 async function taskHubPoll() {
   try {
-    const prevRun = new Set(TASK_HUB.tasks.filter(x => x.status === "running").map(x => x.id));
+    const prevActive = new Set(TASK_HUB.tasks.filter(x => JOB_ACTIVE(x.status)).map(x => x.id));
     const d = await api("/api/tasks");
     TASK_HUB.tasks = d.tasks || [];
     TASK_HUB.running = d.running || 0;
+    TASK_HUB.queued = d.queued || 0;
     updateTasksBadge();
     paintOverviewTaskStrip();
     if (STATE.tab === "tasks") {
@@ -1482,13 +1568,13 @@ async function taskHubPoll() {
       refreshTaskDetailChrome();
     }
     for (const t of TASK_HUB.tasks) {
-      if ((t.status === "done" || t.status === "failed" || t.status === "stale") && prevRun.has(t.id)) {
+      if ((t.status === "done" || t.status === "failed" || t.status === "stale") && prevActive.has(t.id)) {
         onTaskFinished(t);
       }
     }
     const polled = new Set();
     for (const t of TASK_HUB.tasks) {
-      if (t.status !== "running") continue;
+      if (!JOB_ACTIVE(t.status)) continue;
       if (polled.has(t.id)) continue;
       if (STATE.tab === "tasks" && STATE.tasksSelectedId === t.id) {
         polled.add(t.id);
@@ -1499,7 +1585,8 @@ async function taskHubPoll() {
     }
   } catch (_) { /* ignore */ }
   clearTimeout(TASK_HUB.pollTimer);
-  TASK_HUB.pollTimer = setTimeout(taskHubPoll, TASK_HUB.running > 0 ? 1500 : 15000);
+  const busy = (TASK_HUB.running || 0) + (TASK_HUB.queued || 0) > 0;
+  TASK_HUB.pollTimer = setTimeout(taskHubPoll, busy ? 1500 : 15000);
 }
 
 function taskHubEnsure() {
@@ -1509,11 +1596,11 @@ function taskHubEnsure() {
 function paintOverviewTaskStrip() {
   const host = $("#overviewTaskStrip");
   if (!host) return;
-  const running = TASK_HUB.tasks.filter(t => t.status === "running").slice(0, 3);
-  if (!running.length) { host.innerHTML = ""; host.classList.add("hidden"); return; }
+  const active = TASK_HUB.tasks.filter(t => JOB_ACTIVE(t.status)).slice(0, 3);
+  if (!active.length) { host.innerHTML = ""; host.classList.add("hidden"); return; }
   host.classList.remove("hidden");
-  host.innerHTML = `<div class="task-strip"><span class="faint" style="font-size:12px">进行中</span>
-    ${running.map(t => `<button type="button" class="chip" onclick="jumpToTasks('${esc(t.id)}')">${esc(t.title)}</button>`).join("")}
+  host.innerHTML = `<div class="task-strip"><span class="faint" style="font-size:12px">进行中 / 排队</span>
+    ${active.map(t => `<button type="button" class="chip" onclick="jumpToTasks('${esc(t.id)}')">${esc(t.title)}${t.status === "queued" ? "（排队）" : ""}</button>`).join("")}
     <button type="button" class="ghost" style="font-size:12px" onclick="jumpToTasks('')">查看全部 →</button></div>`;
 }
 
@@ -1528,7 +1615,7 @@ function taskOpenAction(t) {
   const sid = Array.isArray(sids) ? sids[0] : null;
   const tab = (t.links && t.links.open_tab) || "gold";
   const dis = st !== "done" ? " disabled" : "";
-  const tip = st === "running" ? " title=\"任务进行中，完成后可打开\"" : (st === "failed" ? " title=\"任务失败\"" : "");
+  const tip = st === "running" || st === "queued" ? " title=\"任务尚未完成，完成后可打开\"" : (st === "failed" ? " title=\"任务失败\"" : "");
   if (!sid && tab !== "train" && tab !== "runs") return st === "running" ? `<span class="faint" style="font-size:12px">分析完成后可查看黄金</span>` : "";
   if (tab === "gold" && sid) {
     return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;closeDrawer();STATE.pendingGold='${esc(sid)}';setTab('gold')">打开黄金</button>`;
@@ -1540,7 +1627,7 @@ function taskOpenAction(t) {
     return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;setTab('train')">训练数据</button>`;
   }
   if (tab === "runs") {
-    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;setTab('runs')">梳理与交付</button>`;
+    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;setTab('runs')">交付</button>`;
   }
   return "";
 }
@@ -1637,6 +1724,8 @@ function refreshTaskDetailChrome() {
 function paintTaskLogPanel() {
   const el = $("#taskLogBox");
   if (!el) return;
+  const prevTop = el.scrollTop;
+  const atBottom = prevTop + el.clientHeight >= el.scrollHeight - 30;
   const deduped = [];
   for (const l of TASK_DETAIL_LOG.lines) {
     if (deduped.length && deduped[deduped.length - 1] === l) continue;
@@ -1644,11 +1733,17 @@ function paintTaskLogPanel() {
   }
   el.innerHTML = deduped.length
     ? deduped.map(l => {
-        const cls = /失败|error|Traceback/i.test(l) ? "err" : /\] 完成$/.test(l.trim()) ? "ok" : "";
-        return `<div class="${cls}">${esc(l.replace(/^\d{2}:\d{2}:\d{2}\s*/, ""))}</div>`;
+        const cls = /失败|error|Traceback/i.test(l) ? "err" : /✓ 完成|\] 完成$/.test(l) ? "ok" : "";
+        const m = String(l).match(/^(\d{2}:\d{2}:\d{2})\s+([\s\S]*)$/);
+        const body = m
+          ? `<span class="ts">${esc(m[1])}</span>${esc(m[2])}`
+          : esc(l);
+        return `<div class="${cls}">${body}</div>`;
       }).join("")
     : `<span class="faint">暂无日志</span>`;
-  el.scrollTop = el.scrollHeight;
+  // 贴底才跟随新日志；用户上翻阅读时保持当前位置，不被轮询刷新拽走
+  if (atBottom) el.scrollTop = el.scrollHeight;
+  else el.scrollTop = prevTop;
 }
 
 async function loadTasks() {
@@ -1657,6 +1752,7 @@ async function loadTasks() {
     const d = await api("/api/tasks");
     TASK_HUB.tasks = d.tasks || [];
     TASK_HUB.running = d.running || 0;
+    TASK_HUB.queued = d.queued || 0;
     updateTasksBadge();
   } catch (e) {
     const msg = String(e.message || e);
@@ -1701,7 +1797,7 @@ function paintTasksView() {
   $("#view-tasks").innerHTML = `
     <div class="tasks-shell">
       <div class="tasks-list">
-        <div class="tasks-list-head"><b>全部任务</b><span class="grow"></span>${TASK_HUB.running ? `<span class="chip model">${TASK_HUB.running} 进行中</span>` : `<span class="faint">${tasks.length} 条记录</span>`}</div>
+        <div class="tasks-list-head"><b>全部任务</b><span class="grow"></span>${(TASK_HUB.running || TASK_HUB.queued) ? `<span class="chip model">${TASK_HUB.running ? `${TASK_HUB.running} 进行中` : ""}${TASK_HUB.running && TASK_HUB.queued ? " · " : ""}${TASK_HUB.queued ? `${TASK_HUB.queued} 排队` : ""}</span>` : `<span class="faint">${tasks.length} 条记录</span>`}</div>
         ${tasks.length ? tasks.map(taskRowHtml).join("") : `<div class="empty"><h3>还没有任务</h3><p>采集、会话分析、管线运行和打包后，进度与日志会出现在这里。</p><button onclick="jumpToRaw()">去采集会话</button></div>`}
       </div>
       <div class="task-detail">
@@ -1709,7 +1805,7 @@ function paintTasksView() {
           <div class="row" style="flex-wrap:nowrap;gap:8px" id="taskDetailStatus">${taskStatusTag(taskEffectiveStatus(sel))}<span class="grow"></span><span class="faint mono" style="font-size:11px">${esc(sel.id)}</span></div>
           <h2>${esc(sel.title || sel.stage || "任务详情")}</h2>
           <div class="task-subtitle">${esc(sel.subtitle || "查看执行状态、日志和后续入口")}</div>
-          <div class="task-detail-progress" id="taskDetailProgress"><div class="progress-label"><span>${esc(sel.progress?.label || (sel.status === "running" ? "正在执行" : sel.status === "done" ? "已完成" : sel.status === "failed" ? "执行失败" : "等待执行"))}</span>${selPct !== null ? `<span class="num">${selPct}%</span>` : ""}</div>${selPct !== null ? `<div class="task-progress-track"><i style="width:${selPct}%"></i></div>` : ""}</div>
+          <div class="task-detail-progress" id="taskDetailProgress"><div class="progress-label"><span>${esc(sel.progress?.label || (sel.status === "running" ? "正在执行" : sel.status === "queued" ? "排队等待中" : sel.status === "done" ? "已完成" : sel.status === "failed" ? "执行失败" : "等待执行"))}</span>${selPct !== null ? `<span class="num">${selPct}%</span>` : ""}</div>${selPct !== null ? `<div class="task-progress-track"><i style="width:${selPct}%"></i></div>` : ""}</div>
           ${sel.error ? `<div class="task-detail-error">${esc(sel.error)}</div>` : ""}
           <div class="task-detail-actions" id="taskDetailActions">
             ${taskOpenAction(sel)}
@@ -1754,7 +1850,7 @@ function registerJobWatch(jobId, onDone) {
   taskHubEnsure();
   if (!jobId) return;
   api(`/api/jobs/${encodeURIComponent(jobId)}`).then(j => {
-    if (!j || j.status === "running") return;
+    if (!j || JOB_ACTIVE(j.status)) return;
     if (!TASK_HUB.watched.has(jobId)) return;
     onTaskFinished(j);
   }).catch(() => {});
@@ -1906,12 +2002,12 @@ async function loadOverview() {
         <div class="wf-foot">状态折叠 ${fmt(s2.folded)} · 弯路剪枝 ${fmt(s2.pruned)} · CoT 压缩 ${fmt(s2.compressed)}</div>
         <div class="wf-enter">进入黄金数据 →</div>
       </button>
-      <button type="button" class="wf-stage go" style="--c:${COLORS.mint}" onclick="jumpToRuns()">
+      <button type="button" class="wf-stage go" style="--c:${COLORS.mint}" onclick="jumpToTrain()">
         <div class="wf-top"><span class="wf-no">3</span><span class="mono">SYNTHESIZE</span><span class="grow"></span><span>${ago(d.stages.stage3.last_run)}</span></div>
         <h3>训练样本生成</h3>
         <div class="wf-count">${fmt(win)}<small>SFT 窗口</small></div>
         <div class="wf-foot">实际准入 ${fmt(admitted)} 步 · 改写挽救 ${fmt(rescued)} 步 · DPO ${fmt(tra["dpo_preference_pairs.jsonl"]||0)} · 诊断 ${fmt(tra["negative_diagnostics.jsonl"]||0)}</div>
-        <div class="wf-enter">进入梳理与交付，打包训练集 →</div>
+        <div class="wf-enter">进入训练数据，构建 Build →</div>
       </button>
     </div>
     <div class="assay">
@@ -2111,6 +2207,9 @@ function renderPickList(rows, ids, pickOn) {
       <input type="checkbox" data-pick="${esc(s.id)}" ${ids.has(s.id)?"checked":""} aria-label="选择">
       <div>
         <div class="pick-title">${esc(s.title || s.session_id)}</div>
+        <div class="pick-path" title="${esc(s.id)}">${esc(s.id)}</div>
+        ${s.project && s.project !== s.id && s.project !== s.id.split("/")[0]
+          ? `<div class="pick-path" title="${esc(s.project)}">cwd ${esc(s.project)}</div>` : ""}
         <div class="faint" style="font-size:11px;margin-top:2px">${stamp(s.timestamp)} · ${kb(s.bytes)}
           ${s.adopted ? ` · <span class="chip train">已加入</span>` : ""}</div>
       </div>
@@ -2137,14 +2236,28 @@ async function openPickPreview(id) {
   try {
     const p = await api(`/api/collect/preview?source=${encodeURIComponent(STATE.raw.pickSource || "pi")}&id=${encodeURIComponent(id)}`);
     if (STATE.raw.pickOn !== id) return;
+    const errN = (p.assistant_errors || []).length;
+    const emptyBanner = p.empty ? `<div class="empty" style="margin:12px 16px;padding:14px 16px;text-align:left">
+        <h3 style="margin:0 0 6px">会话几乎没有有效内容</h3>
+        <p style="margin:0;color:var(--text-2);font-size:13px;line-height:1.55">${esc(p.empty_reason || "没有有效的助手回复")}</p>
+        ${errN ? `<p class="faint" style="margin:8px 0 0;font-size:12px">记录到 ${fmt(errN)} 次助手调用失败（常见于 API/配额错误，已被会话日志删掉空回复）。</p>` : ""}
+      </div>` : "";
+    const catalogPath = p.path || p.id || id;
+    const cwdPath = p.project || "";
     box.innerHTML = `
       <div class="pick-preview-head">
         <div class="preview-title">${esc(short(p.title || id, 96))}</div>
         <div class="preview-meta">
           ${p.adopted ? `<span class="chip train">已加入原始库</span>` : `<span class="chip">尚未采集</span>`}
+          ${p.empty ? `<span class="chip bad">无有效对话</span>` : ""}
           <span class="faint mono">${esc(p.session_id || "")}</span>
         </div>
+        <div class="preview-path">
+          <div class="row"><span class="k">路径</span><span class="v" title="${esc(catalogPath)}">${esc(catalogPath)}</span></div>
+          ${cwdPath ? `<div class="row"><span class="k">cwd</span><span class="v" title="${esc(cwdPath)}">${esc(cwdPath)}</span></div>` : ""}
+        </div>
       </div>
+      ${emptyBanner}
       ${renderMessages(p.messages || [], p.turns || [])}
       <div class="note" style="margin:12px 16px 16px">预览与原始库使用同一套对话视图。「采集所选」只写入原始库；「采集并分析」会继续生成黄金与 DPO。</div>`;
   } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -2361,10 +2474,16 @@ function buildRawAnalyzeFootBody(sid) {
   const jobHere = !!(job && RAW_DRAWER.sid === sid);
   if (!jobHere) return "";
   const running = job.status === "running";
+  const queued = job.status === "queued";
   const done = job.status === "done";
   const failed = job.status === "failed";
   const prog = job?.progress || {};
   const pct = prog.total > 0 ? Math.min(100, Math.round(100 * (prog.done || 0) / prog.total)) : null;
+  if (queued) {
+    return `<div class="session-job-status"><span>排队中</span>
+      <button type="button" class="ghost slim" onclick="jumpToTasks('${esc(RAW_DRAWER.analyzeJobId || "")}')">任务中心</button>
+    </div>`;
+  }
   if (running) {
     return `<div class="session-job-status"><span class="rb-live"></span><span>分析中</span>
       <span class="faint num" id="rawAnalyzeElapsed">${formatAnalyzeElapsed(Date.now() - (RAW_DRAWER.analyzeStarted || Date.now()))}</span>
@@ -2379,11 +2498,11 @@ function buildRawAnalyzeFootBody(sid) {
 
 function renderSessionActionsFoot(kind, sid) {
   const job = rawAnalyzeJobMeta();
-  const running = !!(job && RAW_DRAWER.sid === sid && job.status === "running");
+  const busy = !!(job && RAW_DRAWER.sid === sid && JOB_ACTIVE(job.status));
   const analyzeLabel = job?.status === "failed" ? "重试分析" : RAW_DRAWER.adopted || kind === "gold" ? "重新分析" : "开始分析";
   return `<div class="session-actions">
       ${buildRawAnalyzeFootBody(sid)}
-      ${!running ? `<button type="button" class="primary slim" id="rawAnalyzeBtn">${analyzeLabel}</button>` : ""}
+      ${!busy ? `<button type="button" class="primary slim" id="rawAnalyzeBtn">${analyzeLabel}</button>` : ""}
       ${kind === "gold"
         ? `<button type="button" class="ghost slim" id="rawOpenRawBtn">原始数据</button><button type="button" class="ghost slim" id="drawerJsonBtn">标注 JSON</button>`
         : RAW_DRAWER.adopted ? `<button type="button" class="ghost slim" id="rawViewGoldBtn">黄金数据</button>` : ""}
@@ -2479,12 +2598,13 @@ function paintRawDrawerAnalyze() {
   paintSessionDrawerFoot();
 }
 async function startAnalyzeJob(sid, stayInDrawer = false) {
-  if (RAW_DRAWER.analyzeJobId && JOB_META?.status === "running") {
-    toast("这条会话已在分析中", "err");
+  if (RAW_DRAWER.analyzeJobId && JOB_ACTIVE(JOB_META?.status)) {
+    toast(JOB_META?.status === "queued" ? "这条会话已在排队分析" : "这条会话已在分析中", "err");
     return;
   }
   try {
-    const {job_id} = await api(`/api/raw/session/${sid}/analyze`, {method:"POST"});
+    const r = await api(`/api/raw/session/${sid}/analyze`, {method:"POST"});
+    const job_id = r.job_id;
     RAW_DRAWER.analyzeJobId = job_id;
     RAW_DRAWER.analyzeStarted = Date.now();
     RAW_DRAWER.sid = sid;
@@ -2500,14 +2620,17 @@ async function startAnalyzeJob(sid, stayInDrawer = false) {
           openRaw(sid).catch(() => {});
         }
       }
-      if (j.status !== "running") {
+      if (!JOB_ACTIVE(j.status)) {
         setTimeout(() => {
           if (RAW_DRAWER.analyzeJobId === job_id && j.status === "done") RAW_DRAWER.analyzeJobId = null;
         }, j.status === "done" ? 3000 : 0);
       }
       paintRawDrawerAnalyze();
     });
-    if (stayInDrawer) {
+    if (r.status === "queued") {
+      paintRawDrawerAnalyze();
+      toast(`分析已加入排队 ${sid.slice(0, 8)}`, "ok");
+    } else if (stayInDrawer) {
       paintRawDrawerAnalyze();
       toast(`已开始分析 ${sid.slice(0, 8)}，下方可看进度`, "ok");
     } else {
@@ -2569,6 +2692,62 @@ function tokenPair(l, r) {
     else R += `<ins>${esc(t)}</ins>`;
   }
   return {l:L, r:R};
+}
+function splitThinkBody(text) {
+  const t = String(text ?? "");
+  const m = t.match(/^<think>\s*([\s\S]*?)\s*<\/think>\s*/i);
+  if (!m) return {think: "", body: t.trim()};
+  return {think: (m[1] || "").trim(), body: t.slice(m[0].length).trim()};
+}
+function thinkDisplayText(parts) {
+  // 无思考时绝不把 tool 正文塞进 Rejected/Chosen 思考栏
+  const think = String((parts && parts.think) || "").trim();
+  if (think) return think;
+  const body = String((parts && parts.body) || "").trim();
+  if (!body || /<tool_call\b/i.test(body)) return "";
+  return body;
+}
+/** 偏好对照：思考 + 动作并入同一卡片；无思考 / 无工具时给明确空态。 */
+function renderDpoPreferenceCard(chosen, rejected, opts = {}) {
+  const cParts = splitThinkBody(chosen), rParts = splitThinkBody(rejected);
+  const cThink = thinkDisplayText(cParts), rThink = thinkDisplayText(rParts);
+  const cBody = String(cParts.body || "").trim();
+  const rBody = String(rParts.body || "").trim();
+  const sameAction = opts.sameAction === true
+    || (!!cBody && !!rBody && cBody === rBody)
+    || (!cBody && !rBody);
+  const hint = opts.hint || (sameAction && (cBody || rBody)
+    ? "工具动作相同，差异在思维链；右侧是 Chosen"
+    : "相同上下文下，模型应偏好右侧 Chosen");
+
+  let thinkHtml;
+  if (!rThink && !cThink) {
+    thinkHtml = `<div class="diff-cap">思考</div><div class="faint">双方均无思考内容</div>`;
+  } else {
+    thinkHtml = buildDiff(
+      rThink || "（无思考）", cThink || "（无思考）",
+      [`Rejected 思考 · ${fmt(rThink.length)} 字`, `Chosen 思考 · ${fmt(cThink.length)} 字`]
+    ).html;
+  }
+
+  let actionHtml;
+  if (!cBody && !rBody) {
+    actionHtml = `<div class="diff-cap">工具动作</div><div class="faint">无工具调用</div>`;
+  } else if (sameAction) {
+    actionHtml = `<div class="diff-cap">共同工具动作<span class="hint" style="margin-left:8px">两边相同，只展示一份</span></div>
+      <pre class="json">${esc(cBody || rBody)}</pre>`;
+  } else {
+    actionHtml = `<div class="diff-cap" style="margin-bottom:8px">动作对照</div>${buildDiff(
+      rBody || "（无工具）", cBody || "（无工具）",
+      ["Rejected 动作", "Chosen 动作"]
+    ).html}`;
+  }
+
+  return `<div class="panel"><div class="panel-h"><h3>偏好对照</h3><span class="hint">${esc(hint)}</span></div>
+    <div class="panel-b">
+      <div class="pref-block">${thinkHtml}</div>
+      <div class="pref-block">${actionHtml}</div>
+    </div></div>`;
 }
 function buildDiff(oldS, newS, caps) {
   oldS = String(oldS ?? ""); newS = String(newS ?? "");
@@ -2866,7 +3045,7 @@ async function loadGold() {
   STATE.gold.ids = rows.map(s => s.session_id);
   $("#view-gold").innerHTML = `
     <div class="panel workspace-panel">
-      <div class="panel-h"><h3>黄金会话</h3><span class="hint">有用步进入 SFT，剪掉的弯路沉淀为 DPO；点击会话查看血缘与步级排除</span><span class="grow"></span><button class="ghost" onclick="jumpToRuns()">生成训练集</button></div>
+      <div class="panel-h"><h3>黄金会话</h3><span class="hint">有用步进入 SFT，剪掉的弯路沉淀为 DPO；点击会话查看血缘与步级排除</span><span class="grow"></span><button class="ghost" onclick="jumpToTrain()">去训练数据</button></div>
       <div class="toolbar">
         <select id="goldOutput" aria-label="按训练产物筛选"><option value="">全部产物</option><option value="sft" ${f.output==="sft"?"selected":""}>有 SFT</option><option value="dpo" ${f.output==="dpo"?"selected":""}>有 DPO</option><option value="unwritten" ${f.output==="unwritten"?"selected":""}>尚未生成</option></select>
         <select id="goldProject" aria-label="按项目筛选"><option value="">全部项目</option>
@@ -2890,16 +3069,30 @@ async function loadGold() {
           ? `<span class="num">${fmt(lin.dpo_train)}</span> 对`
           : `<span class="faint">尚未生成训练集</span>`;
         const parts = lin.dpo_parts;
-        const partTxt = parts ? `剪枝 ${fmt(parts.pruned)} · 来源步 ${fmt(parts.negative)} · 复核 ${fmt(parts.review)}` : "来源绑定当前会话";
+        const cand = lin.dpo_candidates;
+        const partTxt = parts
+          ? `入集：剪枝 ${fmt(parts.pruned)} · 来源步 ${fmt(parts.negative)} · 复核 ${fmt(parts.review)}`
+            + (cand && ((cand.pruned||0)+(cand.negative||0)+(cand.review||0)) > ((parts.pruned||0)+(parts.negative||0)+(parts.review||0))
+              ? `（候选 ${fmt((cand.pruned||0)+(cand.negative||0)+(cand.review||0))}）` : "")
+          : "来源绑定当前会话";
+        const sessOff = !!s.dataset_excluded;
+        const sftOff = !sessOff && !!s.sft_excluded;
+        const dpoOff = !sessOff && !!s.dpo_excluded;
+        const sftBadge = sessOff
+          ? `<span class="usage-badge sess-off" title="整会话已停用"><i></i>整会话停用</span>`
+          : (sftOff ? `<span class="usage-badge sft-off" title="本会话 SFT 已停用，不进入训练集"><i></i>SFT 停用</span>` : "");
+        const dpoBadge = sessOff
+          ? `<span class="usage-badge sess-off" title="整会话已停用"><i></i>整会话停用</span>`
+          : (dpoOff ? `<span class="usage-badge dpo-off" title="本会话 DPO 已停用，不进入训练集"><i></i>DPO 停用</span>` : "");
         return `<tr class="clickable" data-sid="${esc(s.session_id)}" tabindex="0">
         <td><div class="table-session"><span class="sid">${esc(s.session_id.slice(0,8))}</span><span class="session-sub" title="${esc(s.project_group||"")}">${esc(s.project_group||"未分组")}</span></div></td>
         <td class="muted" style="font-size:12px">${esc(s.dominant_model || "未知")}</td>
-        <td><div class="table-progress"><span class="num">${fmt(lin.gold_steps)} 步</span><span class="arrow">→</span>${sftInto}</div></td>
-        <td><div class="table-progress"><span class="num">${fmt(lin.dpo_made)} 对</span><span class="arrow">→</span>${dpoInto}</div><div class="table-detail">${esc(partTxt)}</div></td>
+        <td><div class="col-dest${sftOff || sessOff ? " is-off" : ""}"><div class="table-progress"><span class="num">${fmt(lin.gold_steps)} 步</span><span class="arrow">→</span>${sftInto}</div>${sftBadge}</div></td>
+        <td><div class="col-dest${dpoOff || sessOff ? " is-off" : ""}"><div class="table-progress"><span class="num">${fmt(lin.dpo_made)} 对</span><span class="arrow">→</span>${dpoInto}</div><div class="table-detail">${esc(partTxt)}</div>${dpoBadge}</div></td>
         <td><select data-gold-split="${esc(s.session_id)}" aria-label="训练切分">
           <option value="train" ${lin.split==="train"?"selected":""}>train</option>
           <option value="eval" ${lin.split==="eval"?"selected":""}>eval</option></select>
-          ${s.dataset_excluded ? `<span class="chip" style="margin-left:4px">已停用${s.exclusion_scope === "project" ? "（项目层）" : ""}</span>` : ""}</td>
+          ${sessOff && s.exclusion_scope === "project" ? `<span class="usage-badge sess-off" style="margin-left:6px" title="项目层停用"><i></i>项目停用</span>` : ""}</td>
         <td class="table-action">${s.dataset_excluded && s.exclusion_scope === "project"
           ? `<span class="faint" style="font-size:11px">在训练数据页恢复项目</span>`
           : `<button class="ghost slim" data-gold-usage="${esc(s.session_id)}" data-gold-usage-action="${s.dataset_excluded ? "auto" : "exclude"}">${s.dataset_excluded ? "恢复使用" : "标记不使用"}</button>`}
@@ -2935,7 +3128,54 @@ async function goldSetUsage(sid, action) {
   })});
   toast(action === "exclude" ? "已标记不使用，这条会话的切片不会进入训练数据" : "已恢复使用", "ok");
   loadGold();
+  if (GOLD_VIEW.sid === sid) openGold(sid);
   refreshMeta().catch(() => {});
+}
+async function goldSetKindUsage(sid, kind, action) {
+  const scope = kind === "dpo" ? "session_dpo" : "session_sft";
+  const label = kind === "dpo" ? "DPO" : "SFT";
+  await api("/api/dataset/draft/scopes", {method: "PUT", body: JSON.stringify({
+    updates: [{
+      scope, id: sid, action,
+      reason: action === "exclude" ? `黄金数据页停用本会话全部 ${label}` : "",
+    }],
+  })});
+  toast(action === "exclude" ? `已停用本会话全部 ${label}` : `已恢复本会话 ${label}`, "ok");
+  loadGold();
+  if (GOLD_VIEW.sid === sid) {
+    GOLD_VIEW.cache = {};
+    await openGold(sid);
+    if (kind === "sft" || kind === "dpo") setGoldView(kind);
+  }
+  refreshMeta().catch(() => {});
+}
+async function goldSetSampleDecision(sampleId, action, kind) {
+  if (!sampleId) return;
+  const sid = GOLD_VIEW.sid || STATE.drawerData?.record?.session_id;
+  await api("/api/dataset/draft/decisions", {method: "PUT", body: JSON.stringify({
+    decisions: [{
+      sample_id: sampleId,
+      action,
+      reason: action === "exclude" ? (kind === "dpo" ? "黄金页停用 DPO 偏好对" : "黄金页停用 SFT 窗口") : "",
+    }],
+  })});
+  toast(action === "exclude" ? "已停用该样本" : "已恢复该样本", "ok");
+  if (sid && GOLD_VIEW.sid === sid) {
+    GOLD_VIEW.cache = {};
+    if (kind === "sft" || kind === "dpo") setGoldView(kind);
+  }
+  loadGold();
+  refreshMeta().catch(() => {});
+}
+function goldKindExcluded(d, kind) {
+  if (!d) return false;
+  if (d.dataset_excluded) return true;
+  return kind === "dpo" ? !!d.dpo_excluded : !!d.sft_excluded;
+}
+function goldKindOwnExcluded(d, kind) {
+  if (!d || d.dataset_excluded) return false;
+  const scope = kind === "dpo" ? d.dpo_exclusion_scope : d.sft_exclusion_scope;
+  return (kind === "dpo" ? d.dpo_excluded : d.sft_excluded) && (scope === (kind === "dpo" ? "session_dpo" : "session_sft"));
 }
 async function goldSetSessionSplit(sid, split) {
   await api("/api/dataset/draft/split", {method: "PUT", body: JSON.stringify({session_assignments: {[sid]: split}})});
@@ -2987,10 +3227,14 @@ function renderGoldNav(d) {
   const rec = d.record || {}, st = rec.stats || {}, lin = d.lineage || {};
   const sftCount = lin.train_written ? fmt(lin.sft_windows) : "—";
   const dpoCount = lin.train_written ? fmt(lin.dpo_train) : fmt(lin.dpo_made ?? (d.dpo || []).length);
+  const sftOff = goldKindExcluded(d, "sft");
+  const dpoOff = goldKindExcluded(d, "dpo");
+  const dpoLabel = lin.train_written ? "DPO 入集" : "DPO 候选";
+  const dpoUnit = lin.train_written ? "对" : "候选";
   return `<div class="gold-view-nav" role="tablist" aria-label="黄金会话数据视图">
     <button type="button" class="gold-view-tab on" data-gold-view="gold" role="tab" aria-selected="true">黄金会话 <span class="num">${fmt(lin.gold_steps ?? st.gold_steps)}</span><small>步</small></button>
-    <button type="button" class="gold-view-tab" data-gold-view="sft" role="tab" aria-selected="false">SFT 样本 <span class="num">${sftCount}</span><small>窗口</small></button>
-    <button type="button" class="gold-view-tab" data-gold-view="dpo" role="tab" aria-selected="false">DPO 偏好对 <span class="num">${dpoCount}</span><small>对</small></button>
+    <button type="button" class="gold-view-tab" data-gold-view="sft" role="tab" aria-selected="false">SFT 样本 <span class="num">${sftCount}</span><small>窗口</small>${sftOff ? `<span class="chip" style="margin-left:4px">停用</span>` : ""}</button>
+    <button type="button" class="gold-view-tab" data-gold-view="dpo" role="tab" aria-selected="false">${dpoLabel} <span class="num">${dpoCount}</span><small>${dpoUnit}</small>${dpoOff ? `<span class="chip" style="margin-left:4px">停用</span>` : ""}</button>
   </div>`;
 }
 
@@ -3052,9 +3296,12 @@ function goldDatasetName(kind) {
 
 function goldPairPreview(row) {
   const text = v => v == null ? "" : typeof v === "string" ? v : v.value || "";
+  const c = splitThinkBody(text(row.chosen)), r = splitThinkBody(text(row.rejected));
   return {
-    chosen_think: short(text(row.chosen), 220), rejected_think: short(text(row.rejected), 220),
-    chosen_len: text(row.chosen).length, rejected_len: text(row.rejected).length,
+    chosen_think: short(thinkDisplayText(c), 220),
+    rejected_think: short(thinkDisplayText(r), 220),
+    chosen_len: text(row.chosen).length,
+    rejected_len: text(row.rejected).length,
   };
 }
 
@@ -3065,7 +3312,7 @@ async function loadGoldDataset(kind) {
   const body = $("#goldViewBody");
   const lin = d.lineage || {};
   if (kind === "sft" && !lin.train_written) {
-    body.innerHTML = `<div class="gold-dataset-empty"><div><h3>SFT 样本尚未生成</h3><p>这条黄金会话还没有写入训练集。运行 Stage 3 后，可在这里逐条查看窗口正文。</p><button class="primary" onclick="runStage('stage3',false)">运行 Stage 3</button></div></div>`;
+    body.innerHTML = `<div class="gold-dataset-empty"><div><h3>SFT 窗口要等构建后才有</h3><p>黄金会话正文在「黄金会话」标签。点下方会先评估待复核 DPO，再合成训练集；完成后可在此逐条看窗口。</p><button class="primary" onclick="runStage('stage3',false)">评估并构建训练集</button></div></div>`;
     return;
   }
   if (GOLD_VIEW.cache[kind]) { paintGoldDataset(kind); return; }
@@ -3073,10 +3320,20 @@ async function loadGoldDataset(kind) {
   try {
     let rows, total;
     if (kind === "dpo" && !lin.train_written) {
-      rows = (d.dpo || []).map((row, index) => ({
-        index, sample_id: row.sample_id || `dpo::${sid}::${index}`,
-        metadata: row.metadata || {session_id: sid}, preview: goldPairPreview(row), _full: row,
-      }));
+      const kindOff = goldKindExcluded(d, "dpo");
+      const scope = d.dataset_excluded
+        ? (d.exclusion_scope || "session")
+        : (d.dpo_exclusion_scope || "session_dpo");
+      rows = (d.dpo || []).map((row, index) => {
+        const sample_id = row.sample_id || `dpo::${sid}::${index}`;
+        return {
+          index, sample_id,
+          metadata: row.metadata || {session_id: sid}, preview: goldPairPreview(row), _full: row,
+          decision: kindOff ? "exclude" : "auto",
+          decision_scope: kindOff ? scope : "",
+          included: !kindOff,
+        };
+      });
       total = rows.length;
     } else {
       const name = goldDatasetName(kind);
@@ -3100,24 +3357,74 @@ function paintGoldDataset(kind) {
   const data = GOLD_VIEW.cache[kind];
   const body = $("#goldViewBody");
   if (!data || !body) return;
-  const title = kind === "sft" ? "SFT 单步窗口" : "DPO 偏好对";
+  const d = STATE.drawerData || {};
+  const lin = d.lineage || {};
+  const dpoCand = kind === "dpo" && !lin.train_written;
+  const title = kind === "sft" ? "SFT 单步窗口" : (dpoCand ? "DPO 候选（尚未入集）" : "DPO 入集偏好对");
+  const sid = GOLD_VIEW.sid || d.record?.session_id || "";
+  const kindOff = goldKindExcluded(d, kind);
+  const ownKind = goldKindOwnExcluded(d, kind);
+  const sessOff = !!d.dataset_excluded;
+  let kindBtn = "";
+  if (sessOff) {
+    kindBtn = `<span class="faint" style="font-size:11px">${d.exclusion_scope === "project" ? "项目已停用" : "会话已整份停用"}</span>`;
+  } else if (ownKind) {
+    kindBtn = `<button type="button" class="ghost slim" data-gold-kind-usage="${esc(kind)}" data-gold-kind-action="auto">恢复本会话${kind === "dpo" ? " DPO" : " SFT"}</button>`;
+  } else if (!kindOff) {
+    kindBtn = `<button type="button" class="ghost slim" data-gold-kind-usage="${esc(kind)}" data-gold-kind-action="exclude">停用本会话全部${kind === "dpo" ? " DPO" : " SFT"}</button>`;
+  } else {
+    kindBtn = `<span class="faint" style="font-size:11px">上层已停用</span>`;
+  }
   if (!data.rows.length) {
-    body.innerHTML = `<div class="gold-dataset-empty"><div><h3>没有可显示的${title}</h3><p>${kind === "sft" ? "当前会话未产生 SFT 窗口，可查看质量报告和步级排除原因。" : "当前会话没有 DPO 偏好对。"}</p></div></div>`;
+    body.innerHTML = `<div class="gold-dataset-empty"><div><h3>没有可显示的${title}</h3><p>${kind === "sft" ? "当前会话未产生 SFT 窗口，可查看质量报告和步级排除原因。" : "当前会话没有 DPO 偏好对。"}</p>${kindBtn ? `<div style="margin-top:10px">${kindBtn}</div>` : ""}</div></div>`;
+    $$("#goldViewBody [data-gold-kind-usage]").forEach(btn => {
+      btn.onclick = () => goldSetKindUsage(sid, btn.dataset.goldKindUsage, btn.dataset.goldKindAction).catch(e => toast(e.message, "err"));
+    });
     return;
   }
-  body.innerHTML = `<div class="gold-dataset">
-    <aside class="gold-sample-list"><div class="gold-sample-list-h"><b>${title}</b><span class="grow"></span><span>${fmt(data.total)} 条</span></div>
+  const candNote = dpoCand
+    ? `<div class="note" style="margin:0 0 10px">以下是 Stage 2 留下的候选偏好对，尚未写入训练集。需要入集时点「评估并构建训练集」（会先评估再合成）。</div>
+       <div style="margin-bottom:12px"><button type="button" class="primary slim" onclick="runStage('stage3',false)">评估并构建训练集</button></div>`
+    : "";
+  body.innerHTML = `${candNote}<div class="gold-dataset">
+    <aside class="gold-sample-list">
+      <div class="gold-sample-list-h"><b>${title}</b><span class="grow"></span><span>${fmt(data.total)} 条</span>${kindOff ? `<span class="chip">已停用</span>` : ""}</div>
+      <div class="gold-sample-list-h" style="border-top:none;padding-top:0">${kindBtn}</div>
       <div class="gold-sample-scroll">${data.rows.map((row, i) => {
         const p = row.preview || {}, m = row.metadata || {};
         const gist = kind === "sft" ? (p.think || p.target || p.user || "无内容摘要") : (p.chosen_think || "无 chosen 摘要");
         const sub = kind === "sft" ? `${m.stage || "未标阶段"} · 权重 ${fmt(m.sample_weight)}` : (DPO_SRC_ZH[m.source] || m.source || "偏好对");
-        return `<button type="button" class="gold-sample-item" data-sample-index="${row.index}"><span class="sample-top"><span class="sample-no">#${i + 1}</span><span class="chip ${m.split || ""}">${esc(m.split || "—")}</span></span><span class="sample-gist">${esc(short(gist, 150))}</span><span class="sample-sub">${esc(sub)}</span></button>`;
+        const excluded = row.decision === "exclude" || row.included === false;
+        const scope = row.decision_scope || "";
+        const sampleScoped = excluded && (!scope || scope === "sample");
+        const layerNote = excluded && scope && scope !== "sample"
+          ? `<span class="sample-sub">在${scope === "project" ? "项目" : scope === "session" ? "会话" : scope === "session_sft" ? "会话 SFT" : scope === "session_dpo" ? "会话 DPO" : "上层"}停用</span>`
+          : "";
+        const toggle = (!kindOff && row.sample_id && (sampleScoped || !excluded))
+          ? `<button type="button" class="ghost slim" style="margin-top:4px;padding:2px 6px;font-size:11px" data-gold-sample-toggle="${esc(row.sample_id)}" data-gold-sample-action="${sampleScoped ? "auto" : "exclude"}">${sampleScoped ? "恢复" : "停用"}</button>`
+          : "";
+        return `<div class="gold-sample-item-wrap ${excluded ? "off" : ""}">
+          <button type="button" class="gold-sample-item" data-sample-index="${row.index}"><span class="sample-top"><span class="sample-no">#${i + 1}</span><span class="chip ${m.split || ""}">${esc(m.split || "—")}</span>${excluded ? `<span class="chip">停用</span>` : ""}</span><span class="sample-gist">${esc(short(gist, 150))}</span><span class="sample-sub">${esc(sub)}</span>${layerNote}</button>
+          ${toggle}
+        </div>`;
       }).join("")}</div>
     </aside>
     <div class="gold-sample-detail" id="goldSampleDetail"><div class="gold-dataset-empty"><p>选择左侧样本查看完整内容</p></div></div>
   </div>`;
   $$("#goldViewBody [data-sample-index]").forEach(btn => {
     btn.onclick = () => selectGoldSample(kind, Number(btn.dataset.sampleIndex));
+  });
+  $$("#goldViewBody [data-gold-kind-usage]").forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      goldSetKindUsage(sid, btn.dataset.goldKindUsage, btn.dataset.goldKindAction).catch(err => toast(err.message, "err"));
+    };
+  });
+  $$("#goldViewBody [data-gold-sample-toggle]").forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      goldSetSampleDecision(btn.dataset.goldSampleToggle, btn.dataset.goldSampleAction, kind).catch(err => toast(err.message, "err"));
+    };
   });
   selectGoldSample(kind, data.rows[0].index);
 }
@@ -3151,9 +3458,8 @@ function renderGoldSampleDetail(row, kind) {
   if (kind === "dpo") {
     const pref = v => v == null ? "" : typeof v === "string" ? v : v.value || "";
     const chosen = pref(row.chosen), rejected = pref(row.rejected);
-    return `${head}<div class="panel"><div class="panel-h"><h3>偏好对照</h3><span class="hint">相同上下文下，模型应学习 chosen</span></div>
-      <div class="panel-b">${buildDiff(rejected, chosen, ["Rejected · 不应学习", "Chosen · 目标行为"]).html}</div></div>
-      <div class="note" style="margin-bottom:12px">偏好对触发时的上下文；chosen / rejected 目标回复见上方对照。</div>
+    return `${head}${renderDpoPreferenceCard(chosen, rejected)}
+      <div class="note" style="margin-bottom:12px">下方是触发时的上下文；Chosen / Rejected 见上方对照。</div>
       ${renderMessages(convToMsgs(row.conversations || row.messages))}`;
   }
   return `${head}<div class="note" style="margin-bottom:12px">单步训练窗口：历史 thinking 已按规则剥离，最后一条助手步为训练目标。</div>
@@ -3608,30 +3914,195 @@ function treeCountsText(c) {
   c = c || {};
   return `候选 ${fmt(c.candidates || 0)} · 纳入 ${fmt(c.included || 0)} · 停用 ${fmt(c.excluded || 0)} · 门控未过 ${fmt(c.gate_excluded || 0)}`;
 }
-function treeSampleHtml(r) {
+/** 分组 → 会话 → 轨迹 → SFT/DPO：展开时若唯一子节点只有一行，继续向下展开。 */
+function treeSingletonChildKey(key) {
+  const groups = (STATE.train.treeData && STATE.train.treeData.groups) || [];
+  if (key.startsWith("g:")) {
+    const group = groups.find(g => g.key === key.slice(2));
+    const sessions = (group && group.sessions) || [];
+    return sessions.length === 1 ? "s:" + sessions[0].session_id : null;
+  }
+  if (key.startsWith("s:")) {
+    const sid = key.slice(2);
+    let session = null;
+    for (const g of groups) {
+      session = (g.sessions || []).find(n => n.session_id === sid) || null;
+      if (session) break;
+    }
+    const trajs = (session && session.trajectories) || [];
+    if (trajs.length !== 1) return null;
+    const tid = trajs[0].trajectory_id || (`traj::${sid}`);
+    return "t:" + tid;
+  }
+  if (key.startsWith("t:")) {
+    const tid = key.slice(2);
+    let traj = null;
+    let sid = "";
+    for (const g of groups) {
+      for (const n of g.sessions || []) {
+        const hit = (n.trajectories || []).find(tr => (tr.trajectory_id || (`traj::${n.session_id}`)) === tid);
+        if (hit) { traj = hit; sid = n.session_id; break; }
+      }
+      if (traj) break;
+    }
+    if (!traj) return null;
+    const kindsSrc = (traj.kinds && traj.kinds.length)
+      ? traj.kinds
+      : [
+          {kind: "sft", samples: (traj.samples || []).filter(r => r.kind === "sft")},
+          {kind: "dpo", samples: (traj.samples || []).filter(r => r.kind === "dpo")},
+        ];
+    if (kindsSrc.length !== 1) return null;
+    return "k:" + (traj.trajectory_id || (`traj::${sid}`)) + ":" + (kindsSrc[0].kind || "sft");
+  }
+  return null;
+}
+function treeSmartExpand(key) {
+  const tf = STATE.train;
+  if (!tf.expanded) tf.expanded = {};
+  let cur = key;
+  const seen = new Set();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    tf.expanded[cur] = true;
+    cur = treeSingletonChildKey(cur);
+  }
+}
+function treeSampleDecisionBits(r) {
   const scopeZh = {project: "项目层", session: "会话层", sample: "样本层"};
+  const p = r.preview || {};
+  const bits = [];
+  if (r.kind === "dpo") {
+    if (p.same_action) bits.push("同动作");
+    if (p.rejected_gist) bits.push(`<span class="bad">坏思考 ${esc(p.rejected_gist)}</span>`);
+    if (p.chosen_gist) bits.push(`<span class="good">好思考 ${esc(p.chosen_gist)}</span>`);
+    if (p.same_action && p.rejected_think_len != null && p.chosen_think_len != null) {
+      bits.push(`${fmt(p.rejected_think_len)}→${fmt(p.chosen_think_len)}字`);
+    }
+    const patho = (p.pathologies || []).map(x => PATHO_ZH[String(x).split(":")[0]] || x).filter(Boolean);
+    if (patho.length) bits.push(esc(patho.slice(0, 2).join("·")));
+    else if (p.source_reason) bits.push(esc(short(String(p.source_reason).replace(/,/g, "·"), 24)));
+  } else {
+    if (p.target_gist || p.user_gist) bits.push(esc(p.target_gist || p.user_gist));
+    if (r.sample_weight != null && Number(r.sample_weight) !== 1) bits.push(`权重 ${esc(String(r.sample_weight))}`);
+    if (r.quality_score != null) bits.push(`质量 ${esc(String(r.quality_score))}`);
+  }
+  let status = "";
+  if (!r.included) {
+    if (r.decision === "exclude" && r.decision_scope && r.decision_scope !== "sample") status = `在${scopeZh[r.decision_scope] || "上层"}停用`;
+    else if ((r.decision_reason || "").trim()) status = String(r.decision_reason).trim();
+    else if (DPO_GATE_ZH[r.gate_status]) status = DPO_GATE_ZH[r.gate_status];
+    else status = "已停用";
+  } else if (r.kind === "dpo" && r.gate_status === "swap") {
+    status = "已对调";
+  }
+  return {meta: bits.join(" · "), status};
+}
+function treeSampleHtml(r) {
   const off = !r.included;
-  const layerNote = off && r.decision === "exclude" && r.decision_scope && r.decision_scope !== "sample"
-    ? `<span class="tree-layer-note">在${scopeZh[r.decision_scope] || "上层"}停用</span>` : "";
-  const gate = r.gate_status && r.gate_status !== "passed" && r.gate_status !== "good"
-    ? `<span class="chip">${esc(r.gate_status)}</span>` : "";
-  const toggle = r.decision === "exclude" && (!r.decision_scope || r.decision_scope === "sample")
-    ? `<button type="button" class="ghost slim" data-sample-toggle="${esc(r.sample_id)}" data-sample-action="auto">恢复</button>`
+  const phase = PHASE.find(x => x[0] === r.stage);
+  const label = (r.title || "").trim()
+    || (r.kind === "dpo" ? (DPO_SRC_ZH[r.stage] || "偏好对") : "")
+    || (phase ? phase[1] : "")
+    || (r.kind === "trajectory" ? "完整轨迹" : "")
+    || short(r.sample_id, 36);
+  const bits = treeSampleDecisionBits(r);
+  const tip = [r.sample_id, bits.status, (r.preview && (r.preview.chosen_gist || r.preview.target_gist)) || ""].filter(Boolean).join("\n");
+  const canRestore = r.decision === "exclude" && (!r.decision_scope || r.decision_scope === "sample");
+  const toggle = canRestore
+    ? `<button type="button" class="tree-action on" data-sample-toggle="${esc(r.sample_id)}" data-sample-action="auto">恢复</button>`
     : (r.included
-      ? `<button type="button" class="ghost slim" data-sample-toggle="${esc(r.sample_id)}" data-sample-action="exclude">停用</button>` : "");
-  return `<div class="tree-sample ${off ? "off" : ""}" data-sample-open="${esc(r.sample_id)}" title="${esc(r.sample_id)}">
-    <span class="chip">${esc(DRAFT_KIND_ZH[r.kind] || r.kind)}</span>
-    <span class="mono muted" style="font-size:11px">${esc(short(r.sample_id, 44))}</span>
-    ${r.stage ? `<span class="faint" style="font-size:11px">${esc(r.stage)}</span>` : ""}
-    <span class="chip ${esc(r.split || "")}">${esc(r.split || "–")}</span>
-    <span class="chip ${r.included ? "train" : ""}">${r.included ? "纳入" : "停用"}</span>${gate}${layerNote}
-    <span class="grow"></span>${toggle}</div>`;
+      ? `<button type="button" class="tree-action off" data-sample-toggle="${esc(r.sample_id)}" data-sample-action="exclude">停用</button>`
+      : "");
+  return `<div class="tree-sample ${off ? "off" : ""}" data-sample-open="${esc(r.sample_id)}" title="${esc(tip)}">
+    ${toggle}
+    <span class="tree-sample-label">${esc(label)}</span>
+    ${bits.meta ? `<span class="tree-sample-meta">${bits.meta}</span>` : `<span class="grow"></span>`}
+    ${bits.status ? `<span class="tree-sample-status" title="${esc(bits.status)}">${esc(bits.status)}</span>` : ""}
+  </div>`;
+}
+function treeKindHtml(bucket, trajId, opts) {
+  const tf = STATE.train;
+  const kind = bucket.kind || "sft";
+  const key = "k:" + trajId + ":" + kind;
+  const open = !!(tf.expanded && tf.expanded[key]);
+  const q = opts && opts.passQuery ? "" : (tf.q || "").trim().toLowerCase();
+  let samples = bucket.samples || [];
+  if (q) {
+    samples = samples.filter(r => (
+      r.sample_id + " " + r.kind + " " + kind + " " + (r.title || "") + " " + (r.decision_reason || "") + " " + (r.gate_status || "")
+    ).toLowerCase().includes(q));
+  }
+  const kindHit = !q || (kind + " " + (DRAFT_KIND_ZH[kind] || "")).toLowerCase().includes(q);
+  if (q && !samples.length && !kindHit) return "";
+  const c = bucket.counts || {};
+  return `<div class="tree-kind">
+    <div class="tree-kind-head">
+      <button type="button" class="tree-toggle" data-tree-toggle="${esc(key)}" aria-label="展开${esc(DRAFT_KIND_ZH[kind] || kind)}">${open ? "−" : "+"}</button>
+      <span class="chip">${esc(DRAFT_KIND_ZH[kind] || kind)}</span>
+      <span class="tree-counts">${fmt((c.candidates != null ? c.candidates : samples.length) || 0)} 条 · 纳入 ${fmt(c.included || 0)}</span>
+    </div>
+    ${open ? `<div class="tree-samples">${samples.map(treeSampleHtml).join("") || `<div class="faint" style="padding:6px 8px">暂无${esc(DRAFT_KIND_ZH[kind] || kind)}样本</div>`}</div>` : ""}
+  </div>`;
+}
+function treeTrajectoryHtml(traj, sessionId, opts) {
+  const tf = STATE.train;
+  const tid = traj.trajectory_id || (`traj::${sessionId}`);
+  const key = "t:" + tid;
+  const open = !!(tf.expanded && tf.expanded[key]);
+  const sample = traj.sample || null;
+  const passQuery = !!(opts && opts.passQuery);
+  const q = passQuery ? "" : (tf.q || "").trim().toLowerCase();
+  const kindOpts = passQuery || (q && ((tid + " trajectory 轨迹").toLowerCase().includes(q)
+    || (sample && (sample.sample_id + " " + (sample.kind || "")).toLowerCase().includes(q))))
+    ? {passQuery: true} : null;
+  const kindsSrc = (traj.kinds && traj.kinds.length)
+    ? traj.kinds
+    : [
+        {kind: "sft", counts: {candidates: 0, included: 0}, samples: (traj.samples || []).filter(r => r.kind === "sft")},
+        {kind: "dpo", counts: {candidates: 0, included: 0}, samples: (traj.samples || []).filter(r => r.kind === "dpo")},
+      ];
+  const kinds = kindsSrc.map(b => treeKindHtml(b, tid, kindOpts)).filter(Boolean);
+  const trajHit = !q || (tid + " trajectory 轨迹").toLowerCase().includes(q)
+    || (sample && (sample.sample_id + " " + (sample.kind || "")).toLowerCase().includes(q));
+  if (q && !kinds.length && !trajHit) return "";
+  const byKind = Object.fromEntries(kindsSrc.map(b => [b.kind, b.counts || {}]));
+  const sftTotal = (byKind.sft && byKind.sft.candidates != null) ? byKind.sft.candidates : (traj.counts || {}).sft || 0;
+  const sftUsed = (byKind.sft && byKind.sft.included != null) ? byKind.sft.included : 0;
+  const dpoTotal = (byKind.dpo && byKind.dpo.candidates != null) ? byKind.dpo.candidates : (traj.counts || {}).dpo || 0;
+  const dpoUsed = (byKind.dpo && byKind.dpo.included != null) ? byKind.dpo.included : 0;
+  const off = sample && !sample.included;
+  let usage = "";
+  if (sample) {
+    if (sample.decision === "exclude" && (!sample.decision_scope || sample.decision_scope === "sample")) {
+      usage = `<button type="button" class="ghost slim" data-sample-toggle="${esc(sample.sample_id)}" data-sample-action="auto">恢复轨迹</button>`;
+    } else if (sample.included) {
+      usage = `<button type="button" class="ghost slim" data-sample-toggle="${esc(sample.sample_id)}" data-sample-action="exclude">停用轨迹</button>`;
+    } else if (sample.decision === "exclude" && sample.decision_scope && sample.decision_scope !== "sample") {
+      usage = `<span class="tree-layer-note">在上层停用</span>`;
+    }
+  }
+  const status = sample
+    ? `<span class="chip ${sample.included ? "train" : ""}">${sample.included ? "纳入" : "停用"}</span>
+       <span class="chip ${esc(sample.split || "")}">${esc(sample.split || "–")}</span>`
+    : `<span class="faint" style="font-size:11px">未生成完整轨迹</span>`;
+  const openAttr = sample ? `data-sample-open="${esc(sample.sample_id)}"` : "";
+  return `<div class="tree-trajectory ${off ? "off" : ""}">
+    <div class="tree-trajectory-head ${sample ? "clickable" : ""}" ${openAttr} title="${esc(tid)}">
+      <button type="button" class="tree-toggle" data-tree-toggle="${esc(key)}" aria-label="展开轨迹">${open ? "−" : "+"}</button>
+      <span class="chip">${esc(DRAFT_KIND_ZH.trajectory)}</span>
+      <span class="mono" style="font-size:12px">${esc(short(tid, 36))}</span>
+      ${status}
+      <span class="tree-counts">SFT ${fmt(sftTotal)} 条 · 纳入 ${fmt(sftUsed)} · DPO ${fmt(dpoTotal)} 条 · 纳入 ${fmt(dpoUsed)}</span>
+      <span class="grow"></span>${usage}
+    </div>
+    ${open ? `<div class="tree-kinds">${kinds.join("") || `<div class="faint" style="padding:6px 8px">这条轨迹还没有拆出 SFT / DPO</div>`}</div>` : ""}
+  </div>`;
 }
 function treeSessionHtml(node, groupBy) {
   const tf = STATE.train;
   const key = "s:" + node.session_id;
   const open = !!(tf.expanded && tf.expanded[key]);
-  const scopeZh = {project: "项目层", session: "会话层"};
   let usage = "";
   if (node.excluded && node.exclusion_scope === "project") {
     usage = `<span class="tree-layer-note">项目已停用，在项目层恢复</span>`;
@@ -3647,10 +4118,11 @@ function treeSessionHtml(node, groupBy) {
       ? `<button type="button" class="ghost slim" data-session-split-inherit="${esc(node.session_id)}">随上层</button>`
       : `<span class="faint" style="font-size:11px">随${groupBy === "project" ? "项目" : "上层"}</span>`}`;
   const q = (tf.q || "").trim().toLowerCase();
-  const samples = q
-    ? node.samples.filter(r => (r.sample_id + " " + r.kind).toLowerCase().includes(q))
-    : node.samples;
-  if (q && !samples.length && !(node.session_id + " " + node.project_group).toLowerCase().includes(q)) return "";
+  const sessionHit = !q || (node.session_id + " " + node.project_group).toLowerCase().includes(q);
+  const trajectories = (node.trajectories || [])
+    .map(t => treeTrajectoryHtml(t, node.session_id, sessionHit && q ? {passQuery: true} : null))
+    .filter(Boolean);
+  if (q && !trajectories.length && !sessionHit) return "";
   return `<div class="tree-session">
     <div class="tree-session-head">
       <button type="button" class="tree-toggle" data-tree-toggle="${esc(key)}" aria-label="展开会话">${open ? "−" : "+"}</button>
@@ -3660,7 +4132,7 @@ function treeSessionHtml(node, groupBy) {
       <span class="tree-counts">${treeCountsText(node.counts)}</span>
       <span class="grow"></span>${splitCtl}${usage}
     </div>
-    ${open ? `<div class="tree-samples">${samples.map(treeSampleHtml).join("") || `<div class="faint" style="padding:6px 8px">没有切片样本</div>`}</div>` : ""}
+    ${open ? `<div class="tree-children">${trajectories.join("") || `<div class="faint" style="padding:6px 8px">没有轨迹</div>`}</div>` : ""}
   </div>`;
 }
 function treeGroupHtml(g) {
@@ -3720,7 +4192,9 @@ function bindTrainTree(host) {
   host.querySelectorAll("[data-tree-toggle]").forEach(btn => {
     btn.onclick = () => {
       const key = btn.dataset.treeToggle;
-      STATE.train.expanded[key] = !STATE.train.expanded[key];
+      if (!STATE.train.expanded) STATE.train.expanded = {};
+      if (STATE.train.expanded[key]) STATE.train.expanded[key] = false;
+      else treeSmartExpand(key);
       renderTrainTree();
     };
   });
@@ -3759,12 +4233,15 @@ function bindTrainTree(host) {
 function buildWorkspace(lastBuild, builds) {
   const lb = lastBuild || {};
   const list = (builds || []).map(b => `<button type="button" class="ghost mono" data-build-open="${esc(b.build_id)}">${esc(b.build_id.slice(0, 12))}… · ${fmt((b.counts && b.counts.rows) || 0)} 条</button>`).join(" ");
+  const next = lb.build_id
+    ? `<button type="button" class="primary" onclick="jumpToRuns()">去交付打包</button>`
+    : `<span class="faint">构建完成后，再到交付页打 zip</span>`;
   return `<div id="draftBuild" class="workspace-panel">
-    <div class="panel-h"><h3>不可变 Build</h3><span class="hint">build_id · 与 Stage 3 输出绑定</span></div>
+    <div class="panel-h"><h3>不可变 Build</h3><span class="hint">构建只固化数据；打包 zip 在交付页</span></div>
     <div class="panel-b">
       <div class="kv"><span class="k">最新 build_id</span><span class="mono">${esc(lb.build_id || "尚未构建")}</span>
       <span class="k">plan_hash</span><span class="mono faint">${esc(lb.plan_hash || "—")}</span></div>
-      <div class="toolbar" style="margin-top:10px"><button type="button" class="ghost" id="draftBuildReload">刷新 Build 列表</button>${list || `<span class="faint">暂无历史 Build</span>`}</div>
+      <div class="toolbar" style="margin-top:10px"><button type="button" class="ghost" id="draftBuildReload">刷新 Build 列表</button>${list || `<span class="faint">暂无历史 Build</span>`}<span class="grow"></span>${next}</div>
     </div></div>`;
 }
 async function loadTrainBuilds() {
@@ -3775,6 +4252,14 @@ async function loadTrainBuilds() {
   $$("#view-train [data-build-open]").forEach(btn => { btn.onclick = () => openBuildDetail(btn.dataset.buildOpen); });
   const reload = $("#draftBuildReload");
   if (reload) reload.onclick = () => loadTrainBuilds().catch(e => toast(e.message, "err"));
+}
+function inferDraftSampleKind(row, sampleId) {
+  if (row && row.kind) return row.kind;
+  const id = String(sampleId || (row && row.sample_id) || "");
+  if (row && row.chosen != null && row.rejected != null) return "dpo";
+  if (/^dpo(_neg|_review)?::/i.test(id) || id.startsWith("dpo")) return "dpo";
+  if (id.startsWith("traj::")) return "trajectory";
+  return "sft";
 }
 async function openDraftSample(sampleId) {
   openDrawer("草稿样本", short(sampleId, 32));
@@ -3791,7 +4276,7 @@ async function openDraftSample(sampleId) {
   if (seq !== DRAWER_REQUEST_SEQ) return;
   STATE.drawerData = row;
   const draft = row._draft || {};
-  const kind = row.kind || (String(sampleId).startsWith("dpo::") ? "dpo" : "sft");
+  const kind = inferDraftSampleKind(row, sampleId);
   $("#drawerBody").innerHTML = renderTrainDetail(row, kind === "trajectory" ? "trajectory" : kind, draft.build_file || "");
   const layerOff = !draft.included && draft.decision_scope && draft.decision_scope !== "sample";
   setDrawerFoot(layerOff
@@ -3848,7 +4333,7 @@ async function loadTrainDraft() {
     tree = await api("/api/dataset/draft/tree?group_by=" + encodeURIComponent(tf.groupBy || "project"));
   } catch (e) {
     if (!trainRequestCurrent(request)) return;
-    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>无法加载训练数据</h3><p>${esc(e.message)}</p><button class="primary" onclick="runStage('stage3',false)">运行 Stage 3</button></div></div>`;
+    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>无法加载训练数据</h3><p>${esc(e.message)}</p><button class="primary" onclick="runStage('stage3',false)">评估并构建训练集</button></div></div>`;
     return;
   }
   if (!trainRequestCurrent(request)) return;
@@ -3859,7 +4344,7 @@ async function loadTrainDraft() {
   if (!tf.expanded) {
     tf.expanded = {};
     const first = (tree.groups || [])[0];
-    if (first) tf.expanded["g:" + first.key] = true;
+    if (first) treeSmartExpand("g:" + first.key);
   }
   const summary = tree.summary || {};
   const pending = summary.pending_evaluations || 0;
@@ -3872,13 +4357,12 @@ async function loadTrainDraft() {
         ${tree.dirty ? `<span class="chip warn">有未生成的修改</span>` : `<span class="chip train">与最新 Build 一致</span>`}
         <span class="grow"></span>
         <button type="button" class="ghost" id="trainTabFiles" data-train-tab="files">历史文件</button>
-        <button type="button" class="ghost" onclick="runStage('dataset_evaluate',false)">DPO 评估</button>
-        <button type="button" class="primary" onclick="runStage('stage3',false)">生成训练文件</button>
-        <button type="button" class="ghost" onclick="jumpToRuns()">去交付中心打包</button>
+        <button type="button" class="ghost" onclick="runStage('dataset_evaluate',false)">仅 DPO 评估</button>
+        <button type="button" class="primary" onclick="runStage('stage3',false)" title="会先评估待复核 DPO，再合成 SFT/DPO 训练集">评估并构建</button>
       </div>
       <section class="panel workspace-panel">
-        <div class="panel-h"><h3>黄金会话 → 切片样本</h3>
-          <span class="hint">在一层停用或改切分，下面的会话和切片一并生效</span><span class="grow"></span>
+        <div class="panel-h"><h3>黄金会话 → 轨迹 → SFT / DPO</h3>
+          <span class="hint">只有一行子节点时会继续展开；轨迹下再点开 SFT 或 DPO 看切片；上层停用或改切分会向下生效</span><span class="grow"></span>
           <div class="seg-ctl" role="group" aria-label="分组方式">
             <button type="button" data-group-by="project" class="${tf.groupBy !== "split" ? "on" : ""}">按项目</button>
             <button type="button" data-group-by="split" class="${tf.groupBy === "split" ? "on" : ""}">按 train / eval</button>
@@ -3910,7 +4394,7 @@ async function loadTrainFiles() {
   if (!trainRequestCurrent(request)) return;
   const files = d.datasets || [];
   if (!files.length) {
-    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>还没有训练文件</h3><p>运行 Stage 3 后会在此列出 jsonl。</p></div></div>`;
+    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>还没有训练文件</h3><p>点「评估并构建」后会在此列出 jsonl（会先评估待复核 DPO）。</p></div></div>`;
     return;
   }
   const tf = STATE.train;
@@ -4146,6 +4630,7 @@ function convToMsgs(list) {
 
 function renderTrainDetail(row,kind,fileName) {
   const meta=row.metadata||row;
+  const draft=row._draft||{};
   const rel = dsRelation(fileName || "");
   const sid = meta.session_id || "";
   const sampleId = row.sample_id || meta.sample_id || "";
@@ -4154,8 +4639,17 @@ function renderTrainDetail(row,kind,fileName) {
   if (sid) lines.push(`<div class="origin-line"><span class="k">黄金会话</span><button type="button" class="ghost" id="jumpGold" data-sid="${esc(sid)}">${esc(sid)}</button></div>`);
   if (meta.project_group) lines.push(`<div class="origin-line"><span class="k">项目</span><span>${esc(meta.project_group)}</span></div>`);
   if (meta.split) lines.push(`<div class="origin-line"><span class="k">切分</span><span>${esc(meta.split)}</span></div>`);
-  if (meta.source) lines.push(`<div class="origin-line"><span class="k">生成原因</span><span>${esc(DPO_SRC_ZH[meta.source] || meta.source)}</span></div>`);
-  if (meta.reason) lines.push(`<div class="origin-line"><span class="k">理由</span><span>${esc(meta.reason)}</span></div>`);
+  if (draft.title || row.title) lines.push(`<div class="origin-line"><span class="k">样本</span><span>${esc(draft.title || row.title)}</span></div>`);
+  else if (meta.source) lines.push(`<div class="origin-line"><span class="k">来源</span><span>${esc(DPO_SRC_ZH[meta.source] || meta.source)}</span></div>`);
+  if (meta.reason) lines.push(`<div class="origin-line"><span class="k">生成理由</span><span>${esc(meta.reason)}</span></div>`);
+  if (draft.gate_status || draft.decision_reason || draft.decision === "exclude") {
+    const gateZh = DPO_GATE_ZH[draft.gate_status] || draft.gate_status || "";
+    const status = draft.included === false
+      ? (draft.decision === "exclude" ? "人工停用" : (gateZh || "停用"))
+      : (gateZh && gateZh !== "通过" ? gateZh : "");
+    const review = [status, draft.decision_reason].filter(Boolean).join(" · ");
+    if (review) lines.push(`<div class="origin-line"><span class="k">审核</span><span>${esc(review)}</span></div>`);
+  }
   if (meta.stage) {
     const ph = PHASE.find(x => x[0] === meta.stage);
     lines.push(`<div class="origin-line"><span class="k">阶段</span><span>${esc(ph ? ph[1] : meta.stage)}</span></div>`);
@@ -4167,9 +4661,10 @@ function renderTrainDetail(row,kind,fileName) {
   if(kind==="dpo"){
     const pref = v => (v == null ? "" : typeof v === "string" ? v : (v.value || ""));
     const chosen=pref(row.chosen), rejected=pref(row.rejected);
-    return `${metaPanel}<div class="panel"><div class="panel-h"><h3>偏好对照</h3><span class="hint">相同上下文下，模型应偏好左侧 chosen</span></div>
-      <div class="panel-b">${buildDiff(rejected,chosen,["Rejected · 不应学习","Chosen · 目标行为"]).html}</div></div>
-      <div class="note" style="margin:10px 0">与黄金数据相同的对话视图 · 这是偏好对触发时所见的上下文，chosen / rejected 目标回复不在其中</div>
+    const sameActionHint = !!(draft.preview && draft.preview.same_action)
+      || !!(row.preview && row.preview.same_action);
+    return `${metaPanel}${renderDpoPreferenceCard(chosen, rejected, {sameAction: sameActionHint || undefined})}
+      <div class="note" style="margin:10px 0">下方是触发时的上下文对话；Chosen / Rejected 目标回复见上方对照，不在对话流里。</div>
       ${renderMessages(convToMsgs(row.conversations || row.messages))}`;
   }
   if(kind==="diagnostic") return `${metaPanel}<div class="panel"><div class="panel-h"><h3>病态思考原文</h3></div>
@@ -4607,7 +5102,7 @@ function rwStepActions(s) {
     if (s.id === "s3.package") {
       acts.push(`<button class="primary" onclick="event.stopPropagation();exportPackage()"${PACK.running ? " disabled" : ""}>${PACK.running ? "打包中…" : "生成交付 zip"}</button>`);
     } else if (s.status === "warn" || s.status === "ready") {
-      acts.push(`<button class="primary" onclick="event.stopPropagation();runStage('stage3',false)">运行 Stage 3</button>`);
+      acts.push(`<button class="primary" onclick="event.stopPropagation();runStage('stage3',false)">评估并构建</button>`);
     }
     if (s.id === "s3.dpo_review") {
       acts.push(`<button onclick="event.stopPropagation();jumpToTrain('dpo_preference_pairs.jsonl')">查看 DPO 样本</button>`);
@@ -4638,7 +5133,7 @@ function rwInlineJump(s) {
 function rwStageAction(phaseId, rb) {
   if (phaseId === "stage1") return `<button onclick="jumpToRaw()">查看原始数据</button><button onclick="runStage('stage1',false)">运行 Stage 1</button>`;
   if (phaseId === "stage2") return `<button onclick="jumpToGold('')">查看黄金数据</button><button onclick="runStage('stage2',false)">运行 Stage 2</button>`;
-  if (phaseId === "stage3") return `<button onclick="jumpToTrain()">查看训练集</button><button onclick="runStage('stage3',false)">运行 Stage 3</button>`;
+  if (phaseId === "stage3") return `<button onclick="jumpToTrain()">查看训练集</button><button onclick="runStage('stage3',false)">评估并构建</button>`;
   return "";
 }
 
@@ -4708,190 +5203,187 @@ function selectExportProfile(id) {
   try { localStorage.setItem("gt.exportProfile", id); } catch (_) {}
   if (STATE.runbook) renderRunsView(STATE.runbook);
 }
-function formatMismatchNote(del, selectedId) {
-  if (!del.zip_path) return "";
-  const fmt = del.format;
-  if (!fmt || !fmt.profile) {
-    return `<br><span class="faint">当前 zip 打包时还没有格式契约。按上面选的格式重新打包后，工具调用、template、parser 会锁成一套。</span>`;
-  }
-  if (fmt.profile !== selectedId) {
-    return `<br><span class="faint">可下载的包是 <b>${esc(fmt.label || fmt.profile)}</b>。上面选的是另一种格式，要点「按此格式重新打包」才会换。</span>`;
-  }
-  const n = fmt.blocks_converted;
-  const rewritten = (n || n === 0) ? `，改写了 ${esc(n)} 处工具调用` : "";
-  return `<br><span class="faint">这份 zip 已是 ${esc(fmt.label || fmt.profile)}（template ${esc(fmt.train_template || "")}，parser ${esc(fmt.serve_tool_parser || "")}${rewritten}）。</span>`;
-}
-
-function packCardCopy(del, extra) {
-  if (PACK.running) {
-    return {
-      readyClass: "busy",
-      title: "正在生成交付包",
-      body: `<span id="packPhase">${esc(PACK.phase || "正在整理数据集与训练配置…")}</span><span class="faint" id="packElapsed">已用时 <b>${PACK.elapsed}</b> 秒</span>`,
-    };
-  }
-  if (PACK.error) {
-    return {readyClass: "error", title: "打包失败", body: `<span>${esc(PACK.error)}</span><span class="faint">调整后可重试。</span>`};
-  }
-  if (del.zip_path) {
-    const took = PACK.result && PACK.elapsed ? `<span class="faint">本次打包用时 ${PACK.elapsed} 秒</span>` : "";
-    return {readyClass: "ready", title: "交付包已就绪", body: `${took}${extra || ""}`};
-  }
-  return {
-    readyClass: "",
-    title: del.handoff_exists ? "尚未生成交付包" : "训练集尚未就绪",
-    body: `<span>${del.handoff_exists ? "选择导出格式后生成第一个 zip。" : "请先在工作台完成训练集合成，再回到这里打包。"}</span>${extra || ""}`,
-  };
+function packProfileOptionsHtml(rb, selectedId) {
+  const profiles = exportProfileList(rb);
+  const cur = selectedId || currentExportProfile(rb);
+  return profiles.map(p =>
+    `<option value="${esc(p.id)}"${p.id === cur ? " selected" : ""}>${esc(p.label || p.id)}</option>`
+  ).join("");
 }
 
 function rwRenderDeliveryDetail(rb) {
   const del = rb.deliverable || {};
   if (del.zip_name) window.__lastZipName = del.zip_name;
-  const mb = del.zip_size_bytes ? (del.zip_size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "—";
   const busy = !!PACK.running;
   const dis = busy ? " disabled" : "";
-  const profiles = exportProfileList(rb);
-  const selectedId = currentExportProfile(rb);
-  const selected = profiles.find(p => p.id === selectedId) || null;
-  const packLabel = del.zip_path ? "按此格式重新打包" : "按此格式生成 zip";
-  const card = packCardCopy(del, formatMismatchNote(del, selectedId));
-  const fmtLabel = del.format && del.format.label ? del.format.label : (del.zip_path ? "未记录" : "待生成");
-  const picker = profiles.map(p => {
-    const on = p.id === selectedId ? " on" : "";
-    const chip = p.default ? `<span class="chip">默认</span>` : "";
-    return `<button type="button" class="fmt-opt${on}" onclick="selectExportProfile('${esc(p.id)}')"${dis} aria-pressed="${p.id === selectedId}">
-      <span class="fmt-k"><b>${esc(p.label)}</b><em>${esc(p.habit)}</em>${chip}</span>
-      <p class="fmt-sum">${esc(p.summary)}</p>
-      <pre>${esc(p.example)}</pre>
-      <span class="fmt-meta">template ${esc(p.template)} · parser ${esc(p.parser)}</span>
-    </button>`;
-  }).join("");
-  const statusTag = busy ? `<span class="chip model">打包中</span>` : del.zip_path ? `<span class="chip train">已就绪</span>` : `<span class="chip">待生成</span>`;
-  return `<div class="delivery-workspace">
-    <section class="panel delivery-format-panel">
-      <div class="panel-h"><h3>导出格式</h3><span class="hint">同时锁定工具调用、训练 template 与推理 parser</span></div>
-      <div class="delivery-format-list">${picker}</div>
-    </section>
-    <section class="panel delivery-current-panel">
-      <div class="panel-h"><h3>当前交付包</h3><span class="grow"></span>${statusTag}</div>
-      <div class="delivery-current-body">
-        <div class="delivery-pack-summary">
-          <div><b>${esc(selected?.label || "默认导出格式")}</b><p>${esc(selected?.summary || "将数据集、训练配置与使用说明打成一个 zip。")}</p></div>
-          <div class="delivery-actions">
-            ${del.zip_path ? `<button class="primary" onclick="downloadZip()"${dis}>下载交付 zip</button>` : ""}
-            <button class="${del.zip_path ? "ghost" : "primary"}" onclick="exportPackage()"${dis}>${busy ? "打包中…" : packLabel}</button>
-            ${del.handoff_exists ? `<button class="ghost" onclick="openHandoff()">使用说明</button>` : ""}
-          </div>
-        </div>
-        <div class="delivery-status ${card.readyClass}" id="packStatus">
-          <b id="packTitle">${card.title}</b><div id="packBody">${card.body}</div>
-        </div>
-        <dl class="delivery-meta">
-          <div><dt>当前包格式</dt><dd>${esc(fmtLabel)}</dd></div>
-          <div><dt>文件名</dt><dd class="mono" title="${esc(del.zip_name || "")}">${esc(del.zip_name || "待生成")}</dd></div>
-          <div><dt>体积</dt><dd>${mb}</dd></div>
-          <div><dt>生成时间</dt><dd>${esc(stamp(del.zip_generated_at) || "—")}</dd></div>
-          <div><dt>内容指纹</dt><dd class="mono">${esc(del.package_hash || "—")}</dd></div>
-          <div><dt>配置版本</dt><dd class="mono">${esc(String(rb.config_hash || "").slice(0, 8) || "—")}</dd></div>
-        </dl>
-      </div>
-    </section>
-  </div>
-  <section class="panel delivery-history">
-    <div class="panel-h"><h3>历史打包</h3><span class="hint">每一次生成结果都可单独下载</span></div>
-    ${packHistHtml()}
-  </section>
-  ${releasePanelHtml()}`;
-}
-function packHistHtml() {
   const packs = (STATE.packHist && STATE.packHist.packs) || [];
-  const cell = n => n == null ? "—" : fmt(n);
-  const rows = packs.map(p => {
-    const mb = p.size_bytes ? (p.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "—";
-    return `<tr>
-      <td class="mono" style="font-size:11px">${esc(p.name)}</td>
-      <td>${esc(p.format_label || "未记录")}</td>
-      <td class="n">${cell(p.sft_train)} / ${cell(p.sft_eval)}</td>
-      <td class="n">${cell(p.dpo_train)} / ${cell(p.dpo_eval)}</td>
-      <td class="n">${mb}</td>
-      <td class="muted">${esc(stamp(p.generated_at) || "")}</td>
-      <td><button class="slim" type="button" onclick="downloadZip('${esc(p.name)}')">下载</button></td>
-    </tr>`;
-  }).join("") || emptyRow(7, "还没有打包记录");
-  return `<div class="pack-hist">
-    <p class="faint" style="margin:0 0 10px;font-size:12px">共 ${fmt(packs.length)} 份，可下载任意一次生成结果。</p>
-    <div class="scroll" style="max-height:320px"><table><thead><tr>
-      <th>文件</th><th>格式</th><th class="n">SFT 训练 / 验证</th><th class="n">DPO 训练 / 验证</th><th class="n">体积</th><th>时间</th><th></th>
-    </tr></thead><tbody>${rows}</tbody></table></div>
-  </div>`;
-}
-
-function releasePanelHtml() {
-  const data = STATE.releases || {releases: [], active_version: "", can_rollback: false};
-  const rows = (data.releases || []).map(r => {
-    const source = r.origin === "legacy"
-      ? (r.imported_build_id ? `历史发布 · Build ${esc(String(r.imported_build_id).slice(0, 8))}` : "历史发布")
-      : (r.build_id ? `Build ${esc(String(r.build_id).slice(0, 8))}` : "Build");
-    const state = r.active ? `<span class="chip train">当前训练版本</span>` : `<span class="faint">未激活</span>`;
-    const activate = r.active
-      ? ""
-      : `<button class="slim" type="button" onclick="activateRelease('${esc(r.version)}')">激活</button>`;
-    const migrate = r.origin === "legacy" && !r.imported_build_id
-      ? `<button class="slim" type="button" onclick="importLegacyRelease('${esc(r.version)}')">迁入 Build</button>`
-      : "";
-    return `<tr>
-      <td class="mono">${esc(r.version)}</td>
-      <td>${source}</td>
-      <td>${state}</td>
-      <td class="muted">${esc(stamp(r.created_at) || "")}</td>
-      <td>${activate}${migrate}</td>
-    </tr>`;
-  }).join("") || emptyRow(5, "还没有发布版本。当前 Build 可以发布成一个新版本。");
-  const rollback = data.can_rollback
-    ? `<button class="ghost" type="button" onclick="rollbackRelease()">回滚到上一版本</button>`
-    : `<button class="ghost" type="button" disabled title="没有上一激活版本">回滚到上一版本</button>`;
-  return `<section class="panel delivery-releases">
-    <div class="panel-h"><h3>发布版本</h3><span class="hint">发布生成冻结版本。激活后，当前训练版本才指向它</span><span class="grow"></span>
-      <button type="button" onclick="publishCurrentRelease()">发布当前 Build</button>${rollback}
-    </div>
-    <div class="pack-hist">
-      <p class="faint" style="margin:0 0 10px;font-size:12px">当前训练版本 ${esc(data.active_version || "未设置")}。构建和打包不会改它。</p>
-      <div class="scroll" style="max-height:280px"><table><thead><tr>
-        <th>版本</th><th>来源</th><th>状态</th><th>时间</th><th></th>
-      </tr></thead><tbody>${rows}</tbody></table></div>
+  const status = PACK.running
+    ? `<span class="chip warn" id="packStatus">打包中 · <b id="packElapsed">${PACK.elapsed}</b>s</span>`
+    : (PACK.error ? `<span class="chip bad">上次失败：${esc(PACK.error)}</span>` : "");
+  const newBar = `<section class="panel" id="packStatusPanel">
+    <div class="delivery-new-bar">
+      <div class="grow">
+        <b>用当前 Build 新建交付包</b>
+        <div class="faint" style="margin-top:4px;font-size:12px">历史包见下方。下载时可另选格式；若该 Build 还没有对应格式包，会先打包再下载。</div>
+      </div>
+      <label class="faint" style="font-size:12px">格式
+        <select id="deliveryNewProfile"${dis}>${packProfileOptionsHtml(rb)}</select>
+      </label>
+      <button class="primary" type="button" onclick="exportPackage()"${dis}>${busy ? "打包中…" : "新建包"}</button>
+      ${status}
     </div>
   </section>`;
+  return `<div class="delivery-workspace">${newBar}
+  <section class="panel delivery-history">
+    <div class="panel-h"><h3>历史交付包</h3><span class="hint">共 ${fmt(packs.length)} 份</span></div>
+    ${packHistHtml(rb)}
+  </section></div>`;
 }
-async function publishCurrentRelease() {
-  try {
-    const d = await api("/api/releases", {method:"POST", body:"{}"});
-    toast(d.reused ? `版本 ${d.version} 已经发布` : `已发布 ${d.version}。激活后才会成为当前训练版本`, "ok");
-    if (STATE.tab === "runs") loadRuns();
-  } catch (e) { toast(e.message, "err"); }
+function packTok(n) {
+  const v = Number(n) || 0;
+  if (v < 1000) return String(v);
+  const k = v / 1000;
+  return (k >= 10 ? Math.round(k) : Math.round(k * 10) / 10) + "k";
 }
-async function activateRelease(version) {
-  if (!window.confirm(`激活 ${version} 为当前训练版本？`)) return;
-  try {
-    await api(`/api/releases/${encodeURIComponent(version)}/activate`, {method:"POST"});
-    toast(`${version} 已是当前训练版本`, "ok");
-    if (STATE.tab === "runs") loadRuns();
-  } catch (e) { toast(e.message, "err"); }
+function packTokMark(n) {
+  const v = Number(n) || 0;
+  if (v <= 0) return "0";
+  if (v >= 1e8) return "16k+";
+  return Math.round(v / 1024) + "k";
 }
-async function rollbackRelease() {
-  if (!window.confirm("回滚到上一个激活版本？")) return;
-  try {
-    const d = await api("/api/releases/rollback", {method:"POST"});
-    toast(`已回到 ${d.version}`, "ok");
-    if (STATE.tab === "runs") loadRuns();
-  } catch (e) { toast(e.message, "err"); }
+function packLenRulerTicks(bins) {
+  const n = Math.max(1, bins.length);
+  const edges = [{ i: 0, lo: 0, label: "0", edge: "start" }];
+  bins.forEach((b, idx) => {
+    const hi = Number(b.hi);
+    if (!Number.isFinite(hi) || hi >= 1e8) return;
+    edges.push({ i: idx + 1, lo: hi, label: packTokMark(hi), edge: "" });
+  });
+  if (bins.length) {
+    const last = bins[bins.length - 1];
+    if (Number(last.hi) >= 1e8) edges.push({ i: n, lo: Number(last.lo) || 0, label: "16k+", edge: "end" });
+  }
+  const want = new Set([0, 2048, 4096, 8192, 10240, 12288, 16384]);
+  const picks = [];
+  const seen = new Set();
+  for (const e of edges) {
+    const key = e.edge === "end" ? "end" : e.lo;
+    if (seen.has(key)) continue;
+    const keep = e.edge === "start" || e.edge === "end" || want.has(e.lo);
+    if (!keep) continue;
+    seen.add(key);
+    picks.push({
+      ...e,
+      cut: e.lo === 10240,
+      cls: [e.edge, e.lo === 10240 ? "cut" : ""].filter(Boolean).join(" "),
+    });
+  }
+  if (!picks.some(t => t.cut)) {
+    const cutIdx = bins.findIndex(b => (b.lo || 0) >= 10240);
+    if (cutIdx >= 0) picks.push({ i: cutIdx, lo: 10240, label: "10k", cut: true, cls: "cut" });
+  }
+  picks.sort((a, b) => a.i - b.i || a.lo - b.lo);
+  return { n, ticks: picks, cutIdx: bins.findIndex(b => (b.lo || 0) >= 10240) };
 }
-async function importLegacyRelease(version) {
-  try {
-    const d = await api(`/api/releases/${encodeURIComponent(version)}/import-build`, {method:"POST"});
-    toast(`已迁入 Build ${String(d.build_id || "").slice(0, 8)}`, "ok");
-    if (STATE.tab === "runs") loadRuns();
-  } catch (e) { toast(e.message, "err"); }
+function packLenLinePoints(bins, { w = 100, h = 56, padY = 4 } = {}) {
+  const n = Math.max(1, bins.length);
+  const maxC = Math.max(1, ...bins.map(b => b.count || 0));
+  return bins.map((b, i) => {
+    const x = n === 1 ? w / 2 : (i / (n - 1)) * w;
+    const y = h - padY - ((b.count || 0) / maxC) * (h - padY * 2);
+    return [x, y];
+  });
 }
+function packLenPoly(points) {
+  return points.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
+}
+function packLenArea(points, h = 56) {
+  if (!points.length) return "";
+  const first = points[0], last = points[points.length - 1];
+  return `${first[0].toFixed(2)},${h} ${packLenPoly(points)} ${last[0].toFixed(2)},${h}`;
+}
+function packLenSparkHtml(p) {
+  const len = p.length;
+  const sft = len && len.sft;
+  const dpo = len && len.dpo;
+  const rulerBins = (sft && sft.bins) || (dpo && dpo.bins) || [];
+  if (!rulerBins.length) {
+    return `<div class="pack-len"><div class="pack-len-empty">—</div></div>`;
+  }
+  const { n, ticks, cutIdx } = packLenRulerTicks(rulerBins);
+  const w = 100, h = 56;
+  const sftPts = sft && sft.bins && sft.bins.length ? packLenLinePoints(sft.bins, { w, h }) : [];
+  const dpoPts = dpo && dpo.bins && dpo.bins.length ? packLenLinePoints(dpo.bins, { w, h }) : [];
+  const cutX = cutIdx >= 0 && n > 1 ? ((cutIdx / (n - 1)) * w).toFixed(2) : null;
+  const gridLines = ticks
+    .filter(t => t.i > 0 && t.i < n)
+    .map(t => {
+      const x = n > 1 ? ((t.i / (n - 1)) * w).toFixed(2) : "0";
+      const cls = t.cut ? "grid-cut" : "grid-v";
+      return `<line class="${cls}" x1="${x}" y1="0" x2="${x}" y2="${h}" />`;
+    }).join("");
+  const cutLine = cutX != null && !ticks.some(t => t.cut)
+    ? `<line class="grid-cut" x1="${cutX}" y1="0" x2="${cutX}" y2="${h}" />`
+    : "";
+  const svg = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+      ${gridLines}${cutLine}
+      ${sftPts.length ? `<polygon class="area-sft" points="${packLenArea(sftPts, h)}" />` : ""}
+      ${dpoPts.length ? `<polygon class="area-dpo" points="${packLenArea(dpoPts, h)}" />` : ""}
+      ${sftPts.length ? `<polyline class="line-sft" points="${packLenPoly(sftPts)}" />` : ""}
+      ${dpoPts.length ? `<polyline class="line-dpo" points="${packLenPoly(dpoPts)}" />` : ""}
+    </svg>`;
+  const ruler = ticks.map(t =>
+    `<span class="${esc(t.cls)}" style="--i:${t.i}" title="${esc(t.label)}">${esc(t.label)}</span>`
+  ).join("");
+  const legend = [
+    sftPts.length ? `<span class="sft"><i></i>SFT</span>` : "",
+    dpoPts.length ? `<span class="dpo"><i></i>DPO</span>` : "",
+  ].join("");
+  const aria = [
+    sft ? `SFT 中位 ${packTok(sft.p50)}` : "",
+    dpo ? `DPO 中位 ${packTok(dpo.p50)}` : "",
+    "点击查看详情",
+  ].filter(Boolean).join("，");
+  return `<div class="pack-len">
+    <div class="pack-len-chart" role="button" tabindex="0" aria-label="${esc(aria)}"
+      onclick="openPackLengthStats('${esc(p.name)}')"
+      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openPackLengthStats('${esc(p.name)}')}">
+      <div class="pack-len-legend">${legend}</div>
+      <div class="pack-len-plot">${svg}</div>
+      <div class="pack-len-ruler" style="--n:${n}" aria-hidden="true">${ruler}</div>
+    </div>
+  </div>`;
+}
+function packHistHtml(rb) {
+  const packs = (STATE.packHist && STATE.packHist.packs) || [];
+  if (!packs.length) {
+    return `<div class="empty" style="padding:24px 16px"><h3>还没有交付包</h3><p>先在训练数据页构建训练集，再回这里用当前 Build 新建包。</p></div>`;
+  }
+  const cell = n => n == null ? "—" : fmt(n);
+  return `<div class="delivery-pack-list">${packs.map(p => {
+    const mb = p.size_bytes ? (p.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "—";
+    const buildShort = p.build_id ? String(p.build_id).slice(0, 8) : "—";
+    const profile = p.profile || currentExportProfile(rb || STATE.runbook || {});
+    return `<article class="delivery-pack-card">
+      <div class="pack-info">
+        <div class="pack-name mono" title="${esc(p.name)}">${esc(p.name)}</div>
+        <div class="pack-meta">${esc(p.format_label || p.profile || "未记录格式")} · ${esc(buildShort)} · ${esc(stamp(p.generated_at) || "")} · ${mb}</div>
+        <div class="pack-counts">
+          <span class="chip-n">SFT <b>${cell(p.sft_train)}</b><span class="faint">/${cell(p.sft_eval)}</span></span>
+          <span class="chip-n">DPO <b>${cell(p.dpo_train)}</b><span class="faint">/${cell(p.dpo_eval)}</span></span>
+        </div>
+      </div>
+      ${packLenSparkHtml(p)}
+      <div class="delivery-pack-actions">
+        <button class="ghost slim" type="button" onclick="openPackDocs('${esc(p.name)}')">说明</button>
+        <select data-pack-profile="${esc(p.name)}" aria-label="下载格式">${packProfileOptionsHtml(rb || STATE.runbook || {}, profile)}</select>
+        <button class="slim" type="button" onclick="downloadPackWithFormat('${esc(p.name)}','${esc(p.build_id || "")}')">下载</button>
+        <button class="danger slim" type="button" onclick="deletePack('${esc(p.name)}')">删除</button>
+      </div>
+    </article>`;
+  }).join("")}</div>`;
+}
+
 function renderRunsView(rb) {
   STATE.runbook = rb;
   STATE.delivery = rb.deliverable || {};
@@ -4901,12 +5393,11 @@ function renderRunsView(rb) {
 async function loadRuns() {
   const seq = ++RUNS_REQUEST_SEQ;
   try {
-    const [rb, packs, releases] = await Promise.all([
-      api("/api/runbook"), api("/api/export/history"), api("/api/releases"),
+    const [rb, packs] = await Promise.all([
+      api("/api/runbook"), api("/api/export/history"),
     ]);
     if (seq !== RUNS_REQUEST_SEQ) return;
     STATE.packHist = packs || {packs:[]};
-    STATE.releases = releases || {releases: []};
     renderRunsView(rb);
   } catch (e) {
     if (seq !== RUNS_REQUEST_SEQ) return;
@@ -4924,7 +5415,7 @@ function startPackTimer() {
     if (!PACK.running || !PACK.startedAt) return;
     PACK.elapsed = Math.max(0, Math.floor((Date.now() - PACK.startedAt) / 1000));
     const el = document.getElementById("packElapsed");
-    if (el) el.innerHTML = `已用时 <b>${PACK.elapsed}</b> 秒 · 请勿重复点击`;
+    if (el) el.innerHTML = `<b>${PACK.elapsed}</b>s`;
     if (JOB_META && JOB_META.stage === "package" && JOB_LINES.length) {
       const last = JOB_LINES[JOB_LINES.length - 1] || "";
       const m = last.replace(/^\d{2}:\d{2}:\d{2}\s*/, "");
@@ -4945,21 +5436,26 @@ function setPackButtonsDisabled(disabled) {
     }
   });
 }
-async function exportPackage() {
+async function exportPackage(opts) {
   if (PACK.running) return;
+  opts = opts || {};
+  const sel = $("#deliveryNewProfile");
+  const profile = opts.profile || (sel && sel.value) || currentExportProfile(STATE.runbook || {});
+  if (profile) selectExportProfile(profile);
   PACK.running = true;
   PACK.jobId = null;
   PACK.startedAt = Date.now();
   PACK.elapsed = 0;
-  PACK.phase = "正在重新打包，约需 15–30 秒…";
+  PACK.phase = "正在打包，约需 15–30 秒…";
   PACK.error = null;
   PACK.result = null;
   setPackButtonsDisabled(true);
   startPackTimer();
   if (STATE.tab === "runs") loadRuns().catch(() => {});
   try {
-    const profile = currentExportProfile(STATE.runbook || {});
-    const { job_id } = await api("/api/export/package", { method: "POST", body: JSON.stringify({ profile }) });
+    const body = { profile };
+    if (opts.buildId) body.build_id = opts.buildId;
+    const { job_id } = await api("/api/export/package", { method: "POST", body: JSON.stringify(body) });
     PACK.jobId = job_id;
     toast("已提交打包，可在任务中心查看进度", "ok");
     watchJob(job_id, (j) => {
@@ -4972,6 +5468,12 @@ async function exportPackage() {
       if (j.status === "done") {
         PACK.result = j.result || null;
         PACK.error = null;
+        const zipName = (j.result && (j.result.zip_name || (j.result.package && j.result.package.zip_name))) || "";
+        if (opts.downloadAfter && zipName) downloadZip(zipName);
+        else if (opts.downloadAfter && j.result && j.result.zip_path) {
+          const base = String(j.result.zip_path).split(/[/\\]/).pop();
+          if (base) downloadZip(base);
+        }
       } else {
         PACK.error = j.error || "打包失败";
         PACK.result = null;
@@ -4997,6 +5499,97 @@ function downloadZip(name) {
   window.location.href = "/api/export/download?" + q.toString();
 }
 
+async function downloadPackWithFormat(name, buildId) {
+  const sel = document.querySelector(`select[data-pack-profile="${CSS.escape(name)}"]`);
+  const profile = (sel && sel.value) || currentExportProfile(STATE.runbook || {});
+  const pack = ((STATE.packHist && STATE.packHist.packs) || []).find(p => p.name === name);
+  if (pack && pack.profile && pack.profile === profile) {
+    downloadZip(name);
+    return;
+  }
+  if (!buildId) {
+    toast("这个包没有 build_id，无法按其它格式重打；请直接下载原包或用当前 Build 新建", "err");
+    return;
+  }
+  toast(`将按 ${profile} 重新打包后再下载`, "ok");
+  await exportPackage({ profile, buildId, downloadAfter: true });
+}
+
+async function deletePack(name) {
+  if (!name) return;
+  const ok = window.confirm(
+    `确定删除交付包 ${name} 吗？\n\n` +
+    "将删除 delivery 目录下的 zip 及旁路长度统计文件。此操作不可撤销。\n"
+  );
+  if (!ok) return;
+  try {
+    await api("/api/export/pack?name=" + encodeURIComponent(name), { method: "DELETE" });
+    toast(`已删除 ${name}`, "ok");
+    if (STATE.tab === "runs") loadRuns();
+  } catch (e) {
+    toast(e.message || "删除失败", "err");
+  }
+}
+
+async function openPackDocs(name) {
+  try {
+    const d = await api("/api/export/pack/docs?name=" + encodeURIComponent(name));
+    openDrawer("包说明", d.name || name);
+    const body = d.markdown
+      ? `<div class="md">${md(d.markdown)}</div>`
+      : `<div class="empty"><p>这个包里没有说明文档。</p></div>`;
+    $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-b">
+      <div class="faint" style="margin-bottom:10px;font-size:12px">来源 ${esc(d.source || "—")} · Build ${esc((d.build_id || "").slice(0, 12) || "—")}</div>
+      ${body}</div></div>`;
+    setDrawerFoot("");
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function lengthStatsHtml(stats) {
+  const datasets = stats.datasets || {};
+  const keys = Object.keys(datasets);
+  if (!keys.length) return `<div class="empty"><p>包内没有可统计的 *.lf.jsonl。</p></div>`;
+  const unit = stats.unit === "tokens" ? "token" : "字";
+  const gate = stats.length_gate || {};
+  const gateNote = gate._skip
+    ? `<p class="delivery-note">打包时 length_gate 已跳过：${esc((gate._skip.skip_reason || gate._skip.tokenizer || "unknown"))}</p>`
+    : "";
+  const estNote = stats.estimated
+    ? `<p class="delivery-note">未加载到分词器，当前为估算值（${esc(stats.tokenizer || "")}）。</p>`
+    : `<p class="faint" style="margin:0 0 10px;font-size:12px">分词器 ${esc(stats.tokenizer || "—")}</p>`;
+  return `${gateNote}${estNote}<div class="delivery-len-grid">${keys.map(k => {
+    const d = datasets[k] || {};
+    const bins = d.bins || [];
+    const maxC = Math.max(1, ...bins.map(b => b.count || 0));
+    const over10 = d.over_10k != null ? ` · ≥10k ${fmt(d.over_10k)}` : "";
+    return `<div class="delivery-len-block">
+      <h4>${esc(k)} · ${fmt(d.count || 0)} 条 · 中位 ${fmt(d.p50)} ${unit} · P90 ${fmt(d.p90)} · 最大 ${fmt(d.max)}${over10}</h4>
+      <div class="delivery-len-bars">${bins.map(b => {
+        const pct = Math.round(100 * (b.count || 0) / maxC);
+        return `<div class="delivery-len-row"><span>${esc(b.label)}</span><div class="bar"><i style="width:${pct}%"></i></div><span class="n">${fmt(b.count || 0)}</span></div>`;
+      }).join("")}</div>
+    </div>`;
+  }).join("")}</div>
+  <p class="faint" style="margin-top:12px;font-size:12px">${esc(stats.note || "")}</p>`;
+}
+
+async function openPackLengthStats(name) {
+  openDrawer("长度分布", name || "");
+  const seq = DRAWER_REQUEST_SEQ;
+  $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-b"><div class="loading">读取包内长度分布…</div></div></div>`;
+  setDrawerFoot("");
+  try {
+    const d = await api("/api/export/pack/length-stats?name=" + encodeURIComponent(name));
+    if (seq !== DRAWER_REQUEST_SEQ) return;
+    $("#drawerSub").textContent = d.name || name || "";
+    $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-b">${lengthStatsHtml(d)}</div></div>`;
+  } catch (e) {
+    if (seq !== DRAWER_REQUEST_SEQ) return;
+    $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-b"><div class="empty">统计失败：${esc(e.message || e)}</div></div></div>`;
+    toast(e.message, "err");
+  }
+}
+
 async function openHandoff() {
   try {
     const d = await api("/api/train/handoff");
@@ -5009,10 +5602,13 @@ async function openHandoff() {
 
 async function runStage(stage, force) {
   try {
-    const {job_id} = await api("/api/run", {method:"POST", body: JSON.stringify({stage, force})});
-    toast(`已启动 ${stage}${force ? "（全量重建）" : ""}`, "ok");
-    toast("已提交，可在任务中心查看进度", "ok");
-    watchJob(job_id);
+    const r = await api("/api/run", {method:"POST", body: JSON.stringify({stage, force})});
+    let label = `${stage}${force ? "（全量重建）" : ""}`;
+    if (stage === "stage3") label = force ? "评估并构建训练集（全量）" : "评估并构建训练集";
+    else if (stage === "dataset_evaluate") label = "DPO 评估";
+    if (r.status === "queued") toast(`已加入排队：${label}，当前作业结束后自动执行`, "ok");
+    else toast(`已启动 ${label}`, "ok");
+    watchJob(r.job_id);
   } catch (e) { toast(e.message, "err"); }
 }
 
@@ -5055,7 +5651,7 @@ function watchJob(jobId, onDone) {
             renderRunsView(rb);
         }).catch(() => {});
       }
-      if (j.status !== "running") {
+      if (!JOB_ACTIVE(j.status)) {
         clearInterval(JOB_TIMER); JOB_TIMER = null;
         if (RB_TIMER) { clearInterval(RB_TIMER); RB_TIMER = null; }
         onTaskFinished(j);

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -14,6 +15,45 @@ def now_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _is_replace_busy(exc: BaseException) -> bool:
+    """Windows 上目标文件被占用时，os.replace 常报 WinError 5 / PermissionError。"""
+    if isinstance(exc, PermissionError):
+        return True
+    if isinstance(exc, OSError):
+        winerror = getattr(exc, "winerror", None)
+        if winerror in (5, 32):  # ACCESS_DENIED / SHARING_VIOLATION
+            return True
+        if exc.errno in (13, 11):  # EACCES / EAGAIN
+            return True
+    return False
+
+
+def replace_atomic(tmp: str | Path, path: str | Path, *, retries: int = 10) -> None:
+    """把临时文件替换到最终路径；占用时短暂重试，仍失败再尝试删旧后 rename。"""
+    tmp_s = str(tmp)
+    dest = Path(path)
+    last: Optional[BaseException] = None
+    for i in range(max(1, retries)):
+        try:
+            os.replace(tmp_s, dest)
+            return
+        except OSError as exc:
+            last = exc
+            if not _is_replace_busy(exc) or i + 1 >= retries:
+                break
+            time.sleep(0.05 * (2 ** min(i, 4)))
+    # 回退：先删目标再 rename（非完美原子，但比整次 Stage 3 失败更可恢复）
+    try:
+        if dest.exists():
+            dest.unlink()
+        os.rename(tmp_s, dest)
+        return
+    except OSError as exc:
+        if last is not None:
+            raise last from exc
+        raise
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -30,7 +70,9 @@ def write_json_atomic(path: Path, obj: Any) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+            f.flush()
+            os.fsync(f.fileno())
+        replace_atomic(tmp, path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -63,7 +105,9 @@ def write_jsonl_atomic(path: Path, rows: Iterable[Dict[str, Any]]) -> int:
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 n += 1
-        os.replace(tmp, path)
+            f.flush()
+            os.fsync(f.fileno())
+        replace_atomic(tmp, path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,7 +12,7 @@ from . import curation, dataset_build, dataset_draft, judge
 from . import steps as stepcat
 from .handoff import write_handoff
 from .common.config import config_hash, load_config, stage_dirs
-from .common.format import conversation, to_openai, to_sharegpt
+from .common.format import conversation, default_tools_json, ensure_tools_column, to_openai, to_sharegpt
 from .common.pilog import truncate_middle
 from .common.quality import compact_thinking, evaluate_effective_step
 from .common.store import (
@@ -28,9 +29,7 @@ STAGE = "stage3"
 
 
 def _tools_json(flow_messages: List[Dict[str, Any]]) -> str:
-    from .common.pilog import DEFAULT_TOOLS
-
-    return json.dumps(DEFAULT_TOOLS, ensure_ascii=False)
+    return default_tools_json()
 
 
 def _pick_split(projects: List[str], cfg: Dict[str, Any], persist: bool = True) -> Dict[str, str]:
@@ -43,6 +42,192 @@ def _split_for(split_map: Dict[str, str], draft: Dict[str, Any], project: str, s
     if plan:
         return dataset_draft.effective_split(project, sid, plan)
     return split_map.get(project, "train")
+
+
+DPO_SOURCE_ZH = {
+    "stage2_pruned": "弯路",
+    "negative_step": "坏步",
+    "review_rewrite": "改写",
+    "meowdoku_dpo_chain": "链缺陷",
+}
+SFT_STAGE_ZH = {
+    "highlight": "高光",
+    "opening": "开局",
+    "key_decision": "关键决策",
+    "routine": "常规推进",
+    "closing": "收尾",
+}
+
+
+def _assistant_step_map(messages: List[Dict[str, Any]]) -> Dict[str, int]:
+    """黄金会话里 assistant 消息 id → 第几步（从 1 起）。"""
+    out: Dict[str, int] = {}
+    step = 0
+    for msg in messages or []:
+        if msg.get("role") != "assistant":
+            continue
+        step += 1
+        mid = str(msg.get("id") or "")
+        if mid:
+            out[mid] = step
+    return out
+
+
+def _dpo_display_title(meta: Dict[str, Any], step_map: Optional[Dict[str, int]] = None) -> str:
+    """树/列表用的直观标题：第 N 步（来源），替代无意义的 sample_id。"""
+    source = str(meta.get("source") or "dpo")
+    source_zh = DPO_SOURCE_ZH.get(source, source)
+    msg_id = str(meta.get("rejected_msg_id") or meta.get("msg_id") or "")
+    step = (step_map or {}).get(msg_id) if msg_id else None
+    if step:
+        return f"第{step}步（{source_zh}）"
+    return source_zh
+
+
+def _sft_display_title(meta: Dict[str, Any]) -> str:
+    """SFT 窗口标题：按轨迹步序展示，避免 UUID 排序看起来像打乱。"""
+    stage = str(meta.get("stage") or "")
+    stage_zh = SFT_STAGE_ZH.get(stage, stage or "SFT")
+    try:
+        step = int(meta.get("step_rank") or 0)
+    except (TypeError, ValueError):
+        step = 0
+    if step > 0:
+        return f"第{step}步（{stage_zh}）"
+    return stage_zh
+
+
+def _pref_value(side: Any) -> str:
+    if isinstance(side, dict):
+        return str(side.get("value") or "").strip()
+    return str(side or "").strip()
+
+
+def _split_think_body(text: str) -> Tuple[str, str]:
+    t = str(text or "").strip()
+    m = re.match(r"<think>\s*([\s\S]*?)\s*</think>\s*", t, re.I)
+    if not m:
+        return "", t
+    return (m.group(1) or "").strip(), t[m.end():].strip()
+
+
+def _contains_tool_call(text: str) -> bool:
+    return bool(re.search(r"<tool_call\b", str(text or ""), re.I))
+
+
+def _think_display_text(text: str) -> str:
+    """只取思考内容；无思考时不把 tool 正文冒充成思考。"""
+    think, body = _split_think_body(text)
+    if think:
+        return think
+    # 无 <think> 块时，仅当正文不含 tool 才当作纯文本回复展示
+    if body and not _contains_tool_call(body):
+        return body
+    return ""
+
+
+def _gist_text(text: str, n: int = 36, *, prefer_think: bool = False) -> str:
+    """单行摘要。prefer_think=True 时只展示思维链，绝不回退到 tool 正文。"""
+    think, body = _split_think_body(text)
+    if prefer_think:
+        t = _think_display_text(text)
+    else:
+        # 动作摘要：剥掉 tool 后的正文，否则用思考；纯 tool 交给调用方另取工具名
+        plain = re.sub(r"<tool_call\b[\s\S]*?</tool_call>", "", body or "", flags=re.I).strip()
+        t = plain or think or ""
+    t = " ".join(t.split())
+    if len(t) <= n:
+        return t
+    return t[: max(1, n - 1)] + "…"
+
+
+def _dpo_empty_issue(pair: Dict[str, Any]) -> str:
+    """生成阶段用：正文为空或完全相同则丢弃。"""
+    chosen = _pref_value(pair.get("chosen"))
+    rejected = _pref_value(pair.get("rejected"))
+    if not chosen and not rejected:
+        return "chosen/rejected 均为空"
+    if not chosen:
+        return "chosen 为空"
+    if not rejected:
+        return "rejected 为空"
+    if chosen == rejected:
+        return "chosen 与 rejected 相同"
+    return ""
+
+
+def _dpo_content_issue(pair: Dict[str, Any]) -> str:
+    """纳入门控用：空对 + 坏步「同动作仅压缩思考」都不纳入训练。"""
+    empty = _dpo_empty_issue(pair)
+    if empty:
+        return empty
+    chosen = _pref_value(pair.get("chosen"))
+    rejected = _pref_value(pair.get("rejected"))
+    _c_think, c_body = _split_think_body(chosen)
+    _r_think, r_body = _split_think_body(rejected)
+    source = str((pair.get("metadata") or {}).get("source") or "")
+    # 坏步对：工具动作完全一样，只是把长思考截短——训练信号弱
+    if source == "negative_step" and c_body and c_body == r_body:
+        return "同动作，仅压缩思维链"
+    return ""
+
+
+def _dpo_row_preview(pair: Dict[str, Any]) -> Dict[str, Any]:
+    chosen = _pref_value(pair.get("chosen"))
+    rejected = _pref_value(pair.get("rejected"))
+    meta = pair.get("metadata") or {}
+    c_think, c_body = _split_think_body(chosen)
+    r_think, r_body = _split_think_body(rejected)
+    same_action = bool(c_body) and c_body == r_body
+    # 树行「坏/好思考」永远只展示思考，避免无思考时把 tool 塞进 Rejected/Chosen 摘要
+    return {
+        "chosen_gist": _gist_text(chosen, prefer_think=True),
+        "rejected_gist": _gist_text(rejected, prefer_think=True),
+        "chosen_len": len(chosen),
+        "rejected_len": len(rejected),
+        "chosen_think_len": len(c_think),
+        "rejected_think_len": len(r_think),
+        "same_action": same_action,
+        "source_reason": str(meta.get("reason") or ""),
+        "pathologies": list(meta.get("pathologies") or []),
+    }
+
+
+def _tool_names_gist(text: str) -> str:
+    names = re.findall(r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", text or "", flags=re.I)
+    out: List[str] = []
+    for body in names:
+        try:
+            obj = json.loads(body)
+            name = str((obj or {}).get("name") or "").strip()
+        except Exception:  # noqa: BLE001
+            m = re.search(r'"name"\s*:\s*"([^"]+)"', body) or re.search(
+                r"<function=([^\s>]+)", body
+            )
+            name = (m.group(1) if m else "").strip()
+        if name and name not in out:
+            out.append(name)
+    return "、".join(out[:3])
+
+
+def _sft_row_preview(sample: Dict[str, Any]) -> Dict[str, Any]:
+    convs = sample.get("conversations") or sample.get("messages") or []
+    user = ""
+    target = ""
+    for turn in convs:
+        frm = str((turn or {}).get("from") or (turn or {}).get("role") or "")
+        val = str((turn or {}).get("value") or (turn or {}).get("content") or "")
+        if frm in ("human", "user"):
+            user = val
+        elif frm in ("gpt", "assistant"):
+            target = val
+    meta = sample.get("metadata") or {}
+    target_gist = _gist_text(target) or _tool_names_gist(target)
+    user_gist = _gist_text(user) or _gist_text(str(meta.get("root_task") or ""))
+    return {
+        "user_gist": user_gist,
+        "target_gist": target_gist,
+    }
 
 
 def _session_splits(
@@ -150,26 +335,30 @@ def _negative_dpo(
             convs.extend(to_sharegpt(h, strip_thinking=True))
         if not convs:
             continue
-        pairs.append(
-            {
-                "sample_id": f"dpo_neg::{sid}::{m['id']}",
-                "conversations": convs,
-                "chosen": to_sharegpt(m, override_thinking=compacted)[0],
-                "rejected": to_sharegpt(m, override_thinking=original)[0],
-                "metadata": {
-                    "source": "negative_step",
-                    "reason": ",".join(bad),
-                    "session_id": sid,
-                    "project_group": project,
-                    "split": split,
-                    "model": model,
-                    "msg_id": m["id"],
-                    "pathologies": bad,
-                    "rejected_think_len": len(original),
-                    "chosen_think_len": len(compacted),
-                },
-            }
-        )
+        chosen = to_sharegpt(m, override_thinking=compacted)[0]
+        rejected = to_sharegpt(m, override_thinking=original)[0]
+        pair = {
+            "sample_id": f"dpo_neg::{sid}::{m['id']}",
+            "conversations": convs,
+            "chosen": chosen,
+            "rejected": rejected,
+            "tools": _tools_json(msgs),
+            "metadata": {
+                "source": "negative_step",
+                "reason": ",".join(bad),
+                "session_id": sid,
+                "project_group": project,
+                "split": split,
+                "model": model,
+                "msg_id": m["id"],
+                "pathologies": bad,
+                "rejected_think_len": len(original),
+                "chosen_think_len": len(compacted),
+            },
+        }
+        if _dpo_empty_issue(pair):
+            continue
+        pairs.append(pair)
     return pairs
 
 
@@ -209,26 +398,28 @@ def _review_rewrite_dpo(
             convs.extend(to_sharegpt(h, strip_thinking=True))
         if not convs:
             continue
-        pairs.append(
-            {
-                "sample_id": f"dpo_review::{sid}::{m['id']}",
-                "conversations": convs,
-                "chosen": to_sharegpt(m, override_thinking=new_think)[0],
-                "rejected": to_sharegpt(m, override_thinking=raw_think)[0],
-                "metadata": {
-                    "source": "review_rewrite",
-                    "reason": ",".join(raw_pathos) if raw_pathos else "cot_conciseness_rewrite",
-                    "session_id": sid,
-                    "project_group": project,
-                    "split": split,
-                    "model": model,
-                    "msg_id": m["id"],
-                    "pathologies": raw_pathos,
-                    "rejected_think_len": len(raw_think),
-                    "chosen_think_len": len(new_think),
-                },
-            }
-        )
+        pair = {
+            "sample_id": f"dpo_review::{sid}::{m['id']}",
+            "conversations": convs,
+            "chosen": to_sharegpt(m, override_thinking=new_think)[0],
+            "rejected": to_sharegpt(m, override_thinking=raw_think)[0],
+            "tools": _tools_json(msgs),
+            "metadata": {
+                "source": "review_rewrite",
+                "reason": ",".join(raw_pathos) if raw_pathos else "cot_conciseness_rewrite",
+                "session_id": sid,
+                "project_group": project,
+                "split": split,
+                "model": model,
+                "msg_id": m["id"],
+                "pathologies": raw_pathos,
+                "rejected_think_len": len(raw_think),
+                "chosen_think_len": len(new_think),
+            },
+        }
+        if _dpo_empty_issue(pair):
+            continue
+        pairs.append(pair)
     return pairs
 
 
@@ -604,7 +795,7 @@ def synthesize_dpo_candidates(
         for pair in read_jsonl(dirs["gold"] / "dpo_pairs.jsonl"):
             meta = pair.setdefault("metadata", {})
             meta["split"] = session_splits.get(str(meta.get("session_id") or "")) or split_map.get(meta.get("project_group"), "train")
-            pairs.append(pair)
+            pairs.append(ensure_tools_column(pair))
 
     for sid, entry in sorted(records.items()):
         gold_rows = read_jsonl(Path(entry["gold_file"]))
@@ -663,13 +854,18 @@ def evaluate_dpo_pending(cfg: Optional[Dict[str, Any]] = None, log=print) -> Dic
     pending_before = sum(v["verdict"] in ("pending", "review_failed") for v in before.values())
     verdicts: Dict[str, Dict[str, Any]] = {}
     if pending_before:
-        stepcat.begin(log, "s3.dpo_evaluate", msg=f"待评估 {pending_before} 对")
+        stepcat.begin(log, "s3.dpo_review", msg=f"待评估 {pending_before} 对")
+        stepcat.emit(log, "s3.dpo_review", 0, pending_before, f"待评估 {pending_before} 对")
         verdicts = judge.review_dpo(eligible, cfg=cfg, log=log)
-        stepcat.finish(log, "s3.dpo_evaluate", done=pending_before, total=pending_before,
-                       msg=f"已请求评估 {pending_before} 对")
     after = judge.cached_dpo_verdicts(eligible, cfg)
     pending_after = sum(v["verdict"] in ("pending", "review_failed") for v in after.values())
     failed = sum(v.get("verdict") == "review_failed" for v in verdicts.values())
+    completed = max(0, pending_before - pending_after)
+    if pending_before:
+        tail = f"完成 {completed}/{pending_before}"
+        if pending_after:
+            tail += f"，剩余 {pending_after}"
+        stepcat.finish(log, "s3.dpo_review", done=completed, total=pending_before, msg=tail)
     return {
         "candidates": len(eligible),
         "evaluated": pending_before,
@@ -701,12 +897,14 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
     plan = draft.get("split_plan") or {}
     rows: List[Dict[str, Any]] = []
     sessions: List[Dict[str, Any]] = []
+    assistant_steps: Dict[str, Dict[str, int]] = {}
 
     for sid, entry in sorted(records.items()):
         gold_rows = read_jsonl(Path(entry["gold_file"]))
         if not gold_rows:
             continue
         rec = gold_rows[0]
+        assistant_steps[sid] = _assistant_step_map(rec.get("messages") or [])
         annotation = read_json(Path(entry.get("annotation_file", "")), default={}) or {}
         project = rec.get("project_group") or entry.get("project_group", "unknown")
         split = session_splits.get(sid, "train")
@@ -723,7 +921,12 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
             included += int(is_included)
             excluded += int(not is_included)
             meta = sample.get("metadata") or {}
-            rows.append({
+            preview = _sft_row_preview(sample)
+            try:
+                ref_step = int(meta.get("step_rank") or 0) or None
+            except (TypeError, ValueError):
+                ref_step = None
+            row = {
                 "sample_id": sample_id,
                 "kind": kind,
                 "session_id": sid,
@@ -742,7 +945,12 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
                 "gate_status": "passed",
                 "decision_reason": decision.get("reason", ""),
                 "decision_at": decision.get("at"),
-            })
+                "preview": preview,
+                "ref_step": ref_step,
+            }
+            if kind == "sft":
+                row["title"] = _sft_display_title(meta)
+            rows.append(row)
         layer = dataset_draft.layer_exclusion(draft, "session", sid, project)
         sessions.append({
             "session_id": sid,
@@ -775,15 +983,27 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
         )
         verdict = dpo_verdicts.get(sample_id) or {"verdict": "pending", "reason": "尚未完成模型复核"}
         gate_status = verdict["verdict"]
+        content_issue = _dpo_content_issue(pair)
         manually_excluded = decision["action"] == "exclude"
-        if not manually_excluded and gate_status in ("pending", "review_failed"):
-            pending_evaluations += 1
-        is_included = not manually_excluded and gate_status in ("good", "swap", "bypassed")
+        if content_issue and not manually_excluded:
+            gate_status = "invalid"
+            reason = content_issue
+            is_included = False
+        else:
+            if not manually_excluded and gate_status in ("pending", "review_failed"):
+                pending_evaluations += 1
+            is_included = not manually_excluded and gate_status in ("good", "swap", "bypassed")
+            reason = decision.get("reason", "") if manually_excluded else verdict.get("reason", "")
         project = meta.get("project_group") or "unknown"
-        reason = decision.get("reason", "") if manually_excluded else verdict.get("reason", "")
+        step_map = assistant_steps.get(dpo_sid) or {}
+        msg_id = str(meta.get("rejected_msg_id") or meta.get("msg_id") or "")
+        ref_step = step_map.get(msg_id)
         rows.append({
             "sample_id": sample_id,
             "kind": "dpo",
+            "title": _dpo_display_title(meta, step_map),
+            "ref_step": ref_step,
+            "ref_msg_id": msg_id or None,
             "session_id": meta.get("session_id", ""),
             "project_group": project,
             "split": session_splits.get(dpo_sid) or split_map.get(project, "train"),
@@ -800,6 +1020,7 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
             "gate_status": gate_status,
             "decision_reason": reason,
             "decision_at": decision.get("at"),
+            "preview": _dpo_row_preview(pair),
         })
 
     return {
@@ -871,16 +1092,39 @@ def draft_sample(sample_id: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[s
             str(meta.get("session_id") or ""),
             draft, legacy, is_dpo=True,
         )
-        verdict = judge.cached_dpo_verdicts([pair], cfg).get(sample_id) or {"verdict": "pending", "reason": ""}
+        verdict = judge.cached_dpo_verdicts([pair], cfg).get(sample_id) or {
+            "verdict": "pending", "reason": judge._dpo_default_reason("pending"),
+        }
         manually_excluded = decision["action"] == "exclude"
+        content_issue = _dpo_content_issue(pair)
+        gate_status = verdict["verdict"]
+        if content_issue and not manually_excluded:
+            gate_status = "invalid"
+            decision_reason = content_issue
+            included = False
+        else:
+            included = not manually_excluded and gate_status in ("good", "swap", "bypassed")
+            decision_reason = (
+                decision.get("reason", "") if manually_excluded
+                else (verdict.get("reason", "") or judge._dpo_default_reason(verdict["verdict"]))
+            )
+        gold_entry = records.get(str(meta.get("session_id") or "")) or {}
+        gold_rows = read_jsonl(Path(gold_entry["gold_file"])) if gold_entry.get("gold_file") else []
+        step_map = _assistant_step_map((gold_rows[0].get("messages") or []) if gold_rows else [])
+        msg_id = str(meta.get("rejected_msg_id") or meta.get("msg_id") or "")
         out = dict(pair)
+        out["kind"] = "dpo"
         out["_draft"] = {
-            "included": not manually_excluded and verdict["verdict"] in ("good", "swap", "bypassed"),
+            "included": included,
             "decision": decision["action"],
             "decision_scope": decision.get("scope", ""),
-            "gate_status": verdict["verdict"],
-            "decision_reason": decision.get("reason", "") if manually_excluded else verdict.get("reason", ""),
+            "gate_status": gate_status,
+            "decision_reason": decision_reason,
             "decision_at": decision.get("at"),
+            "title": _dpo_display_title(meta, step_map),
+            "ref_step": step_map.get(msg_id),
+            "ref_msg_id": msg_id or None,
+            "preview": _dpo_row_preview(pair),
         }
         if out["_draft"]["included"] and verdict["verdict"] == "swap":
             out["chosen"], out["rejected"] = out["rejected"], out["chosen"]
@@ -1057,7 +1301,15 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     dpo_pairs = kept_by_draft
 
     # DPO 只消费显式评估缓存；缺失/失败不进入训练集，也不在构建中临时调用模型。
-    dpo_review_stats = {"checked": 0, "swapped": 0, "dropped": 0, "pending": 0}
+    dpo_review_stats = {"checked": 0, "swapped": 0, "dropped": 0, "pending": 0, "invalid": 0}
+    content_ok: List[Dict[str, Any]] = []
+    for pair in dpo_pairs:
+        issue = _dpo_content_issue(pair)
+        if issue:
+            dpo_review_stats["invalid"] += 1
+            continue
+        content_ok.append(pair)
+    dpo_pairs = content_ok
     verdicts = judge.cached_dpo_verdicts(dpo_pairs, cfg)
     pending = [
         str(p.get("sample_id")) for p in dpo_pairs
@@ -1066,7 +1318,8 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     dpo_review_stats["pending"] = len(pending)
     if pending:
         raise RuntimeError(
-            f"{len(pending)} 个 DPO 偏好对尚未完成模型复核，请先在训练数据页运行 DPO 评估"
+            f"{len(pending)} 个 DPO 偏好对尚未完成模型复核；"
+            "请运行「评估并构建」（Stage 3 会先评估）或单独的 DPO 评估"
         )
     if dpo_pairs and judge.enabled(cfg):
         dpo_review_stats["checked"] = len(dpo_pairs)
@@ -1086,8 +1339,11 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         dpo_pairs = kept_pairs
         log(
             f"[stage3] DPO 缓存门禁：调换 {dpo_review_stats['swapped']} / "
-            f"丢弃 {dpo_review_stats['dropped']}，保留 {len(dpo_pairs)}"
+            f"丢弃 {dpo_review_stats['dropped']} / 内容无效 {dpo_review_stats['invalid']}，"
+            f"保留 {len(dpo_pairs)}"
         )
+    elif dpo_review_stats["invalid"]:
+        log(f"[stage3] DPO 内容门禁：丢弃空/相同偏好对 {dpo_review_stats['invalid']}")
 
     # 构建中只比较源输入；handoff/YAML 在生成后单独计入 Build 身份。
     if dataset_draft.plan_fingerprint(cfg, draft, include_aux_outputs=False) != input_hash:
@@ -1236,6 +1492,33 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     stepcat.finish(log, "s3.manifest", done=len(dataset_info), total=len(dataset_info) or 1,
                    msg=f"{len(dataset_info)} 个数据集登记")
 
+    # 门禁后的实写数回填 funnel，供控制台「→ N 对」与详情 DPO 页一致
+    written_total: Counter = Counter()
+    written_parts: Dict[str, Counter] = {}
+    for pair in dpo_pairs:
+        md = pair.get("metadata") if isinstance(pair.get("metadata"), dict) else {}
+        psid = str(md.get("session_id") or "")
+        if not psid:
+            continue
+        written_total[psid] += 1
+        src = str(md.get("source") or "")
+        bucket = (
+            "pruned" if src == "stage2_pruned"
+            else "review" if src == "review_rewrite"
+            else "negative" if src == "negative_step"
+            else ""
+        )
+        if bucket:
+            written_parts.setdefault(psid, Counter())[bucket] += 1
+    for psid, sf in session_funnels.items():
+        sf["dpo_written"] = int(written_total.get(psid) or 0)
+        part = written_parts.get(psid) or Counter()
+        sf["dpo_written_parts"] = {
+            "pruned": int(part.get("pruned") or 0),
+            "review": int(part.get("review") or 0),
+            "negative": int(part.get("negative") or 0),
+        }
+
     stats = {
         "generated_at": now_iso(),
         "config_hash": config_hash(cfg),
@@ -1301,27 +1584,12 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     build_id = build_manifest["build_id"]
     dataset_draft.mark_built(cfg, plan_hash, build_dir=build_dir)
 
-    # 交付包只读取刚固化的 Build，避免选择工作区历史 LF/v2。
-    pkg_result = None
-    try:
-        from pipeline.package import build_delivery_zip  # noqa: PLC0415
-
-        stepcat.begin(log, "s3.package")
-        pkg_result = build_delivery_zip(
-            build_dir,
-            dataset_build.load_build_config(build_dir, cfg),
-            log=log,
-            delivery_dir=dirs["root"] / "04_release" / "delivery",
-        )
-        stepcat.finish(log, "s3.package", done=1, total=1,
-                       msg=pkg_result.get("zip_name", "delivery.zip"))
-    except Exception as exc:  # noqa: BLE001
-        log(f"[stage3] 交付包生成失败: {exc}")
-
+    # 构建 ≠ 打包：Stage 3 只固化 Build；交付 zip 由交付页显式打包。
     log(
         f"[stage3] 完成：黄金轨迹 {counts.get('sft_gold_trajectories_sharegpt.jsonl', 0)}，"
         f"单步窗口 {counts.get('sft_step_windows_sharegpt.jsonl', 0)}，"
-        f"DPO {counts.get('dpo_preference_pairs.jsonl', 0)}，诊断 {counts.get('negative_diagnostics.jsonl', 0)}"
+        f"DPO {counts.get('dpo_preference_pairs.jsonl', 0)}，诊断 {counts.get('negative_diagnostics.jsonl', 0)}；"
+        f"Build {build_id} 已固化，请到交付页打包 zip"
     )
     return {
         "stage": STAGE,
@@ -1330,5 +1598,5 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         "stats": stats,
         "build_id": build_id,
         "build_dir": str(build_dir),
-        "package": pkg_result,
+        "package": None,
     }

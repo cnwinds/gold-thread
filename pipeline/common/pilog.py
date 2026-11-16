@@ -149,6 +149,7 @@ def parse_session(path: Path, max_tool_output_chars: int = 12000) -> Dict[str, A
     messages: List[Dict[str, Any]] = []
     models: Counter = Counter()
     providers: Counter = Counter()
+    assistant_errors: List[Dict[str, Any]] = []
     compactions = 0
     custom_notices = 0
     last_assistant: Optional[Dict[str, Any]] = None
@@ -178,6 +179,22 @@ def parse_session(path: Path, max_tool_output_chars: int = 12000) -> Dict[str, A
             continue
         if etype != "message":
             continue
+
+        raw_msg = ev.get("message", {})
+        # 失败回合常被后续 context_edit 删掉；仍记录错误供采集预览解释「为何几乎为空」
+        if isinstance(raw_msg, dict) and raw_msg.get("role") == "assistant":
+            raw_err = raw_msg.get("errorMessage")
+            raw_content = raw_msg.get("content", [])
+            if raw_err and not raw_content:
+                assistant_errors.append({
+                    "id": eid or f"err_{len(assistant_errors)}",
+                    "model": raw_msg.get("model") or current_model,
+                    "provider": raw_msg.get("provider") or current_provider,
+                    "error": str(raw_err),
+                    "timestamp": ev.get("timestamp", ""),
+                    "deleted": eid in deleted_ids,
+                })
+
         if eid in deleted_ids:
             continue
 
@@ -303,6 +320,7 @@ def parse_session(path: Path, max_tool_output_chars: int = 12000) -> Dict[str, A
         "messages": messages,
         "models": dict(models),
         "providers": dict(providers),
+        "assistant_errors": assistant_errors,
         "platform_counts": {"compactions": compactions, "custom_notices": custom_notices},
     }
 

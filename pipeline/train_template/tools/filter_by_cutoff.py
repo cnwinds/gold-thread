@@ -130,7 +130,23 @@ def _side_turns(side: Any) -> List[Dict[str, Any]]:
     return []
 
 
+def tools_prefix(row: Dict[str, Any]) -> str:
+    """近似模板把工具定义渲染进 system 的那段文字（只用于计长度）。"""
+    tools = row.get("tools")
+    if not tools:
+        return ""
+    if not isinstance(tools, str):
+        tools = json.dumps(tools, ensure_ascii=False)
+    return (
+        "# Tools\n\nYou have access to the following functions:\n\n<tools>\n"
+        f"{tools}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format "
+        "with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>"
+        "\nvalue_1\n</parameter>\n</function>\n</tool_call>\n\n"
+    )
+
+
 def measure_row_tokens(tok: Any, row: Dict[str, Any], *, ranking: bool, prefix: str = "") -> int:
+    prefix = tools_prefix(row) + prefix
     turns = row_turns(row)
     if not ranking:
         return count_text_tokens(tok, render(prefix, turns))
@@ -439,8 +455,13 @@ def filter_into_dir(
     tokenizer_path: str,
     *,
     soft_compress: bool = True,
+    fill_tools: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """把 src_dir 里 keys 对应的 jsonl 过滤后写到 dst_dir，并生成只含这些键的 dataset_info.json。"""
+    """把 src_dir 里 keys 对应的 jsonl 过滤后写到 dst_dir，并生成只含这些键的 dataset_info.json。
+
+    dataset_info 声明了 tools 列、但行里没有 tools 时：给了 fill_tools 就补进副本；
+    否则去掉该列映射（LLaMA-Factory 遇到缺列会 KeyError）。原始数据不改。
+    """
     src_dir, dst_dir = Path(src_dir).resolve(), Path(dst_dir).resolve()
     if src_dir == dst_dir:
         raise SystemExit("[filter_by_cutoff] 目标目录不能是原始数据目录")
@@ -457,8 +478,26 @@ def filter_into_dir(
         src = src_dir / entry["file_name"]
         if not src.is_file():
             raise SystemExit(f"[filter_by_cutoff] 数据文件不存在: {src}")
+        rows = load_jsonl(src)
+        entry = dict(entry)
+        tools_col = (entry.get("columns") or {}).get("tools")
+        missing = sum(1 for r in rows if tools_col and not r.get(tools_col)) if tools_col else 0
+        filled = 0
+        if missing and fill_tools:
+            for r in rows:
+                if not r.get(tools_col):
+                    r[tools_col] = fill_tools
+                    filled += 1
+            _log(f"[WARN] {key}: {missing}/{len(rows)} 行缺 {tools_col}，已在副本里补上共享工具定义")
+        elif missing == len(rows) and rows:
+            entry["columns"] = {k: v for k, v in entry["columns"].items() if k != "tools"}
+            _log(f"[WARN] {key}: 所有行都没有 {tools_col}，已去掉 tools 列映射（训练时无工具定义）")
+        elif missing:
+            _log(f"[WARN] {key}: {missing}/{len(rows)} 行缺 {tools_col}，按空工具定义训练")
+            for r in rows:
+                r.setdefault(tools_col, "")
         kept, stats = filter_rows(
-            load_jsonl(src),
+            rows,
             tok=tok,
             cutoff=cutoff,
             ranking=bool(entry.get("ranking")),
@@ -468,6 +507,8 @@ def filter_into_dir(
             raise SystemExit(f"[filter_by_cutoff] {key} 在 cutoff_len={cutoff} 下无样本可训")
         dump_jsonl(dst_dir / entry["file_name"], kept)
         out_info[key] = entry
+        if filled:
+            stats["tools_filled"] = filled
         summary["files"][key] = stats
         _log(
             f"{key}: cutoff={cutoff} 输入={stats['input']} 保留={stats['kept']} "
@@ -475,6 +516,28 @@ def filter_into_dir(
         )
     (dst_dir / "dataset_info.json").write_text(json.dumps(out_info, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
+
+
+def sort_jsonl_by_tokens(
+    path: str | Path,
+    tokenizer_path: str,
+    *,
+    ranking: bool = False,
+    reverse: bool = True,
+    top_n_log: int = 5,
+) -> List[int]:
+    """按真实 token 长度排序 jsonl（不是字符数）。返回最长的若干条 token 数供日志。"""
+    path = Path(path)
+    tok, _ = load_gate_tokenizer(tokenizer_path)
+    rows = load_jsonl(path)
+    scored = [
+        (measure_row_tokens(tok, row, ranking=ranking), row) for row in rows
+    ]
+    scored.sort(key=lambda x: x[0], reverse=reverse)
+    dump_jsonl(path, [row for _, row in scored])
+    tops = [n for n, _ in scored[:top_n_log]]
+    _log(f"按 token 排序 {path.name}: 共 {len(scored)} 条；最长 {tops}")
+    return tops
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

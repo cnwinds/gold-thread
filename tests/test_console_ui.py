@@ -36,12 +36,17 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             ),
             "collect": (
                 'id="pickSource"', 'id="pickFilter"', 'id="pickIngest"',
-                'id="pickGo"', 'id="pickPreview"',
+                'id="pickGo"', 'id="pickPreview"', "会话几乎没有有效内容", "assistant_errors",
+                "pick-path", "preview-path", "cwd ${esc(s.project)}",
+                "入集：剪枝", "dpo_candidates",
             ),
             "gold": (
                 'id="goldProject"', 'id="goldModel"', 'id="goldOutput"', 'id="goldSearch"',
                 'data-gold-open="${esc(s.session_id)}"', "goldSetStepGate",
-                "goldSetUsage", "data-gold-split",
+                "goldSetUsage", "goldSetKindUsage", "goldSetSampleDecision",
+                "data-gold-split", "session_sft", "session_dpo",
+                "停用本会话全部", "SFT 停用", "DPO 停用",
+                "usage-badge", "usage-badge sft-off", "usage-badge dpo-off", "col-dest",
             ),
             "train": (
                 'id="dsProject"', 'id="dsSplit"', 'id="dsSearch"',
@@ -49,7 +54,7 @@ class ConsoleWorkspaceTests(unittest.TestCase):
                 "treeGroupHtml", "data-scope-toggle", "data-session-split",
             ),
             "tasks": ("taskRowHtml", "pollTaskLogs", "taskOpenAction"),
-            "delivery": ("selectExportProfile", "exportPackage", "downloadZip"),
+            "delivery": ("selectExportProfile", "exportPackage", "downloadZip", "deletePack"),
             "config": ('id="cfgSearch"', "cfgSave", "cfgDiscard"),
         }
         for workspace, snippets in expected.items():
@@ -61,12 +66,22 @@ class ConsoleWorkspaceTests(unittest.TestCase):
         for snippet in (
             'api("/api/dataset/draft', 'function setDraftDecisions(',
             'api("/api/dataset/draft/tree', 'function renderTrainTree(',
-            'function treeGroupHtml(', 'function treeSessionHtml(', 'function treeSampleHtml(',
+            'function treeGroupHtml(', 'function treeSessionHtml(', 'function treeTrajectoryHtml(',
+            'function treeKindHtml(', 'function treeSampleHtml(', '黄金会话 → 轨迹 → SFT / DPO',
+            'function treeSingletonChildKey(', 'function treeSmartExpand(',
+            '.tree-trajectory{', '.tree-kind{',
+            'SFT ${fmt(sftTotal)} 条 · 纳入 ${fmt(sftUsed)} · DPO ${fmt(dpoTotal)} 条 · 纳入 ${fmt(dpoUsed)}',
             'function setScopeDecision(', 'data-scope-toggle', 'data-session-split',
             'data-project-split', 'data-sample-toggle', 'function bindTrainTree(',
+            'else treeSmartExpand(key)', 'treeSmartExpand("g:" + first.key)',
             'body.dirty', 'id="draftBuild"',
             'trainRequestCurrent', 'syncDraftSelection',
             'pending_evaluations', 'DPO 偏好对',
+            'DPO_GATE_ZH', '审核',
+            'treeSampleDecisionBits', 'tree-sample-label', 'tree-sample-meta', 'tree-sample-status',
+            'tree-action on', 'tree-action off',
+            'r.title', 'DPO_SRC_ZH[r.stage]', '内容无效', '坏思考 ', '好思考 ', '同动作',
+            '权重 ${esc(String(r.sample_weight))}', '质量 ${esc(String(r.quality_score))}',
             'loadTrainBuilds', 'buildWorkspace', 'build_id',
             'onTaskFinished(j)', 'RUNS_REQUEST_SEQ', 'DRAWER_REQUEST_SEQ',
             'e.target.closest("[data-draft-toggle]")',
@@ -81,6 +96,29 @@ class ConsoleWorkspaceTests(unittest.TestCase):
         self.assertIn(".ds-row{display:grid;grid-template-columns:minmax(0,1fr) auto", HTML)
         self.assertIn("function trainTableHead(", HTML)
         self.assertIn("${trainTableHead(kind)}", HTML)
+
+    def test_job_queue_status_is_visible_in_task_hub(self) -> None:
+        for snippet in (
+            'queued:"排队中"',
+            "JOB_ACTIVE",
+            "已加入排队",
+            "排队等待中",
+            "TASK_HUB.queued",
+            'r.status === "queued"',
+        ):
+            self.assertIn(snippet, HTML)
+
+    def test_task_log_keeps_timestamps_and_preserves_scroll(self) -> None:
+        match = re.search(r"function paintTaskLogPanel\(\) \{([\s\S]*?)\n\}", SCRIPT)
+        self.assertIsNotNone(match)
+        body = match.group(1)
+        self.assertIn("atBottom", body)
+        self.assertIn("prevTop", body)
+        self.assertIn("if (atBottom) el.scrollTop = el.scrollHeight", body)
+        self.assertIn("else el.scrollTop = prevTop", body)
+        self.assertIn('class="ts"', body)
+        self.assertNotIn("replace(/^\\d{2}:\\d{2}:\\d{2}\\s*/", body)
+        self.assertIn("time.strftime('%H:%M:%S')", (ROOT / "server" / "app.py").read_text(encoding="utf-8"))
 
     def test_drawer_async_loaders_capture_seq_after_open_drawer(self) -> None:
         for fn in ("openDraftSample", "openBuildDetail", "openTrainHistorySample"):
@@ -113,10 +151,20 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             "function loadGoldDataset(kind)", "function selectGoldSample(kind, index)",
             "function renderGoldSampleDetail(row, kind)",
             'sft_step_windows_sharegpt.jsonl', 'dpo_preference_pairs.jsonl',
-            'buildDiff(rejected, chosen', 'convToMsgs(row.conversations || row.messages)',
+            'splitThinkBody(', 'thinkDisplayText(', 'renderDpoPreferenceCard(',
+            'Chosen 思考', '共同工具动作', 'pref-block',
+            '（无思考）', '双方均无思考内容', '无工具调用', '（无工具）',
+            'SFT 窗口要等构建后才有', 'DPO 候选', '评估并构建训练集',
+            'function inferDraftSampleKind(', 'inferDraftSampleKind(row, sampleId)',
+            'convToMsgs(row.conversations || row.messages)',
             'class="gold-sample-item"', 'id="goldSampleDetail"',
         ):
             self.assertIn(snippet, HTML)
+        self.assertNotIn("rParts.think || rejected", HTML)
+        self.assertNotIn("cParts.think || chosen", HTML)
+        # 思考与动作在同一偏好对照卡片内，不再拆成第二张「动作对照」panel
+        self.assertNotIn('<div class="panel"><div class="panel-h"><h3>动作对照</h3>', HTML)
+        self.assertNotIn('<div class="panel"><div class="panel-h"><h3>共同工具动作</h3>', HTML)
 
     def test_drawer_footer_is_hidden_when_it_has_no_actions(self) -> None:
         for snippet in (
@@ -148,20 +196,67 @@ class ConsoleWorkspaceTests(unittest.TestCase):
         self.assertIsNotNone(detail_match)
         detail_source = detail_match.group(1)
         for snippet in (
-            "delivery-workspace", "delivery-format-list", "delivery-current-panel",
-            "delivery-history", "selectExportProfile", "exportPackage", "downloadZip",
-            "packHistHtml()", "delivery-meta",
+            "delivery-workspace", "delivery-history",
+            "packHistHtml(rb)", "新建包", "历史交付包",
         ):
             self.assertIn(snippet, detail_source)
+        self.assertNotIn("delivery-format-list", detail_source)
+        self.assertNotIn("delivery-current-panel", detail_source)
+        self.assertIn("delivery-pack-list", HTML)
+        self.assertIn("openPackDocs(", HTML)
+        self.assertIn("openPackLengthStats(", HTML)
+        self.assertIn("packLenSparkHtml(", HTML)
+        self.assertIn("pack-len-plot", HTML)
+        self.assertIn("height:72px", HTML)
+        self.assertIn("const w = 100, h = 56", HTML)
+        self.assertIn("downloadPackWithFormat(", HTML)
+        self.assertIn("downloadZip(", HTML)
+        self.assertIn("/api/export/download", HTML)
+        self.assertIn(">下载</button>", HTML)
+        self.assertIn('aria-label="下载格式"', HTML)
+        self.assertIn("deletePack(", HTML)
+        self.assertIn('method: "DELETE"', HTML)
+        self.assertIn("/api/export/pack?name=", HTML)
+        self.assertIn(">删除</button>", HTML)
+        self.assertIn("/api/export/pack/docs", HTML)
+        self.assertIn("/api/export/pack/length-stats", HTML)
+        self.assertIn("读取包内长度分布", HTML)
+        self.assertIn('openDrawer("长度分布"', HTML)
+        self.assertIn("pack-len-chart", HTML)
+        self.assertIn("pack-len-ruler", HTML)
+        self.assertIn("packLenRulerTicks(", HTML)
+        self.assertIn("packLenLinePoints(", HTML)
+        self.assertIn("line-sft", HTML)
+        self.assertIn("line-dpo", HTML)
+        self.assertIn("packTokMark(", HTML)
+        self.assertIn("packTok(", HTML)
+        self.assertNotIn("pack-len-pair", HTML)
+        self.assertNotIn("packLenSeriesChart(", HTML)
+        # 主操作不再单独放「长度分布」按钮；卡片用密柱图 + 标尺，点图看明细
+        self.assertNotIn(">长度分布</button>", HTML)
+        self.assertNotIn("SFT train 长度", HTML)
+        self.assertNotIn("全部数据集", HTML)
+        self.assertNotIn("packLenBinShort(", HTML)
+        self.assertIn("delivery-workspace{display:flex;flex-direction:column", HTML)
+        # 构建与打包分离：训练页构建，交付页才出 zip
+        self.assertIn('["交付",', HTML)
+        self.assertIn("评估并构建", HTML)
+        self.assertIn("仅 DPO 评估", HTML)
+        self.assertIn("去交付打包", HTML)
+        self.assertNotIn("生成训练文件", HTML)
+        self.assertNotIn("去交付中心打包", HTML)
+        self.assertNotIn("梳理与交付", HTML)
+        self.assertIn("可到交付页打包", HTML)
 
         load_match = re.search(r"async function loadRuns\(\) \{([\s\S]*?)function stopPackTimer", HTML)
         self.assertIsNotNone(load_match)
         self.assertNotIn('api("/api/runs")', load_match.group(1))
         self.assertIn('api("/api/export/history")', load_match.group(1))
-        self.assertIn('api("/api/releases")', load_match.group(1))
-        self.assertIn("releasePanelHtml()", detail_source)
-        for snippet in ("发布当前 Build", "回滚到上一版本", "迁入 Build", "function activateRelease"):
-            self.assertIn(snippet, HTML)
+        # 交付页只服务 zip 历史包；发布/激活/回滚已从 UI 移除（API 仍保留给脚本）
+        self.assertNotIn('api("/api/releases")', load_match.group(1))
+        self.assertNotIn("releasePanelHtml()", detail_source)
+        for snippet in ("发布当前 Build", "回滚到上一版本", "迁入 Build", "function activateRelease", "发布版本"):
+            self.assertNotIn(snippet, HTML)
 
     def test_reference_conversation_and_overview_views_are_preserved(self) -> None:
         for snippet in (
@@ -178,6 +273,68 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             "@media (max-width:860px)", "@media (prefers-reduced-motion:reduce)",
         ):
             self.assertIn(snippet, HTML)
+
+    @unittest.skipUnless(shutil.which("node"), "需要 Node.js 检查训练树智能展开")
+    def test_train_tree_smart_expand_follows_singleton_children(self) -> None:
+        helpers = re.search(
+            r"(function treeSingletonChildKey\(key\) \{[\s\S]*?)(?=\nfunction treeSampleHtml\()",
+            SCRIPT,
+        )
+        self.assertIsNotNone(helpers)
+        node_script = f"""
+let STATE = {{train: {{
+  expanded: {{}},
+  treeData: {{
+    groups: [{{
+      key: 'game::solo',
+      sessions: [{{
+        session_id: 'sess-1',
+        trajectories: [{{
+          trajectory_id: 'traj::sess-1',
+          kinds: [
+            {{kind: 'sft', samples: [{{sample_id: 'sft-1'}}]}},
+            {{kind: 'dpo', samples: [{{sample_id: 'dpo-1'}}]}},
+          ],
+        }}],
+      }}],
+    }}, {{
+      key: 'game::multi',
+      sessions: [
+        {{session_id: 'a', trajectories: [{{trajectory_id: 'traj::a', kinds: [{{kind: 'sft', samples: []}}]}}]}},
+        {{session_id: 'b', trajectories: [{{trajectory_id: 'traj::b', kinds: [{{kind: 'sft', samples: []}}]}}]}},
+      ],
+    }}],
+  }},
+}}}};
+{helpers.group(1)}
+treeSmartExpand('g:game::solo');
+const solo = STATE.train.expanded;
+if (!solo['g:game::solo'] || !solo['s:sess-1'] || !solo['t:traj::sess-1']) {{
+  throw new Error('singleton chain not expanded: ' + JSON.stringify(solo));
+}}
+if (solo['k:traj::sess-1:sft'] || solo['k:traj::sess-1:dpo']) {{
+  throw new Error('should stop when trajectory has two kinds: ' + JSON.stringify(solo));
+}}
+STATE.train.expanded = {{}};
+treeSmartExpand('g:game::multi');
+const multi = STATE.train.expanded;
+if (!multi['g:game::multi'] || multi['s:a'] || multi['s:b']) {{
+  throw new Error('multi-session group should not cascade: ' + JSON.stringify(multi));
+}}
+STATE.train.treeData.groups[0].sessions[0].trajectories[0].kinds = [{{kind: 'sft', samples: [{{sample_id: 'only'}}]}}];
+STATE.train.expanded = {{}};
+treeSmartExpand('g:game::solo');
+const oneKind = STATE.train.expanded;
+if (!oneKind['k:traj::sess-1:sft']) {{
+  throw new Error('single kind should auto-expand: ' + JSON.stringify(oneKind));
+}}
+console.log(JSON.stringify({{ok: true}}));
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "train_tree_smart_expand_test.js"
+            path.write_text(node_script, encoding="utf-8")
+            result = subprocess.run(["node", str(path)], check=True, capture_output=True, text=True)
+        self.assertEqual({"ok": True}, json.loads(result.stdout))
 
     @unittest.skipUnless(shutil.which("node"), "需要 Node.js 检查草稿交互辅助函数")
     def test_train_replan_and_stale_response_helpers(self) -> None:
@@ -218,6 +375,7 @@ console.log(JSON.stringify({{cases: cases.length + 3}}));
         match = re.search(r"(function watchJob\(jobId, onDone\) \{[\s\S]*?\n\})", SCRIPT)
         self.assertIsNotNone(match)
         node_script = f"""
+const JOB_ACTIVE = st => st === "running" || st === "queued";
 let JOB_TIMER = null, JOB_ID = null, JOB_LINES = [], JOB_META = null, RB_TIMER = null;
 let STATE = {{tab:'train'}};
 let RAW_DRAWER = {{analyzeJobId:null}};
@@ -248,6 +406,7 @@ async function api() {{ return {{status:'done', stage:'package', id:'quick', log
         match = re.search(r"(function registerJobWatch\(jobId, onDone\) \{[\s\S]*?\n\})", SCRIPT)
         self.assertIsNotNone(match)
         node_script = f"""
+const JOB_ACTIVE = st => st === "running" || st === "queued";
 const TASK_HUB = {{ watched: new Map(), pollTimer: 1, notified: new Set() }};
 const finished = [];
 function taskHubEnsure() {{}}

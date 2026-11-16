@@ -77,21 +77,26 @@ class CollectConflictTests(unittest.TestCase):
         with sa.JOBS_LOCK:
             sa.JOBS.clear()
 
-    def test_second_collect_while_running_returns_409(self) -> None:
+    def test_second_collect_while_running_is_queued(self) -> None:
         import server.app as sa
+        from unittest.mock import MagicMock, patch
 
         running = Job("collect", False, {"source": "cursor", "ids": ["34c2f50a"]})
         with sa.JOBS_LOCK:
             sa.JOBS[running.id] = running
-        client = TestClient(app)
-        res = client.post(
-            "/api/collect",
-            json={"source": "pi", "ids": ["other"], "analyze": False},
-        )
-        self.assertEqual(409, res.status_code)
-        detail = res.json().get("detail") or ""
-        self.assertIn("已有作业在运行", detail)
-        self.assertIn(running.id, detail)
+        with patch("server.app.task_registry.register_job"), patch(
+            "server.app.threading.Thread"
+        ) as thr:
+            thr.return_value = MagicMock()
+            res = TestClient(app).post(
+                "/api/collect",
+                json={"source": "pi", "ids": ["other"], "analyze": False},
+            )
+        self.assertEqual(200, res.status_code, res.text)
+        body = res.json()
+        self.assertEqual("queued", body["status"])
+        self.assertTrue(body.get("job_id"))
+        self.assertNotEqual(running.id, body["job_id"])
 
 
 if __name__ == "__main__":

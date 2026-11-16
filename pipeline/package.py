@@ -8,6 +8,7 @@ template、推理用的 --tool-call-parser 一起锁定；03_train 里的原文�
         goldthread-train/          与训练模板同布局
             autotrain.py  settings.yaml  configs/  tools/  docs/
             data/*.lf.jsonl  data/dataset_info.json  data/MANIFEST.json
+            data/length_stats.json   # 分词长度分布（控制台只读，不再现场算）
 """
 from __future__ import annotations
 
@@ -20,6 +21,11 @@ from typing import Any, Dict, List, Optional
 
 from pipeline.common.config import config_hash, load_config, stage_dirs
 from pipeline.common.format import convert_sharegpt_row, resolve_export_profile
+from pipeline.common.length_stats import (
+    LENGTH_STATS_REL,
+    build_length_stats,
+    dumps_length_stats,
+)
 from pipeline.common.store import now_iso, read_json
 from pipeline.lf_normalize import dumps_jsonl, dataset_info_for, prepare_datasets, require_sft
 from pipeline import length_gate as length_gate_mod
@@ -314,6 +320,13 @@ def build_delivery_zip(
     manifest["package"] = zip_name
     manifest["layout"] = _PACK_ROOT
     manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    _emit("[package] 正在统计 token 长度分布…")
+    length_stats = build_length_stats(
+        prepared.files,
+        length_gate=prepared.length_gate if isinstance(prepared.length_gate, dict) else {},
+        source="pack",
+    )
+    length_stats_json = dumps_length_stats(length_stats)
     manifest_files: List[Dict[str, Any]] = []
 
     def _add(zf: zipfile.ZipFile, rel: str, content: str | bytes) -> None:
@@ -333,6 +346,7 @@ def build_delivery_zip(
                 _add(zf, f"data/{name}", text)
             _add(zf, "data/dataset_info.json", info_json)
             _add(zf, "data/MANIFEST.json", manifest_json)
+            _add(zf, LENGTH_STATS_REL, length_stats_json)
         partial.replace(zip_path)
     except Exception:
         partial.unlink(missing_ok=True)

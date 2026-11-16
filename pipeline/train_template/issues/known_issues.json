@@ -219,8 +219,8 @@
       },
       "manual": "按 configs/plans.yaml 的 on_oom 链降级；单卡 DPO 还可设 LOWMEM_DPO_CHUNK=512。",
       "source": "builtin",
-      "hits": 1,
-      "last_seen": "2026-11-06 03:57:16"
+      "hits": 4,
+      "last_seen": "2026-11-16 03:49:13"
     },
     {
       "id": "system_oom_killer",
@@ -525,6 +525,25 @@
       },
       "manual": "保证可用内存 ≥ 64GB，保留 --export_size 5；不要在内存不足时反复重试把盘写满。",
       "source": "builtin",
+      "hits": 0,
+      "last_seen": null
+    },
+    {
+      "id": "vllm_cudagraph_oom",
+      "title": "推理服务：vLLM 启动时捕获 CUDA graph 阶段 OOM",
+      "category": "deploy",
+      "stages": [
+        "serve"
+      ],
+      "patterns": [
+        "Capturing CUDA graphs.*OOM"
+      ],
+      "diagnosis": "没加 --language-model-only 时会加载视觉塔，并按图片输入做 encoder 显存 profiling，--gpu-memory-utilization 0.90 在捕获 CUDA graph 时显存耗尽（A800 80GB 实测，2026-11-09）。",
+      "action": {
+        "type": "abort"
+      },
+      "manual": "按 docs/DEPLOY.md 的命令启动：--language-model-only --gpu-memory-utilization 0.94 --max-model-len auto --max-num-seqs 8，并设置 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True。A800 80GB 上 KV cache 19.5 GiB，auto 取到完整 262144 上下文，整卡约 74GB，已验证可用，不用再逐档探测。需要图片输入时去掉 --language-model-only，并把利用率降到 0.85 左右、max-model-len 设小一些。",
+      "source": "manual",
       "hits": 0,
       "last_seen": null
     }

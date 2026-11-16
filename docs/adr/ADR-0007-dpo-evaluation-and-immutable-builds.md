@@ -13,7 +13,7 @@ ADR-0006 首阶段只把 SFT 单步窗口和完整轨迹纳入草稿。DPO 仍�
 2. **评估状态是门禁事实。** `pending` 与 `review_failed` 不进入训练集；`good` 与 `swap` 可以进入，`swap` 在构建时交换 chosen/rejected；`drop` 自动排除。显式关闭 judge 时记为 `bypassed`，保留既有不调用模型的行为。
 3. **Stage 3 不再发起新的 DPO 模型判断。** 若仍有未评估项，构建以可操作错误终止，而不是在后台改变草稿结果或静默放行。
 4. **Build 不可变。** 每次成功 Stage 3 在 `04_release/builds/<build_id>/` 固化数据、handoff、配置、切分、决策、统计和 `BUILD.json`；文件带内容哈希。相同构建指纹幂等复用，不覆盖历史 Build。
-5. **产品打包只读 Build。** Stage 3 自动打包和交付页都使用明确的最新或指定 Build，以及该 Build 的配置快照；zip manifest 记录 `build_id`。产品链路不再从工作区 LF/v2 文件回退选数。底层打包函数保留给旧脚本使用时，不改变其既有兼容语义。
+5. **产品打包只读 Build，且与 Stage 3 分离。** Stage 3 只固化 Build，不自动打 zip；交付页（或显式 package 任务）读取明确的最新或指定 Build 及其配置快照再打包；zip manifest 记录 `build_id`。产品链路不再从工作区 LF/v2 文件回退选数。底层打包函数保留给旧脚本使用时，不改变其既有兼容语义。
 6. **最新 Build 不是激活 release。** 构建和打包不自动修改 `ACTIVE_RELEASE.txt`。发布、激活和回滚仍需独立工作流。
 7. **历史 Build 不随会话删除改变。** 删除只影响当前工作区和之后的草稿；既有 Build 继续作为历史证据保留。
 

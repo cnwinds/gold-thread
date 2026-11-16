@@ -97,56 +97,143 @@ class TaskRegistryTests(unittest.TestCase):
         self.assertEqual(["L7", "L8", "L9"], clipped)
 
 
+    def _run_job_isolated(self, job, *extra_patches):
+        """跑 _run_job，但禁止写回正式 data/00_state（runs.json / tasks.json）。"""
+        patches = [
+            patch("server.app._persist_job"),
+            patch("server.app.task_registry.sync_job"),
+            *extra_patches,
+        ]
+        entered = [p.start() for p in patches]
+        try:
+            _run_job(job)
+            return entered
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
     def test_full_pipeline_evaluates_dpo_before_stage3(self):
         calls = []
         job = Job("all", False, {})
-        with patch("server.app.stage1_extract.run", side_effect=lambda **_: calls.append("stage1") or {}), patch(
-            "server.app.stage2_gold.run", side_effect=lambda **_: calls.append("stage2") or {}
-        ), patch(
-            "server.app.stage3_synth.evaluate_dpo_pending",
-            side_effect=lambda **_: calls.append("evaluate") or {"pending": 0},
-        ), patch(
-            "server.app.stage3_synth.run", side_effect=lambda **_: calls.append("stage3") or {}
-        ):
-            _run_job(job)
+        self._run_job_isolated(
+            job,
+            patch("server.app.stage1_extract.run", side_effect=lambda **_: calls.append("stage1") or {}),
+            patch("server.app.stage2_gold.run", side_effect=lambda **_: calls.append("stage2") or {}),
+            patch(
+                "server.app.stage3_synth.evaluate_dpo_pending",
+                side_effect=lambda **_: calls.append("evaluate") or {"pending": 0},
+            ),
+            patch(
+                "server.app.stage3_synth.run",
+                side_effect=lambda **_: calls.append("stage3") or {},
+            ),
+        )
         self.assertEqual("done", job.status, job.error)
         self.assertEqual(["stage1", "stage2", "evaluate", "stage3"], calls)
 
+    def test_stage3_job_evaluates_dpo_before_build(self):
+        calls = []
+        job = Job("stage3", False, {})
+        self._run_job_isolated(
+            job,
+            patch(
+                "server.app.stage3_synth.evaluate_dpo_pending",
+                side_effect=lambda **_: calls.append("evaluate") or {"pending": 0, "failed": 0},
+            ),
+            patch(
+                "server.app.stage3_synth.run",
+                side_effect=lambda **_: calls.append("stage3") or {"ok": True},
+            ),
+        )
+        self.assertEqual("done", job.status, job.error)
+        self.assertEqual(["evaluate", "stage3"], calls)
+        self.assertIn("dpo_evaluation", job.result or {})
+
+    def test_stage3_job_aborts_when_dpo_still_pending(self):
+        job = Job("stage3", False, {})
+        mocks = self._run_job_isolated(
+            job,
+            patch(
+                "server.app.stage3_synth.evaluate_dpo_pending",
+                return_value={"pending": 3, "failed": 0},
+            ),
+            patch("server.app.stage3_synth.run"),
+        )
+        stage3 = mocks[-1]
+        self.assertEqual("failed", job.status)
+        self.assertIn("DPO 评估未全部完成", job.error or "")
+        stage3.assert_not_called()
+
     def test_full_pipeline_aborts_when_dpo_still_pending(self):
         job = Job("all", False, {})
-        with patch("server.app.stage1_extract.run", return_value={}), patch(
-            "server.app.stage2_gold.run", return_value={}
-        ), patch(
-            "server.app.stage3_synth.evaluate_dpo_pending",
-            return_value={"pending": 2, "failed": 0},
-        ), patch("server.app.stage3_synth.run") as stage3:
-            _run_job(job)
+        mocks = self._run_job_isolated(
+            job,
+            patch("server.app.stage1_extract.run", return_value={}),
+            patch("server.app.stage2_gold.run", return_value={}),
+            patch(
+                "server.app.stage3_synth.evaluate_dpo_pending",
+                return_value={"pending": 2, "failed": 0},
+            ),
+            patch("server.app.stage3_synth.run"),
+        )
+        stage3 = mocks[-1]
         self.assertEqual("failed", job.status)
         self.assertIn("DPO 评估未全部完成", job.error or "")
         stage3.assert_not_called()
 
     def test_review_does_not_hide_dpo_gate_failure(self):
         job = Job("review", False, {})
-        with patch("pipeline.review.run_review", return_value={}), patch(
-            "server.app.stage3_synth.evaluate_dpo_pending",
-            side_effect=RuntimeError("DPO 尚未完成模型复核"),
-        ), patch("server.app.stage3_synth.run") as stage3:
-            _run_job(job)
+        mocks = self._run_job_isolated(
+            job,
+            patch("pipeline.review.run_review", return_value={}),
+            patch(
+                "server.app.stage3_synth.evaluate_dpo_pending",
+                side_effect=RuntimeError("DPO 尚未完成模型复核"),
+            ),
+            patch("server.app.stage3_synth.run"),
+        )
+        stage3 = mocks[-1]
         self.assertEqual("failed", job.status)
         self.assertIn("尚未完成模型复核", job.error)
         stage3.assert_not_called()
 
     def test_review_aborts_when_dpo_evaluation_incomplete(self):
         job = Job("review", False, {})
-        with patch("pipeline.review.run_review", return_value={}), patch(
-            "server.app.stage3_synth.evaluate_dpo_pending",
-            return_value={"pending": 1, "failed": 0},
-        ), patch("server.app.stage3_synth.run") as stage3:
-            _run_job(job)
+        mocks = self._run_job_isolated(
+            job,
+            patch("pipeline.review.run_review", return_value={}),
+            patch(
+                "server.app.stage3_synth.evaluate_dpo_pending",
+                return_value={"pending": 1, "failed": 0},
+            ),
+            patch("server.app.stage3_synth.run"),
+        )
+        stage3 = mocks[-1]
         self.assertEqual("failed", job.status)
         self.assertIn("DPO 评估未全部完成", job.error or "")
         stage3.assert_not_called()
 
+    def test_run_job_isolation_does_not_write_real_runs(self):
+        """回归：模拟门禁失败不得污染正式 runs.json。"""
+        from pipeline.common.config import load_config, stage_dirs
+        from pipeline.common.store import read_json
+
+        runs_path = stage_dirs(load_config())["state"] / "runs.json"
+        before = read_json(runs_path, default=[]) or []
+        job = Job("review", False, {})
+        self._run_job_isolated(
+            job,
+            patch("pipeline.review.run_review", return_value={}),
+            patch(
+                "server.app.stage3_synth.evaluate_dpo_pending",
+                return_value={"pending": 1, "failed": 0},
+            ),
+            patch("server.app.stage3_synth.run"),
+        )
+        after = read_json(runs_path, default=[]) or []
+        self.assertEqual("failed", job.status)
+        self.assertEqual(before, after)
+        self.assertTrue(not after or after[0].get("id") != job.id)
 
 class TasksApiTests(unittest.TestCase):
     @patch("server.app._start")

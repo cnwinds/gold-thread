@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,10 @@ from .common.store import load_index, now_iso
 from .stage1_extract import adopt_file
 
 _USER_QUERY = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL | re.IGNORECASE)
+_FILE_BLOCK = re.compile(
+    r"<file\b[^>]*>\s*([\s\S]*?)\s*</file>",
+    re.IGNORECASE,
+)
 _SECRET = re.compile(r"\b(?:sk-[A-Za-z0-9_\-]{12,}|pkcp_[A-Za-z0-9_\-]{12,})\b")
 
 
@@ -28,8 +33,13 @@ def _clip(text: str, n: int = 700) -> str:
 
 
 def _user_text(text: str) -> str:
-    found = _USER_QUERY.search(text or "")
-    body = found.group(1) if found else (text or "")
+    """取用户首问正文：优先 <user_query>，否则展开 <file> 内文，去掉附件标签外壳。"""
+    raw = text or ""
+    found = _USER_QUERY.search(raw)
+    body = found.group(1) if found else raw
+    file_parts = [m.group(1).strip() for m in _FILE_BLOCK.finditer(body) if m.group(1).strip()]
+    if file_parts:
+        body = "\n".join(file_parts)
     body = re.sub(r"<image_files>[\s\S]*?</image_files>", "", body)
     body = re.sub(r"<timestamp>[\s\S]*?</timestamp>", "", body)
     return body.strip()
@@ -47,10 +57,18 @@ def _cursor_root(cfg: Dict[str, Any]) -> Path:
 
 
 def _under(root: Path, path: Path) -> Path:
-    path = path.resolve()
-    if root not in path.parents and path != root:
-        raise ValueError("路径超出会话源目录")
-    return path
+    """确保 path 逻辑上落在 root 下。
+
+    用 normpath 折叠 ``..``，但不 follow Windows Junction / symlink 目标。
+    pi 常把 sessions 子目录联到项目 run 目录；resolve() 会误判为超根。
+    """
+    root_abs = Path(os.path.normpath(str(root.expanduser().absolute())))
+    path_abs = Path(os.path.normpath(str(path.expanduser().absolute())))
+    try:
+        path_abs.relative_to(root_abs)
+    except ValueError as exc:
+        raise ValueError("路径超出会话源目录") from exc
+    return path_abs
 
 
 def _adopted_ids(cfg: Dict[str, Any]) -> set[str]:
@@ -168,7 +186,11 @@ def list_sessions(source: str, q: str = "", cfg: Optional[Dict[str, Any]] = None
                 })
     needle = (q or "").strip().lower()
     if needle:
-        rows = [r for r in rows if needle in f"{r['title']} {r['project']} {r['session_id']}".lower()]
+        # 一并匹配 catalog 相对路径：pi 会话目录名常含 teacher/包名，而 cwd 可能仍是旧工程路径
+        rows = [
+            r for r in rows
+            if needle in f"{r['title']} {r['project']} {r['session_id']} {r['id']}".lower()
+        ]
     rows.sort(key=lambda r: r["timestamp"], reverse=True)
     rows.sort(key=lambda r: r["adopted"])
     return {
@@ -273,17 +295,39 @@ def preview_session(source: str, catalog_id: str, cfg: Optional[Dict[str, Any]] 
         title = _cursor_title(path) or session_id
     adopted = session_id in _adopted_ids(cfg)
     session = _parse_catalog_session(source, path, cfg)
+    if source == "pi":
+        project = str(info.get("cwd") or session.get("cwd") or catalog_id.split("/")[0])
+    else:
+        project = path.parents[2].name
     flow, turns, _stats = pilog.build_flow(session, cfg, None, {})
     flow = [_redact_flow_message(m) for m in flow]
+    assistant_errors = list(session.get("assistant_errors") or [])
+    useful = [
+        m for m in flow
+        if m.get("role") not in ("system",) and (
+            (m.get("content") or m.get("text") or "").strip() or m.get("tool_calls")
+        )
+    ]
+    empty = len(useful) == 0
+    empty_reason = ""
+    if empty and assistant_errors:
+        empty_reason = str(assistant_errors[-1].get("error") or "")
+    elif empty:
+        empty_reason = "没有有效的助手回复"
     return {
         "id": catalog_id,
         "source": source,
         "session_id": session_id,
         "title": title,
+        "project": project,
+        "path": catalog_id,
         "adopted": adopted,
         "messages": flow,
         "turns": turns,
         "truncated": False,
+        "assistant_errors": assistant_errors,
+        "empty": empty,
+        "empty_reason": empty_reason,
     }
 
 
@@ -378,7 +422,9 @@ def ingest_selected(source: str, ids: Iterable[str], cfg: Optional[Dict[str, Any
             rel = f"cursor/{slug}/{uuid}.jsonl"
             sid = adopt_file(staged, rel, origin="cursor", catalog_id=catalog_id, cfg=cfg, log=log)
         else:
-            rel = path.resolve().relative_to(_pi_root(cfg)).as_posix()
+            # catalog_id 已是 pi sessions 下的相对路径；勿用 resolve()，
+            # Windows Junction 会跳到 D:\crack_test\... 导致 relative_to 失败。
+            rel = catalog_id.replace("\\", "/")
             sid = adopt_file(path, rel, origin="pi", catalog_id=catalog_id, cfg=cfg, log=log)
         sids.append(sid)
         log(f"[collect] {now_iso()} 已写入原始库 {sid[:8]}")
