@@ -507,6 +507,14 @@ def purify_by_judge(
             pd["has_dpo"] = False
             continue
         chosen = next(u["msg"] for (u, i) in kept if i == nxt)
+        if pd.get("dropped_msg_id"):
+            chosen["pruned_detour"] = pd["dropped_msg_id"]
+            detours = list(chosen.get("pruned_detours") or [])
+            if pd["dropped_msg_id"] not in detours:
+                detours.append(pd["dropped_msg_id"])
+            chosen["pruned_detours"] = detours
+            chosen["flags"] = sorted(set((chosen.get("flags") or []) + ["detour_pruned"]))
+        pd["after_msg_id"] = chosen.get("id")
         pd["chosen_msg"] = copy.deepcopy(chosen)
 
     stepcat.finish(log, "s2.apply", done=pruned_n + folded, total=asst_total or 1,
@@ -765,6 +773,7 @@ def run(
         manual_turn_ov = (raw_meta or {}).get("manual_turn_overrides") or None
         flow, marks, flow_stats = pilog.build_flow(session, cfg, annotations, manual_turn_ov)
         asst_all = [m for m in flow if m["role"] == "assistant"]
+        re_patho = bool((cfg.get("domain") or {}).get("enable_re_pathologies", True))
         raw_quality_by_id = {}
         for m in asst_all:
             raw_quality_by_id[m["id"]] = analyze_step_quality(
@@ -774,6 +783,7 @@ def run(
                 m.get("tool_results", []),
                 entry.get("cwd", ""),
                 max_think_chars=4500,
+                enable_re_pathologies=re_patho,
             )
 
         model_audit = {}
@@ -787,7 +797,7 @@ def run(
         # 模型质量报告 + 高光分析（模型负责"值不值得训练"，程序据此门控）
         quality_report: Dict[str, Any] = {}
         _judge_failed = int(purify_stats.get("judge_failed_batches", 0))
-        if judge.enabled(cfg):
+        if judge.enabled(cfg, label):
             stepcat.begin(log, "s2.judge_quality", msg=f"会话 {sid[:8]}")
             quality_report = judge.audit_quality(gold_msgs, purify_stats, cfg=cfg, log=log)
             if quality_report and _judge_failed:
@@ -847,9 +857,12 @@ def run(
                     m.get("tool_results", []),
                     entry.get("cwd", ""),
                     4500,
+                    enable_re_pathologies=re_patho,
                 )
                 m["raw_quality"] = raw_q
-                eff_q = evaluate_effective_step(m, entry.get("cwd", ""), max_think_chars=4500)
+                eff_q = evaluate_effective_step(
+                    m, entry.get("cwd", ""), max_think_chars=4500, enable_re_pathologies=re_patho
+                )
                 m["quality"] = eff_q
                 m["raw_msg_id"] = m["id"]
                 m["is_clean"] = eff_q["is_clean"]
@@ -860,18 +873,13 @@ def run(
         sys_msg = next((m for m in flow if m["role"] == "system"), None)
         root_msg = next((m for m in flow if m["role"] == "user"), None)
 
-        status = "gold" if (label == "positive" and len(gold_asst) >= min_steps) else (
-            "raw_only" if label == "pending" else "negative_source"
-        )
-        if label == "positive" and quality_report:
-            if quality_report.get("verdict") == "discard":
-                status = "discard_recommended"
-            elif quality_report.get("needs_wholesale_rewrite"):
+        status = "gold" if len(gold_asst) >= min_steps else "rejected"
+        if quality_report:
+            if quality_report.get("verdict") == "discard" or quality_report.get("needs_wholesale_rewrite"):
                 status = "discard_recommended"
         reasons = []
-        if label == "positive" and len(gold_asst) < min_steps:
+        if len(gold_asst) < min_steps:
             reasons.append(f"too_few_steps({len(gold_asst)}<{min_steps})")
-            status = "rejected"
         if not flow_stats.get("has_root"):
             reasons.append("no_root_task")
         if quality_report.get("verdict") == "discard":

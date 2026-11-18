@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import io
 import json
+import os
 import re
 import threading
 import time
@@ -82,6 +83,54 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="GoldThread 数据集控制台", version="2.0", lifespan=_lifespan)
+
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]", "testserver"})
+
+
+def _allowed_hosts() -> set[str]:
+    extra = os.environ.get("GOLDTHREAD_ALLOWED_HOSTS", "")
+    out = set(_LOCAL_HOSTS)
+    for item in extra.split(","):
+        h = item.strip().lower()
+        if h:
+            out.add(h)
+    return out
+
+
+def _host_only(raw_host: str) -> str:
+    val = (raw_host or "").strip().lower()
+    if not val:
+        return ""
+    if val.startswith("["):
+        end = val.find("]")
+        return val[: end + 1] if end >= 0 else val
+    return val.split(":", 1)[0]
+
+
+@app.middleware("http")
+async def _local_security_guard(request, call_next):
+    token = os.environ.get("GOLDTHREAD_API_TOKEN", "").strip()
+    path = request.url.path
+    if token and path.startswith("/api/") and path != "/api/health":
+        auth = request.headers.get("authorization", "")
+        if auth != f"Bearer {token}":
+            return JSONResponse({"detail": "未授权：缺少有效 GOLDTHREAD_API_TOKEN"}, status_code=401)
+        return await call_next(request)
+
+    allowed = _allowed_hosts()
+    if "*" not in allowed:
+        req_host = _host_only(request.headers.get("host", ""))
+        if req_host and req_host not in allowed:
+            return JSONResponse({"detail": f"拒绝非本地 Host 访问: {req_host}"}, status_code=403)
+        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            origin = request.headers.get("origin", "").strip()
+            if origin:
+                from urllib.parse import urlparse  # noqa: PLC0415
+
+                origin_host = _host_only(urlparse(origin).netloc)
+                if origin_host not in allowed:
+                    return JSONResponse({"detail": f"拒绝跨源写请求: {origin}"}, status_code=403)
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +469,39 @@ def _assert_no_delete_running() -> None:
         raise HTTPException(409, f"{state}，请稍后再试: {blocking.id}")
 
 
+def _assert_no_gold_write_running() -> None:
+    """同步触发 Stage 2 / Stage 3 重建前，确保没有冲突的后台写作业正在运行。"""
+    _assert_no_delete_running()
+    with JOBS_LOCK:
+        blocking = next(
+            (
+                j
+                for j in JOBS.values()
+                if j.stage in _GOLD_WRITE_STAGES and j.status == "running"
+            ),
+            None,
+        )
+    if blocking:
+        raise HTTPException(409, f"后台作业 {blocking.stage} ({blocking.id}) 正在运行，请等待其完成后再提交")
+
+
+def _guard_sensitive_config_change(new_cfg: Dict[str, Any]) -> None:
+    """无鉴权本地模式下，禁止通过 HTTP 接口篡改 pi_models_json 指向任意外部文件（防 !cmd 命令注入）。"""
+    if os.environ.get("GOLDTHREAD_API_TOKEN", "").strip():
+        return
+    new_paths = new_cfg.get("paths")
+    if not isinstance(new_paths, dict) or "pi_models_json" not in new_paths:
+        return
+    cur_cfg = load_config()
+    cur_val = str((cur_cfg.get("paths") or {}).get("pi_models_json") or "")
+    next_val = str(new_paths.get("pi_models_json") or "")
+    if next_val and next_val != cur_val:
+        raise HTTPException(
+            403,
+            "安全限制：未配置 GOLDTHREAD_API_TOKEN 时，禁止通过 HTTP API 修改 paths.pi_models_json；请直接在本机编辑 config/pipeline.yaml",
+        )
+
+
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
@@ -463,6 +545,7 @@ def put_config(body: ConfigBody) -> Dict[str, Any]:
         raise HTTPException(400, f"YAML 解析失败: {exc}") from exc
     if not isinstance(parsed, dict):
         raise HTTPException(400, "配置根节点必须是对象")
+    _guard_sensitive_config_change(parsed)
     save_config_text(body.yaml)
     return {"ok": True, "path": str(CONFIG_PATH), "config_hash": config_hash(load_config())}
 
@@ -509,6 +592,15 @@ def _set_path(data: Dict[str, Any], path: str, value: Any) -> None:
 @app.post("/api/config/structured")
 def config_structured(body: ConfigPatchBody) -> Dict[str, Any]:
     """按 path->value 深度合并进当前配置；ruamel 往返保留注释与顺序。"""
+    if not os.environ.get("GOLDTHREAD_API_TOKEN", "").strip():
+        cur_pm = str((load_config().get("paths") or {}).get("pi_models_json") or "")
+        for v in body.values:
+            if isinstance(v, dict) and v.get("path") == "paths.pi_models_json":
+                if str(v.get("value") or "") not in ("", cur_pm):
+                    raise HTTPException(
+                        403,
+                        "安全限制：未配置 GOLDTHREAD_API_TOKEN 时，禁止通过 HTTP API 修改 paths.pi_models_json",
+                    )
     text = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else ""
     import yaml as yaml_lib  # noqa: PLC0415
 
@@ -1325,7 +1417,10 @@ class TurnOverridesBody(BaseModel):
 
 @app.put("/api/raw/session/{sid}/turns")
 def save_turn_overrides(sid: str, body: TurnOverridesBody) -> Dict[str, Any]:
-    _assert_no_delete_running()
+    if body.recompute_downstream:
+        _assert_no_gold_write_running()
+    else:
+        _assert_no_delete_running()
     cfg = load_config()
     try:
         res = stage1_extract.update_turn_overrides(
@@ -1673,7 +1768,10 @@ def batch_review_items(sid: str, body: ReviewBatchBody) -> Dict[str, Any]:
 
 @app.post("/api/gold/session/{sid}/review/decision")
 def review_decision(sid: str, body: ReviewDecisionBody) -> Dict[str, Any]:
-    _assert_no_delete_running()
+    if body.auto_sync_stage3:
+        _assert_no_gold_write_running()
+    else:
+        _assert_no_delete_running()
     cfg = load_config()
     path, ann = _load_ann(sid)
     try:
@@ -1718,7 +1816,7 @@ class FinalizeBody(BaseModel):
 
 @app.post("/api/gold/session/{sid}/finalize")
 def gold_finalize(sid: str, body: FinalizeBody) -> Dict[str, Any]:
-    _assert_no_delete_running()
+    _assert_no_gold_write_running()
     cfg = load_config()
     path, ann = _load_ann(sid)
     try:

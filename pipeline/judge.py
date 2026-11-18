@@ -163,7 +163,6 @@ def _dpo_default_reason(verdict: str) -> str:
 
 def _jcfg(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     cfg = cfg or load_config()
-    global _ITEM_THINK
     j = dict(cfg.get("judge", {}) or {})
     j.setdefault("enabled", True)
     j.setdefault("model", "")
@@ -171,14 +170,13 @@ def _jcfg(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     j.setdefault("audit_model", "")
     j.setdefault("task_models", {})
     j.setdefault("item_think_chars", 1100)
-    _ITEM_THINK = int(j["item_think_chars"])
     j.setdefault("seam_min_silent_chars", 80)
     j.setdefault("step_batch", 24)
     j.setdefault("seam_batch", 12)
     j.setdefault("dpo_batch", 8)
     j.setdefault("max_steps_per_audit", 30)
     j.setdefault("quality_batch", 12)
-    j.setdefault("labels", ["positive", "pending"])
+    j.setdefault("labels", None)
     j.setdefault("concurrency", 6)
     j.setdefault("session_workers", 1)
     j.setdefault("fallback_to_rules", True)
@@ -197,9 +195,10 @@ def enabled(cfg: Optional[Dict[str, Any]] = None, label: Optional[str] = None) -
     j = _jcfg(cfg)
     if not j["enabled"]:
         return False
-    if label is None:
+    allowed = j.get("labels")
+    if label is None or not allowed:
         return True
-    return label in (j.get("labels") or ["positive", "pending"])
+    return label in allowed
 
 
 def _model(cfg: Dict[str, Any], j: Dict[str, Any], task: str = "") -> Optional[str]:
@@ -330,17 +329,14 @@ def _result_brief(m: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
-_ITEM_THINK = 1100  # 单步送判的 thinking 截断（由 _jcfg 覆盖）
-
-
-def _step_payload(m: Dict[str, Any], no: int) -> Dict[str, Any]:
+def _step_payload(m: Dict[str, Any], no: int, think_chars: int = 1100) -> Dict[str, Any]:
     thinking = m.get("raw_thinking") or m.get("thinking") or ""
     lang = dominant_thinking_lang(thinking)
     return {
         "msg_id": m.get("id"),
         "no": no,
         "turn": m.get("turn_index"),
-        "thinking": _clip(thinking, int(_ITEM_THINK)),
+        "thinking": _clip(thinking, int(think_chars)),
         "think_len": len(thinking),
         "thinking_lang": lang if lang in ("en", "zh") else "keep_original",
         "text": _clip(m.get("raw_text") or m.get("text"), 200),
@@ -368,10 +364,12 @@ def decide_steps(gold_messages: List[Dict[str, Any]], cfg: Optional[Dict[str, An
     root = next((m for m in gold_messages if m.get("role") == "user"), None)
     decisions: Dict[str, Dict[str, Any]] = {}
 
+    think_chars = int(j.get("item_think_chars", 1100))
+
     def _one(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload = {
             "root_task": _clip((root or {}).get("content"), 300),
-            "steps": [_step_payload(m, i + 1) for i, m in enumerate(batch)],
+            "steps": [_step_payload(m, i + 1, think_chars) for i, m in enumerate(batch)],
         }
         return _call(STEPS_SYSTEM, STEPS_SCHEMA, payload, cfg, j, "steps", log)
 
@@ -509,6 +507,7 @@ def audit_quality(gold_messages: List[Dict[str, Any]], stats: Dict[str, Any],
     # 分块审计：单次 payload 过大会让模型超时/漏判（实测 glm 40 步会超时返回空）
     qb = max(4, int(j["quality_batch"]))
     chunks = _batched(sample, qb)
+    think_chars = int(j.get("item_think_chars", 1100))
 
     def _one(chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload = {
@@ -516,7 +515,7 @@ def audit_quality(gold_messages: List[Dict[str, Any]], stats: Dict[str, Any],
             "session_stats": stats_brief,
             "sampled": len(chunk),
             "total_steps": len(asst),
-            "steps": [_step_payload(m, i + 1) for i, m in enumerate(chunk)],
+            "steps": [_step_payload(m, i + 1, think_chars) for i, m in enumerate(chunk)],
         }
         return _call(QUALITY_SYSTEM, QUALITY_SCHEMA, payload, cfg, j, "quality", log)
 
@@ -601,9 +600,80 @@ def _verdict_cache_path(cfg: Dict[str, Any]) -> Path:
     return stage_dirs(cfg)["state"] / "dpo_review_cache.json"
 
 
+_THINK_SPLIT_RE = re.compile(r"^\s*<" + r"think>\s*([\s\S]*?)\s*</" + r"think>\s*", re.I)
+
+
+def _head_tail(s: Any, limit: int, head_ratio: float = 0.65) -> str:
+    s = "" if s is None else str(s)
+    if len(s) <= limit:
+        return s
+    head = max(1, int(limit * head_ratio))
+    tail = max(1, limit - head - 3)
+    return f"{s[:head]}…{s[-tail:]}"
+
+
+def _split_think_and_body(value: Any) -> Tuple[str, str]:
+    raw = "" if value is None else str(value)
+    m = _THINK_SPLIT_RE.match(raw)
+    if not m:
+        return "", raw.strip()
+    return m.group(1).strip(), raw[m.end():].strip()
+
+
+def _dpo_side_digest(value: Any, think_limit: int = 900, body_limit: int = 1600) -> str:
+    think, body = _split_think_and_body(value)
+    parts: List[str] = []
+    if think:
+        parts.append("<" + f"think>\n{_head_tail(think, think_limit)}\n</" + "think>")
+    if body:
+        parts.append(_head_tail(body, body_limit))
+    return "\n".join(parts) if parts else _head_tail(value, think_limit + body_limit)
+
+
+def _diff_excerpt(a: str, b: str, window: int = 240) -> Optional[Dict[str, Any]]:
+    if a == b:
+        return None
+    idx = 0
+    limit = min(len(a), len(b))
+    while idx < limit and a[idx] == b[idx]:
+        idx += 1
+    start = max(0, idx - 60)
+    return {
+        "offset": idx,
+        "chosen_span": a[start: start + window],
+        "rejected_span": b[start: start + window],
+    }
+
+
+def _dpo_pair_payload(p: Dict[str, Any]) -> Dict[str, Any]:
+    chosen_raw = str((p.get("chosen") or {}).get("value") or "")
+    rejected_raw = str((p.get("rejected") or {}).get("value") or "")
+    chosen_digest = _dpo_side_digest(chosen_raw)
+    rejected_digest = _dpo_side_digest(rejected_raw)
+    item: Dict[str, Any] = {
+        "sample_id": p.get("sample_id"),
+        "reason": (p.get("metadata") or {}).get("reason"),
+        "context_tail": [
+            {"from": c.get("from"), "value": _clip(c.get("value"), 260)}
+            for c in (p.get("conversations") or [])[-3:]
+        ],
+        "chosen": chosen_digest,
+        "rejected": rejected_digest,
+    }
+    _, chosen_body = _split_think_and_body(chosen_raw)
+    _, rejected_body = _split_think_and_body(rejected_raw)
+    if chosen_body != rejected_body and chosen_digest == rejected_digest:
+        diff = _diff_excerpt(chosen_body, rejected_body)
+        if diff:
+            item["body_diff"] = diff
+    return item
+
+
 def _vkey(model: str, tag: str, p: Dict[str, Any]) -> str:
     from .common.store import sha256_text  # noqa: PLC0415
 
+    chosen_raw = str((p.get("chosen") or {}).get("value") or "")
+    rejected_raw = str((p.get("rejected") or {}).get("value") or "")
     return sha256_text(json.dumps({
         "m": model,
         "pv": f"{PROMPT_VERSION}.{tag}",
@@ -613,8 +683,8 @@ def _vkey(model: str, tag: str, p: Dict[str, Any]) -> str:
             {"from": c.get("from"), "value": _clip(c.get("value"), 260)}
             for c in (p.get("conversations") or [])[-3:]
         ],
-        "chosen": _clip((p.get("chosen") or {}).get("value"), 900),
-        "rejected": _clip((p.get("rejected") or {}).get("value"), 900),
+        "chosen_sha": sha256_text(chosen_raw),
+        "rejected_sha": sha256_text(rejected_raw),
     }, ensure_ascii=False, sort_keys=True))[:20]
 
 
@@ -676,46 +746,38 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
 
     _clock = threading.Lock()
 
+    def _valid_verdicts(out: Any) -> Dict[str, Dict[str, Any]]:
+        if not isinstance(out, dict) or not isinstance(out.get("pairs"), list):
+            return {}
+        return {
+            str(it.get("sample_id")): it
+            for it in out["pairs"]
+            if isinstance(it, dict) and it.get("sample_id") and it.get("verdict") in ("good", "swap", "drop")
+        }
+
     def _persist(batch: List[Dict[str, Any]], out: Dict[str, Any]) -> None:
-        """把一批的判定立刻写入缓存：后续重跑可断点续跑。"""
+        """把一批中已明确返回的判定立刻写入缓存；漏返项绝不静默标为 good。"""
         if _wj is None or not out:
             return
-        if not isinstance(out.get("pairs"), list):
-            return  # 结构不对：不写缓存，交由重试/下次运行处理
-        by_id = {
-            str(it.get("sample_id")): it for it in out["pairs"]
-            if isinstance(it, dict) and it.get("verdict") in ("good", "swap", "drop")
-        }
+        by_id = _valid_verdicts(out)
+        if not by_id:
+            return
         with _clock:
             for p in batch:
                 sid = str(p.get("sample_id"))
                 it = by_id.get(sid)
-                if it:
-                    verdict = str(it["verdict"])
-                    reason = _clip(it.get("reason"), 60) or _dpo_default_reason(verdict)
-                    cache[_vkey(model_id, "dpo", p)] = {"verdict": verdict, "reason": reason}
-                else:
-                    # 旧模型可能省略 good；兼容为通过并补默认理由
-                    cache[_vkey(model_id, "dpo", p)] = {
-                        "verdict": "good", "reason": _dpo_default_reason("good"),
-                    }
+                if not it:
+                    continue
+                verdict = str(it["verdict"])
+                reason = _clip(it.get("reason"), 60) or _dpo_default_reason(verdict)
+                cache[_vkey(model_id, "dpo", p)] = {"verdict": verdict, "reason": reason}
             try:
                 _wj(cpath, cache)
             except Exception:  # noqa: BLE001
                 pass
 
     def _one(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        payload = {"pairs": [
-            {
-                "sample_id": p.get("sample_id"),
-                "reason": (p.get("metadata") or {}).get("reason"),
-                "context_tail": [
-                    {"from": c.get("from"), "value": _clip(c.get("value"), 260)}
-                    for c in (p.get("conversations") or [])[-3:]
-                ],
-                "chosen": _clip((p.get("chosen") or {}).get("value"), 900),
-                "rejected": _clip((p.get("rejected") or {}).get("value"), 900),
-            } for p in batch]}
+        payload = {"pairs": [_dpo_pair_payload(p) for p in batch]}
         out = _call(DPO_SYSTEM, DPO_SCHEMA, payload, cfg, j, "dpo", log)
         _persist(batch, out)
         return out
@@ -759,20 +821,24 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
     failed_ids: List[str] = []
 
     def _resolve_batch(batch: List[Dict[str, Any]], out: Any) -> None:
-        if not out and len(batch) > 1:
-            # 批失败（常见于超时/JSON 截断）-> 拆成单对重试，避免整批静默放过
-            log(f"[judge] dpo 批失败（{len(batch)} 对），拆单重试")
-            singles = _pmap(_one, [[p] for p in batch], j["concurrency"])
-            for p, o in zip(batch, singles):
-                if not o:
-                    failed_ids.append(str(p.get("sample_id")))
-                else:
+        got = _valid_verdicts(out)
+        if got:
+            resolved.append(out)
+        missing = [p for p in batch if str(p.get("sample_id")) not in got]
+        if not missing:
+            return
+        if len(batch) > 1:
+            # 批失败或部分漏返 -> 仅对缺失项拆单重试，绝不静默放过
+            log(f"[judge] dpo 批失败或漏返（缺 {len(missing)}/{len(batch)} 对），拆单重试")
+            singles = _pmap(_one, [[p] for p in missing], j["concurrency"])
+            for p, o in zip(missing, singles):
+                sid = str(p.get("sample_id"))
+                if sid in _valid_verdicts(o):
                     resolved.append(o)
+                else:
+                    failed_ids.append(sid)
             return
-        if not out:
-            failed_ids.append(str(batch[0].get("sample_id")))
-            return
-        resolved.append(out)
+        failed_ids.append(str(missing[0].get("sample_id")))
 
     workers = max(1, int(j["concurrency"]))
     if workers == 1 or len(batches) <= 1:
@@ -844,8 +910,8 @@ def extract_seams(gold_messages: List[Dict[str, Any]], pruned: List[Dict[str, An
     by_id = {m.get("id"): i for i, m in enumerate(asst)}
     seams: List[Dict[str, Any]] = []
 
-    def _ctx(i: int) -> Dict[str, Any]:
-        m = asst[i] if 0 <= i < len(asst) else None
+    def _ctx(i: Optional[int]) -> Dict[str, Any]:
+        m = asst[i] if (i is not None and 0 <= i < len(asst)) else None
         if not m:
             return {}
         return {
@@ -856,16 +922,28 @@ def extract_seams(gold_messages: List[Dict[str, Any]], pruned: List[Dict[str, An
         }
 
     # 1) 步级剪枝：被删步的原位置 -> 现在相邻的前后两步
-    for k, pd in enumerate(pruned):
+    for pd in pruned:
         rid = pd.get("dropped_msg_id")
         if not rid:
             continue
-        # 找到被删步在原序列中的后继（在 gold 里被删步已不存在，用 pruned 记录的 rejected 内容定位）
-        after = None
-        for i, m in enumerate(asst):
-            if m.get("pruned_detour") == rid:
-                after = i
-                break
+        after: Optional[int] = None
+        after_mid = pd.get("after_msg_id") or (pd.get("chosen_msg") or {}).get("id")
+        if after_mid and after_mid in by_id:
+            after = by_id[after_mid]
+        else:
+            for i, m in enumerate(asst):
+                detours = m.get("pruned_detours") or []
+                if m.get("pruned_detour") == rid or rid in detours:
+                    after = i
+                    break
+        before: Optional[int] = (after - 1) if (after is not None and after > 0) else None
+        if before is None and after is None:
+            for u in reversed(pd.get("context_units") or []):
+                if isinstance(u, dict) and u.get("type") == "assistant_turn":
+                    prev_id = (u.get("msg") or {}).get("id")
+                    if prev_id in by_id:
+                        before = by_id[prev_id]
+                        break
         seams.append({
             "seam_id": f"prune::{rid}",
             "type": "detour_pruned",
@@ -876,8 +954,8 @@ def extract_seams(gold_messages: List[Dict[str, Any]], pruned: List[Dict[str, An
                 "tools": [tc.get("name") for tc in ((pd.get("rejected_msg") or {}).get("tool_calls") or [])],
                 "error_output": _clip(pd.get("error_output"), 220),
             },
-            "before": _ctx(after - 1) if after is not None else {},
-            "after": _ctx(after) if after is not None else {},
+            "before": _ctx(before),
+            "after": _ctx(after),
         })
 
     # 2) 状态折叠：合并步本身
@@ -890,41 +968,72 @@ def extract_seams(gold_messages: List[Dict[str, Any]], pruned: List[Dict[str, An
             "type": "state_folded",
             "removed": {"msg_id": m.get("folded_from"), "reason": "write+edit 合并",
                         "thinking": _clip((m.get("fold_details") or {}).get("edit_thinking"), 400)},
-            "before": _ctx((i or 0) - 1),
-            "after": _ctx(i or 0),
+            "before": _ctx((i - 1) if (i is not None and i > 0) else None),
+            "after": _ctx(i),
         })
 
     # 3) 回合级：催促折叠 / 噪音删除（上下文跳接）
     for mk in (turn_marks or []):
-        if mk.get("action") not in ("folded", "internalized", "dropped"):
+        act = mk.get("action")
+        if act not in ("folded", "internalized", "dropped"):
             continue
         if not (mk.get("folded") or mk.get("dropped")):
             continue
+        tidx = mk.get("turn_index")
+        t_before: Optional[int] = None
+        t_after: Optional[int] = None
+        if isinstance(tidx, int):
+            if act in ("folded", "internalized"):
+                t_after = next(
+                    (
+                        i for i, m in enumerate(asst)
+                        if m.get("folded_turn_index") == tidx or m.get("turn_index") == tidx
+                    ),
+                    None,
+                )
+                if t_after is not None and t_after > 0:
+                    t_before = t_after - 1
+            else:
+                prev_idxs = [
+                    i for i, m in enumerate(asst)
+                    if isinstance(m.get("turn_index"), int) and m["turn_index"] < tidx
+                ]
+                t_before = prev_idxs[-1] if prev_idxs else None
+                t_after = next(
+                    (
+                        i for i, m in enumerate(asst)
+                        if isinstance(m.get("turn_index"), int) and m["turn_index"] > tidx
+                    ),
+                    None,
+                )
         seams.append({
-            "seam_id": f"turn::{mk.get('turn_index')}",
-            "type": f"turn_{mk.get('action')}",
+            "seam_id": f"turn::{tidx}",
+            "type": f"turn_{act}",
             "removed": {
-                "turn_index": mk.get("turn_index"),
+                "turn_index": tidx,
                 "kind": mk.get("kind"),
                 "reason": mk.get("reason"),
                 "user_text": _clip(mk.get("text"), 200),
                 "steps": mk.get("assistant_steps"),
                 "popped_await_msg": mk.get("popped_await_msg"),
             },
-            "before": {}, "after": {},
+            "before": _ctx(t_before),
+            "after": _ctx(t_after),
         })
 
     # 4) 静默执行 / 空思考合成：单步内的"内容消失"
     for m in asst:
         flags = m.get("flags") or []
         _cleared = (m.get("raw_text") or "")
+        idx = by_id.get(m.get("id"))
         if "silent_executed" in flags and len(_cleared.strip()) >= min_silent:
             seams.append({
                 "seam_id": f"silent::{m.get('id')}",
                 "type": "silent_cleared",
                 "removed": {"msg_id": m.get("id"), "reason": "中间步播报清空",
                             "text": _clip(m.get("raw_text"), 300)},
-                "before": {}, "after": _ctx(by_id.get(m.get("id"), 0)),
+                "before": _ctx(idx),
+                "after": _ctx((idx + 1) if idx is not None else None),
             })
         if "thinking_synthesized" in flags:
             seams.append({
@@ -932,7 +1041,7 @@ def extract_seams(gold_messages: List[Dict[str, Any]], pruned: List[Dict[str, An
                 "type": "thinking_synthesized",
                 "removed": {"msg_id": m.get("id"), "reason": "空思考由程序合成",
                             "thinking": _clip(m.get("thinking"), 300)},
-                "before": _ctx(by_id.get(m.get("id"), 0) - 1),
-                "after": _ctx(by_id.get(m.get("id"), 0)),
+                "before": _ctx((idx - 1) if (idx is not None and idx > 0) else None),
+                "after": _ctx(idx),
             })
     return seams

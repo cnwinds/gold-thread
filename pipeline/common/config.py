@@ -110,6 +110,13 @@ DEFAULTS: Dict[str, Any] = {
             "min_thinking_chars": 80,
         },
     },
+    "domain": {
+        "profile": "reverse_engineering",
+        "system_prompt": "",
+        "use_session_system_prompt": False,
+        "tools": [],
+        "enable_re_pathologies": True,
+    },
 }
 
 

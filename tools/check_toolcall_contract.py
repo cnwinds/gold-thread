@@ -96,7 +96,7 @@ def tool_names(tools_field) -> set[str]:
 
 
 def assistant_texts(row: dict):
-    """产出 (位置标签, 助手文本)；兼容 sharegpt / openai 两种格式。"""
+    """产出 (位置标签, 助手文本)；兼容 sharegpt / openai / DPO chosen+rejected 格式。"""
     for c in row.get("conversations") or []:
         if c.get("from") == "gpt":
             yield "gpt", c.get("value") or ""
@@ -108,6 +108,41 @@ def assistant_texts(row: dict):
             yield "openai-tool_calls", ""
             continue
         yield "assistant", m.get("content") or ""
+    for key in ("chosen", "rejected"):
+        val = row.get(key)
+        if isinstance(val, dict):
+            if val.get("from") in (None, "gpt", "assistant"):
+                yield key, val.get("value") or ""
+        elif isinstance(val, str):
+            yield key, val
+
+
+def _extract_blocks_and_outside(text: str) -> tuple[list[tuple[str, str, dict | None]], str]:
+    """借助 format._iter_tc_spans 抗嵌套闭合标签解析块，并返回剥离合法块后的外部文本。"""
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from pipeline.common.format import _HERMES_OPEN_RE, _XML_OPEN_RE, _iter_tc_spans, _parse_tc_block
+
+    spans = _iter_tc_spans(text)
+    if not spans:
+        return [], text
+    parsed_blocks: list[tuple[str, str, dict | None]] = []
+    outside_parts: list[str] = []
+    cursor = 0
+    for s, e in spans:
+        outside_parts.append(text[cursor:s])
+        cursor = e
+        raw_block = text[s:e]
+        stripped = raw_block.strip()
+        kind = (
+            "hermes-json"
+            if _HERMES_OPEN_RE.match(stripped)
+            else ("coder-xml" if _XML_OPEN_RE.match(stripped) else "unknown")
+        )
+        parsed_blocks.append((kind, raw_block, _parse_tc_block(raw_block)))
+    outside_parts.append(text[cursor:])
+    return parsed_blocks, "".join(outside_parts)
 
 
 def scan_file(path: Path, style: str) -> dict:
@@ -122,41 +157,29 @@ def scan_file(path: Path, style: str) -> dict:
             if not text.strip():
                 continue
             stats["texts"] += 1
-            if XML_STRAY_RE.search(text):
+            blocks, outside = _extract_blocks_and_outside(text)
+            if XML_STRAY_RE.search(outside):
                 stats["stray_xml"] += 1
-                stats["bad"].append((line_no, where, "出现 <function=/<parameter=> 裸 XML", text[:160]))
-            # DPO 文件的 chosen/rejected 用字符串承载整轮对话
-            for key in ("chosen", "rejected"):
-                pass
-            blocks = JSON_BLOCK_RE.findall(text)
-            xml_blocks = XML_BLOCK_RE.findall(text)
-            if style == "hermes-json":
-                if xml_blocks:
+                stats["bad"].append((line_no, where, "出现 <tool_call> 之外的 <function=/<parameter=> 裸 XML", outside[:160]))
+            for kind, raw_b, parsed in blocks:
+                if kind == "unknown" or parsed is None:
+                    stats["bad"].append((line_no, where, "无法解析的 <tool_call> 块", raw_b[:160]))
+                    continue
+                if kind != style:
                     stats["wrong_style"] += 1
-                    stats["bad"].append((line_no, where, "应是 hermes JSON，实际是 coder XML", xml_blocks[0][:160]))
-                for b in blocks:
-                    try:
-                        obj = json.loads(b)
-                    except json.JSONDecodeError as exc:
-                        stats["bad"].append((line_no, where, f"JSON 解析失败: {exc}", b[:160]))
-                        continue
-                    if not isinstance(obj.get("name"), str):
-                        stats["bad"].append((line_no, where, "缺 name", b[:160]))
-                    elif names and obj["name"] not in names:
-                        stats["bad"].append((line_no, where, f"name 不在 tools 里: {obj['name']}", b[:160]))
-                    if not isinstance(obj.get("arguments"), dict):
-                        stats["bad"].append((line_no, where, "arguments 不是 object", b[:160]))
-                        continue
-                    stats["ok"] += 1
-            else:  # coder-xml
-                if blocks:
-                    stats["wrong_style"] += 1
-                    stats["bad"].append((line_no, where, "应是 coder XML，实际是 hermes JSON", blocks[0][:160]))
-                for b in xml_blocks:
-                    if "<parameter=" not in b:
-                        stats["bad"].append((line_no, where, "XML 块没有 <parameter=>", b[:160]))
-                        continue
-                    stats["ok"] += 1
+                    stats["bad"].append((line_no, where, f"应是 {style}，实际是 {kind}", raw_b[:160]))
+                    continue
+                fn_name = parsed.get("name")
+                if not isinstance(fn_name, str) or not fn_name:
+                    stats["bad"].append((line_no, where, "缺 name", raw_b[:160]))
+                    continue
+                if names and fn_name not in names:
+                    stats["bad"].append((line_no, where, f"name 不在 tools 里: {fn_name}", raw_b[:160]))
+                    continue
+                if not isinstance(parsed.get("arguments"), dict):
+                    stats["bad"].append((line_no, where, "arguments 不是 object", raw_b[:160]))
+                    continue
+                stats["ok"] += 1
     return stats
 
 

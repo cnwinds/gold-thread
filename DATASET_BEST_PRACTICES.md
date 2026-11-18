@@ -192,8 +192,8 @@
 
 ### 5.3 其它容易踩的格式细节
 
-- **`` 后不要插空行**：数据前缀目前是 `…\n\n` + 调用块，模型因此学会在正文开头先吐 `\n\n`
-  （推理实测正是 `content="\n\n"`）。改成 `…\n` + 调用块，和推理端 reasoning parser 的切分点对齐，
+- **`</think>` 后不要插空行**：历史版本前缀曾为 `<think>…</think>\n\n` + 调用块，模型因此学会在正文开头先吐 `\n\n`
+  （推理实测正是 `content="\n\n"`）。现已统一改为 `<think>…</think>\n` + 调用块，和推理端 reasoning parser 的切分点对齐，
   避免「块不在文本首位」导致的严格正则失配。
 - **`tools` 列必须和推理端工具箱完全同构**：名字（`bash`/`read`/`write`/`edit`/`codemode`）、必填项、参数名、
   description 都要一致。训练里教了推理端没有的工具 → 模型幻觉调用不存在的函数。
@@ -381,7 +381,7 @@ synth:
 
 ### 6.6 历史步要不要保留思考（2026-10 实测推翻旧假设）
 
-旧假设：推理时历史里没有思考，所以 SFT 窗口把历史步的 ` thinking` 剥掉（`strip_thinking=True`）。
+旧假设：推理时历史里没有思考，所以 SFT 窗口把历史步的 `<think>…</think>` 剥掉（`strip_thinking=True`）。
 实测（pi + vLLM，用 `usage.prompt_tokens` 逐次调用做差分，分量用真实 tokenizer 核）：
 
 | 场景 | Δ prompt_tokens | 含思考估计 | 不含估计 | 判定 |

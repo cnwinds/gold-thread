@@ -112,6 +112,7 @@ class PreparedDatasets:
     dropped: Dict[str, List[str]] = field(default_factory=dict)
     counts: Dict[str, int] = field(default_factory=dict)
     length_gate: Dict[str, Any] = field(default_factory=dict)
+    weighted_expansion: Dict[str, Any] = field(default_factory=dict)
 
     def has(self, name: str) -> bool:
         return bool(self.files.get(name))
@@ -206,13 +207,63 @@ def _row_sample_id(row: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _row_sample_weight(row: Dict[str, Any]) -> int:
+    meta = row.get("metadata")
+    if not isinstance(meta, dict):
+        return 1
+    try:
+        w = int(meta.get("sample_weight", 1) or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, w)
+
+
+def expand_sample_weight_rows(rows: Sequence[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """将 SFT 训练集的 metadata.sample_weight 确定性展开为实际训练副本（仅作用于 train）。"""
+    expanded: List[Dict[str, Any]] = []
+    boosted_unique = 0
+    extra_rows = 0
+    for row in rows:
+        w = _row_sample_weight(row)
+        if w <= 1:
+            expanded.append(row)
+            continue
+        boosted_unique += 1
+        extra_rows += w - 1
+        orig_sid = _row_sample_id(row)
+        base_meta = dict(row.get("metadata") or {}) if isinstance(row.get("metadata"), dict) else {}
+        for rep in range(w):
+            item = dict(row)
+            meta = dict(base_meta)
+            meta["replica_index"] = rep
+            meta["replica_total"] = w
+            if rep > 0 and orig_sid:
+                meta["origin_sample_id"] = orig_sid
+                item["sample_id"] = f"{orig_sid}#w{rep + 1}"
+            item["metadata"] = meta
+            expanded.append(item)
+    return expanded, {
+        "unique_rows": len(rows),
+        "expanded_rows": len(expanded),
+        "boosted_unique_rows": boosted_unique,
+        "extra_rows": extra_rows,
+    }
+
+
+def _expected_lf_count(rows: Sequence[Dict[str, Any]], *, expand_weights: bool = False) -> int:
+    if not expand_weights:
+        return len(rows)
+    return sum(_row_sample_weight(r) for r in rows)
+
+
 def _should_keep_existing_lf(
     existing: Sequence[Dict[str, Any]],
     source_rows: Optional[Sequence[Dict[str, Any]]],
     *,
     ranking: bool,
+    expand_weights: bool = False,
 ) -> bool:
-    """只有结构合法，且相对候选源不是缩水/无 id 的旧子集时，才沿用盘上的 lf。"""
+    """只有结构合法，且相对候选源不是缩水/无 id/未展开权重的旧子集时，才沿用盘上的 lf。"""
     if not rows_are_aligned(existing, ranking=ranking):
         return False
     if source_rows is None:
@@ -220,14 +271,21 @@ def _should_keep_existing_lf(
     # 源有 sample_id 而 lf 大量缺失 → 旧 release 子集，必须重生成
     src_ids = {_row_sample_id(r) for r in source_rows}
     src_ids.discard(None)
-    lf_ids = {_row_sample_id(r) for r in existing}
-    lf_ids.discard(None)
+    lf_ids = set()
+    for r in existing:
+        sid = _row_sample_id(r)
+        if sid:
+            lf_ids.add(sid.split("#w", 1)[0])
+        meta = r.get("metadata")
+        if isinstance(meta, dict) and meta.get("origin_sample_id"):
+            lf_ids.add(str(meta["origin_sample_id"]))
     if src_ids:
         missing = src_ids - lf_ids
         # 相对 v2/候选源丢了超过 5%（或超过 3 条）→ 旧子集，重生成
         if len(missing) > max(3, int(0.05 * len(src_ids))):
             return False
-    if len(existing) < int(0.95 * len(source_rows)):
+    expected = _expected_lf_count(source_rows, expand_weights=expand_weights)
+    if len(existing) < int(0.95 * expected):
         return False
     return True
 
@@ -299,11 +357,16 @@ def dataset_info_for(prepared: PreparedDatasets) -> Dict[str, Any]:
 
 
 def prepare_datasets(
-    root: Path, *, apply_length_gate: bool = True, log=None
+    root: Path,
+    *,
+    apply_length_gate: bool = True,
+    expand_sample_weight: bool = True,
+    log=None,
 ) -> PreparedDatasets:
     """从 ``03_train`` 目录选出并规整出交付用的 sft/dpo（含 lf）。
 
-    默认在规整后跑 observation 软压缩（按 yaml 默认 cutoff），**不因超长丢弃**。
+    默认在规整后对 ``sft.train.lf.jsonl`` 按 ``metadata.sample_weight`` 确定性展开（``sft.eval`` 保持 1x），
+    再跑 observation 软压缩（按 yaml 默认 cutoff），**不因超长丢弃**。
     would-be-overlength 写入 ``length_gate.overlength_at_default_cutoff`` 供 MANIFEST；
     训练入口再按当次 ``cutoff_len`` 硬过滤。
     """
@@ -316,13 +379,19 @@ def prepare_datasets(
         origin = ""
         dropped: List[str] = []
         source_rows = load_jsonl(source) if source is not None else None
+        do_expand = bool(expand_sample_weight and logical == "sft.train" and not ranking)
         if existing_lf.is_file():
             loaded = load_jsonl(existing_lf)
-            if _should_keep_existing_lf(loaded, source_rows, ranking=ranking):
+            if _should_keep_existing_lf(
+                loaded, source_rows, ranking=ranking, expand_weights=do_expand
+            ):
                 lf_rows = loaded
                 origin = f"existing:{lf_name}"
         if lf_rows is None and source_rows is not None:
             lf_rows, dropped = _normalize_all(source_rows, ranking=ranking)
+            if do_expand and lf_rows:
+                lf_rows, w_stats = expand_sample_weight_rows(lf_rows)
+                prepared.weighted_expansion[logical] = w_stats
             origin = source.name
         if not lf_rows:
             prepared.dropped[logical] = dropped

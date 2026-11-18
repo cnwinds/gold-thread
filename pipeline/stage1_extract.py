@@ -513,9 +513,11 @@ def relabel_session(sid: str, new_label: str, cfg: Optional[Dict[str, Any]] = No
     if gold_entry:
         min_steps = int(cfg.get("gold", {}).get("min_gold_steps", 10))
         gold_steps = int(gold_entry.get("stats", {}).get("gold_steps", 0))
-        new_status = "gold" if (new_label == "positive" and gold_steps >= min_steps) else (
-            "raw_only" if new_label == "pending" else "negative_source"
-        )
+        cur_status = gold_entry.get("status")
+        if cur_status == "discard_recommended":
+            new_status = "discard_recommended"
+        else:
+            new_status = "gold" if gold_steps >= min_steps else "rejected"
         gold_entry["label"] = new_label
         gold_entry["status"] = new_status
         if gold_entry.get("source"):

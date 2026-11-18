@@ -331,6 +331,46 @@ def preview_session(source: str, catalog_id: str, cfg: Optional[Dict[str, Any]] 
     }
 
 
+def _tool_result_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("type") == "text" and item.get("text"):
+                    parts.append(str(item.get("text")))
+                elif item.get("type") == "image":
+                    parts.append("[Image Output]")
+                elif "content" in item:
+                    sub = _tool_result_text(item.get("content"))
+                    if sub:
+                        parts.append(sub)
+        return "\n".join(p for p in parts if p)
+    if isinstance(value, dict):
+        if "text" in value:
+            return str(value.get("text") or "")
+        if "content" in value:
+            return _tool_result_text(value.get("content"))
+        return json.dumps(value, ensure_ascii=False)
+    return "" if value is None else str(value)
+
+
+def _parse_tool_args(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, dict):
+                return loaded
+        except Exception:  # noqa: BLE001
+            return {"raw": raw}
+    return {}
+
+
 def _cursor_to_pi(src: Path, dest: Path, session_id: str, cwd: str) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     ts = datetime.fromtimestamp(src.stat().st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -338,20 +378,62 @@ def _cursor_to_pi(src: Path, dest: Path, session_id: str, cwd: str) -> None:
     out.append(json.dumps({
         "type": "session", "version": 3, "id": session_id, "timestamp": ts, "cwd": cwd,
     }, ensure_ascii=False))
+    active_model = "cursor"
+    active_provider = "cursor"
     out.append(json.dumps({
         "type": "model_change", "id": "cursor-model", "timestamp": ts,
-        "provider": "cursor", "modelId": "cursor",
+        "provider": active_provider, "modelId": active_model,
     }, ensure_ascii=False))
     n = 0
+    call_names: Dict[str, str] = {}
+
+    def _emit_tool_result(call_id: str, tool_name: str, is_err: bool, text_val: str, ev_ts: str) -> None:
+        nonlocal n
+        n += 1
+        out.append(json.dumps({
+            "type": "message",
+            "id": f"tr{n}",
+            "timestamp": ev_ts,
+            "message": {
+                "role": "toolResult",
+                "toolCallId": call_id,
+                "toolName": tool_name or call_names.get(call_id) or "tool",
+                "isError": bool(is_err),
+                "content": [{"type": "text", "text": text_val}],
+            },
+        }, ensure_ascii=False))
+
     with src.open("r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             obj = _read_json_line(line)
             if not obj:
                 continue
-            role = obj.get("role")
             msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
-            content = msg.get("content")
+            role = obj.get("role") or msg.get("role")
+            content = msg.get("content") if "content" in msg else obj.get("content")
+            ev_ts = str(obj.get("timestamp") or msg.get("timestamp") or ts)
+            raw_model = str(msg.get("model") or obj.get("model") or "").strip()
+            raw_provider = str(msg.get("provider") or obj.get("provider") or active_provider).strip() or "cursor"
+            if raw_model and raw_model != active_model:
+                active_model = raw_model
+                active_provider = raw_provider
+                n += 1
+                out.append(json.dumps({
+                    "type": "model_change", "id": f"mc{n}", "timestamp": ev_ts,
+                    "provider": active_provider, "modelId": active_model,
+                }, ensure_ascii=False))
+
             if role == "user":
+                if isinstance(content, list):
+                    for item in content:
+                        if not isinstance(item, dict):
+                            continue
+                        if item.get("type") in ("tool_result", "toolResult"):
+                            cid = str(item.get("tool_use_id") or item.get("toolCallId") or item.get("id") or "")
+                            tname = str(item.get("name") or item.get("toolName") or call_names.get(cid) or "tool")
+                            err = bool(item.get("is_error") or item.get("isError"))
+                            raw_res = item.get("content") if "content" in item else item.get("output", item.get("text", ""))
+                            _emit_tool_result(cid, tname, err, _tool_result_text(raw_res), ev_ts)
                 text = _user_text(_blocks_text(content))
                 if not text:
                     continue
@@ -359,38 +441,83 @@ def _cursor_to_pi(src: Path, dest: Path, session_id: str, cwd: str) -> None:
                 out.append(json.dumps({
                     "type": "message",
                     "id": f"u{n}",
-                    "timestamp": ts,
+                    "timestamp": ev_ts,
                     "message": {"role": "user", "content": [{"type": "text", "text": text}]},
                 }, ensure_ascii=False))
+            elif role in ("tool", "toolResult", "tool_result"):
+                cid = str(
+                    msg.get("toolCallId") or msg.get("tool_call_id") or msg.get("tool_use_id")
+                    or obj.get("toolCallId") or obj.get("tool_call_id") or obj.get("tool_use_id") or ""
+                )
+                tname = str(
+                    msg.get("toolName") or msg.get("name")
+                    or obj.get("toolName") or obj.get("name")
+                    or call_names.get(cid) or "tool"
+                )
+                err = bool(msg.get("isError") or msg.get("is_error") or obj.get("isError") or obj.get("is_error"))
+                raw_res = content if content is not None else msg.get("output", obj.get("output", ""))
+                _emit_tool_result(cid, tname, err, _tool_result_text(raw_res), ev_ts)
             elif role == "assistant":
                 blocks: List[Dict[str, Any]] = []
+                top_think = str(
+                    msg.get("thinking") or msg.get("reasoning_content")
+                    or obj.get("thinking") or obj.get("reasoning_content") or ""
+                ).strip()
+                has_block_think = False
                 if isinstance(content, list):
                     for item in content:
                         if not isinstance(item, dict):
                             continue
-                        if item.get("type") == "text" and item.get("text"):
+                        itype = item.get("type")
+                        if itype in ("thinking", "reasoning"):
+                            th = str(item.get("thinking") or item.get("text") or "").strip()
+                            if th:
+                                blocks.append({"type": "thinking", "thinking": th})
+                                has_block_think = True
+                        elif itype == "text" and item.get("text"):
                             blocks.append({"type": "text", "text": str(item.get("text"))})
-                        elif item.get("type") == "tool_use":
+                        elif itype in ("tool_use", "toolCall"):
                             n += 1
+                            cid = str(item.get("id") or item.get("toolUseId") or f"c{n}")
+                            tname = str(item.get("name") or "tool")
+                            raw_args = item.get("input") if "input" in item else item.get("arguments")
+                            call_names[cid] = tname
                             blocks.append({
                                 "type": "toolCall",
-                                "id": f"c{n}",
-                                "name": item.get("name") or "tool",
-                                "arguments": item.get("input") or {},
+                                "id": cid,
+                                "name": tname,
+                                "arguments": _parse_tool_args(raw_args),
                             })
                 elif isinstance(content, str) and content.strip():
                     blocks.append({"type": "text", "text": content})
+                if top_think and not has_block_think:
+                    blocks.insert(0, {"type": "thinking", "thinking": top_think})
+                for tc in (msg.get("tool_calls") or obj.get("tool_calls") or []):
+                    if not isinstance(tc, dict):
+                        continue
+                    fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                    n += 1
+                    cid = str(tc.get("id") or f"c{n}")
+                    tname = str(fn.get("name") or tc.get("name") or "tool")
+                    raw_args = fn.get("arguments") if "arguments" in fn else tc.get("arguments")
+                    call_names[cid] = tname
+                    blocks.append({
+                        "type": "toolCall",
+                        "id": cid,
+                        "name": tname,
+                        "arguments": _parse_tool_args(raw_args),
+                    })
                 if not blocks:
                     continue
                 n += 1
                 out.append(json.dumps({
                     "type": "message",
                     "id": f"a{n}",
-                    "timestamp": ts,
+                    "timestamp": ev_ts,
                     "message": {
                         "role": "assistant",
-                        "model": "cursor",
-                        "provider": "cursor",
+                        "model": active_model,
+                        "provider": active_provider,
                         "content": blocks,
                     },
                 }, ensure_ascii=False))

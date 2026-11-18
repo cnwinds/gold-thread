@@ -139,6 +139,7 @@ def create_build(
                 "config_hash": config_hash(cfg),
                 "source_revisions": revisions,
                 "split_plan": copy.deepcopy(draft.get("split_plan") or {}),
+                "scope_decisions": copy.deepcopy(draft.get("scope_decisions") or {}),
                 "decisions": copy.deepcopy(draft.get("decisions") or {}),
                 "counts": dict(counts),
                 "files": files,

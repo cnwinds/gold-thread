@@ -19,11 +19,11 @@ from typing import Any, Dict, List, Optional
 TOOL_CALL_STYLES = ("hermes-json", "coder-xml")
 
 
-def default_tools_json() -> str:
+def default_tools_json(cfg: Optional[Dict[str, Any]] = None) -> str:
     """ShareGPT / LLaMA-Factory 样本的 ``tools`` 列（与推理侧同一套函数声明）。"""
-    from .pilog import DEFAULT_TOOLS
+    from .pilog import resolve_tools
 
-    return json.dumps(DEFAULT_TOOLS, ensure_ascii=False)
+    return json.dumps(resolve_tools(cfg), ensure_ascii=False)
 
 
 def ensure_tools_column(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -57,79 +57,176 @@ TOOL_CALL_RENDERERS = {
     "coder-xml": _render_tc_coder_xml,
 }
 
-_HERMES_BLOCK_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
-_XML_FUNC_RE = re.compile(r"<tool_call>\s*<function=([^>\n]*)>\s*(.*?)\s*</function>\s*</tool_call>", re.S)
-# 渲染器在值两侧各加一个换行。只剥这一层，值自身的首尾空格和换行要留下。
-# 用 \s* 会把 write 正文结尾的换行、命令行结尾的空格一起吃掉。
-_XML_PARAM_RE = re.compile(r"<parameter=([^>\n]*)>\n?(.*?)\n?</parameter>", re.S)
-_ANY_TC_RE = re.compile(r"<tool_call>.*?</tool_call>", re.S)
+_HERMES_OPEN_RE = re.compile(r"<tool_call>\s*\{")
+_XML_OPEN_RE = re.compile(r"<tool_call>\s*<function=([^>\n]+)>")
+_XML_CLOSE_RE = re.compile(r"</function>\s*</tool_call>")
+_TC_CLOSE_RE = re.compile(r"\s*</tool_call>")
+_FALLBACK_TC_RE = re.compile(r"<tool_call>.*?</tool_call>", re.S)
+# 渲染器在值两侧各加一个换行。只剥这一层，值自身的首尾空格和换行要留下；
+# 同时锚定闭合标签后紧跟下一个 <parameter=...> 或 </function>，防止参数正文含字面量 </parameter> 时提前截断。
+_XML_PARAM_RE = re.compile(
+    r"<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>(?=\s*(?:<parameter=[^>\n]+>|</function>))",
+    re.S,
+)
 
 
-def _parse_tc_block(block: str) -> Optional[Dict[str, Any]]:
-    """把一个 <tool_call>…</tool_call> 块解析成 {name, arguments}；两种风格都认。失败返回 None。"""
-    m = _HERMES_BLOCK_RE.fullmatch(block.strip()) or re.fullmatch(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", block.strip(), re.S)
-    if m:
+def _tool_param_types(tools_schema: Any = None) -> Dict[str, Dict[str, str]]:
+    from .pilog import DEFAULT_TOOLS
+
+    items = tools_schema
+    if isinstance(items, str):
         try:
-            obj = json.loads(m.group(1))
-            return {
-                "name": obj.get("name"),
-                "arguments": obj.get("arguments", {}),
+            items = json.loads(items)
+        except Exception:  # noqa: BLE001
+            items = None
+    if not isinstance(items, list) or not items:
+        items = DEFAULT_TOOLS
+    out: Dict[str, Dict[str, str]] = {}
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        fn = entry.get("function") if isinstance(entry.get("function"), dict) else entry
+        tname = str(fn.get("name") or "")
+        props = ((fn.get("parameters") or {}).get("properties") or {})
+        if tname and isinstance(props, dict):
+            out[tname] = {
+                str(pk): str((pv or {}).get("type") or "")
+                for pk, pv in props.items()
+                if isinstance(pv, dict)
             }
-        except Exception:
+    return out
+
+
+def _iter_tc_spans(text: str) -> List[tuple[int, int]]:
+    """定位文本中的所有 <tool_call>…</tool_call> 区间（抗参数内部嵌套闭合标签截断）。"""
+    spans: List[tuple[int, int]] = []
+    decoder = json.JSONDecoder()
+    pos = 0
+    n = len(text)
+    while pos < n:
+        idx = text.find("<tool_call>", pos)
+        if idx < 0:
+            break
+        hm = _HERMES_OPEN_RE.match(text, idx)
+        if hm:
+            brace_pos = hm.end() - 1
+            try:
+                _obj, end_json = decoder.raw_decode(text, brace_pos)
+                cm = _TC_CLOSE_RE.match(text, end_json)
+                if cm:
+                    spans.append((idx, cm.end()))
+                    pos = cm.end()
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
+        xm = _XML_OPEN_RE.match(text, idx)
+        if xm:
+            cm = _XML_CLOSE_RE.search(text, xm.end())
+            if cm:
+                spans.append((idx, cm.end()))
+                pos = cm.end()
+                continue
+        fm = _FALLBACK_TC_RE.match(text, idx)
+        if fm:
+            spans.append((idx, fm.end()))
+            pos = fm.end()
+            continue
+        pos = idx + len("<tool_call>")
+    return spans
+
+
+def _parse_tc_block(
+    block: str, param_types: Optional[Dict[str, Dict[str, str]]] = None
+) -> Optional[Dict[str, Any]]:
+    """把一个 <tool_call>…</tool_call> 块解析成 {name, arguments}；两种风格都认。失败返回 None。"""
+    stripped = block.strip()
+    hm = _HERMES_OPEN_RE.match(stripped)
+    if hm:
+        brace_pos = hm.end() - 1
+        try:
+            obj, end_json = json.JSONDecoder().raw_decode(stripped, brace_pos)
+            cm = _TC_CLOSE_RE.fullmatch(stripped, end_json)
+            if cm and isinstance(obj, dict):
+                return {
+                    "name": obj.get("name"),
+                    "arguments": obj.get("arguments", {}),
+                }
+        except Exception:  # noqa: BLE001
             return None
     m = re.fullmatch(
-        r"<tool_call>\s*<function=([^>\n]*)>\s*(.*?)\s*</function>\s*</tool_call>",
-        block.strip(),
+        r"<tool_call>\s*<function=([^>\n]+)>\s*(.*?)\s*</function>\s*</tool_call>",
+        stripped,
         re.S,
     )
     if m:
         name = m.group(1).strip()
+        body = m.group(2)
+        schema_types = (param_types if param_types is not None else _tool_param_types()).get(name, {})
         args: Dict[str, Any] = {}
-        for pm in _XML_PARAM_RE.finditer(m.group(2)):
+        body_with_sentinel = body + "\n</function>"
+        for pm in _XML_PARAM_RE.finditer(body_with_sentinel):
             key = pm.group(1).strip()
             raw = pm.group(2)
-            try:
-                args[key] = json.loads(raw)  # 数字/数组/对象/布尔还原
-            except Exception:
+            ptype = schema_types.get(key, "")
+            if ptype == "string":
                 args[key] = raw
+            else:
+                try:
+                    args[key] = json.loads(raw)  # 非字符串参数按 JSON 还原数字/数组/对象/布尔
+                except Exception:  # noqa: BLE001
+                    args[key] = raw
         return {"name": name, "arguments": args}
     return None
 
 
-def convert_toolcall_text(text: str, target_style: str) -> tuple[str, int, int]:
+def convert_toolcall_text(
+    text: str, target_style: str, tools_schema: Any = None
+) -> tuple[str, int, int]:
     """把文本里所有可解析的 <tool_call> 块重渲染为 target_style。
     返回 (新文本, 转换块数, 不可解析块数——保持原样)。
     注意：只应作用于 assistant 侧文本（gpt/chosen/rejected），不要对 observation 内容使用。"""
     if target_style not in TOOL_CALL_RENDERERS:
         raise ValueError(f"unknown tool_style: {target_style!r} (expected {TOOL_CALL_STYLES})")
     render = TOOL_CALL_RENDERERS[target_style]
+    spans = _iter_tc_spans(text)
+    if not spans:
+        return text, 0, 0
+    param_types = _tool_param_types(tools_schema)
     converted = unparsed = 0
-
-    def _sub(m: re.Match) -> str:
-        nonlocal converted, unparsed
-        tc = _parse_tc_block(m.group(0))
+    out_parts: List[str] = []
+    cursor = 0
+    for start, end in spans:
+        out_parts.append(text[cursor:start])
+        block = text[start:end]
+        tc = _parse_tc_block(block, param_types=param_types)
         if tc is None or not tc.get("name"):
             unparsed += 1
-            return m.group(0)
-        converted += 1
-        return render(tc["name"], tc.get("arguments", {}))
-
-    return _ANY_TC_RE.sub(_sub, text), converted, unparsed
+            out_parts.append(block)
+        else:
+            converted += 1
+            out_parts.append(render(tc["name"], tc.get("arguments", {})))
+        cursor = end
+    out_parts.append(text[cursor:])
+    return "".join(out_parts), converted, unparsed
 
 
 def detect_tool_style(text: str) -> Optional[str]:
     """探测文本中 <tool_call> 块的风格；混合/无法识别返回 None。"""
+    spans = _iter_tc_spans(text)
+    if not spans:
+        return None
     styles = set()
-    for m in _ANY_TC_RE.finditer(text):
-        block = m.group(0)
-        if _HERMES_BLOCK_RE.fullmatch(block.strip()):
+    for start, end in spans:
+        block = text[start:end].strip()
+        tc = _parse_tc_block(block)
+        if not tc or not tc.get("name"):
+            return None
+        if _HERMES_OPEN_RE.match(block):
             styles.add("hermes-json")
-        elif _XML_FUNC_RE.fullmatch(block.strip()):
+        elif _XML_OPEN_RE.match(block):
             styles.add("coder-xml")
         else:
             return None
-    if not styles:
-        return None
     return styles.pop() if len(styles) == 1 else None
 
 
@@ -154,7 +251,7 @@ def to_openai(
         )
         thinking = (thinking or "").strip()
         text = (m.get("text") or "").strip()
-        content = f"<think>\n{thinking}\n</think>\n\n{text}".strip() if thinking else text
+        content = f"<think>\n{thinking}\n</think>\n{text}".strip() if thinking else text
         out: Dict[str, Any] = {"role": "assistant", "content": content}
         if thinking:
             out["reasoning_content"] = thinking
@@ -195,7 +292,7 @@ def to_sharegpt(
     )
     thinking = (thinking or "").strip()
     text = (m.get("text") or "").strip()
-    prefix = f"<think>\n{thinking}\n</think>\n\n" if thinking else ""
+    prefix = f"<think>\n{thinking}\n</think>\n" if thinking else ""
     if m.get("tool_calls"):
         render = TOOL_CALL_RENDERERS[tool_style]
         blocks = [render(tc["name"], tc.get("arguments", {})) for tc in m["tool_calls"]]
@@ -298,13 +395,14 @@ def convert_sharegpt_row(row: Dict[str, Any], style: str) -> tuple[int, int]:
     返回 (转换块数, 无法识别的块数)。
     """
     converted = unparsed = 0
+    tools_schema = row.get("tools")
 
     def _take(holder: Dict[str, Any]) -> None:
         nonlocal converted, unparsed
         value = holder.get("value")
         if not isinstance(value, str) or "<tool_call>" not in value:
             return
-        new, c, u = convert_toolcall_text(value, style)
+        new, c, u = convert_toolcall_text(value, style, tools_schema=tools_schema)
         holder["value"] = new
         converted += c
         unparsed += u
@@ -319,7 +417,7 @@ def convert_sharegpt_row(row: Dict[str, Any], style: str) -> tuple[int, int]:
         if isinstance(obj, dict) and obj.get("from") == "gpt":
             _take(obj)
         elif isinstance(obj, str) and "<tool_call>" in obj:
-            new, c, u = convert_toolcall_text(obj, style)
+            new, c, u = convert_toolcall_text(obj, style, tools_schema=tools_schema)
             row[key] = new
             converted += c
             unparsed += u

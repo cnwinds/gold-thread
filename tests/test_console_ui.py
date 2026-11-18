@@ -138,7 +138,8 @@ class ConsoleWorkspaceTests(unittest.TestCase):
             "pi / Cursor 源目录和已冻结的历史交付包不会被修改。",
         ):
             self.assertIn(snippet, HTML)
-        self.assertIn('!running ? sessionDeleteButton(sid)', HTML)
+        self.assertIn('!busy ? sessionDeleteButton(sid)', HTML)
+        self.assertNotIn('!running ? sessionDeleteButton(sid)', HTML)
 
     def test_drawer_load_failures_surface_error_instead_of_hanging(self) -> None:
         # 原始、黄金、数据草稿、Build 和历史文件五个抽屉都必须结束 loading 并显示错误。

@@ -319,6 +319,8 @@ def build_delivery_zip(
     )
     manifest["package"] = zip_name
     manifest["layout"] = _PACK_ROOT
+    if prepared.weighted_expansion:
+        manifest["weighted_expansion"] = prepared.weighted_expansion
     manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
     _emit("[package] 正在统计 token 长度分布…")
     length_stats = build_length_stats(

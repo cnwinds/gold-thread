@@ -98,6 +98,29 @@ DEFAULT_TOOLS = [
 ]
 
 
+def resolve_system_prompt(
+    cfg: Optional[Dict[str, Any]] = None,
+    session: Optional[Dict[str, Any]] = None,
+) -> str:
+    """解析会话使用的 system prompt：支持 domain 配置自定义或沿用源会话自身的 system 消息。"""
+    dom = (cfg or {}).get("domain") or {}
+    if dom.get("use_session_system_prompt") and isinstance(session, dict):
+        for m in session.get("messages") or []:
+            if isinstance(m, dict) and m.get("role") == "system" and str(m.get("content") or "").strip():
+                return str(m["content"]).strip()
+    custom = str(dom.get("system_prompt") or "").strip()
+    return custom or DEFAULT_SYSTEM_PROMPT
+
+
+def resolve_tools(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """解析数据集声明的工具 Schema 列表：domain.tools 非空时优先，否则回退 DEFAULT_TOOLS。"""
+    dom = (cfg or {}).get("domain") or {}
+    custom = dom.get("tools")
+    if isinstance(custom, list) and custom:
+        return copy.deepcopy(custom)
+    return copy.deepcopy(DEFAULT_TOOLS)
+
+
 def _text_from_content(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -488,7 +511,7 @@ def build_flow(
         {
             "id": f"sys_{session_id}",
             "role": "system",
-            "content": DEFAULT_SYSTEM_PROMPT,
+            "content": resolve_system_prompt(cfg, session),
             "timestamp": session.get("timestamp", ""),
         }
     ]

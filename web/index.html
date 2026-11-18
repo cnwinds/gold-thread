@@ -2506,7 +2506,7 @@ function renderSessionActionsFoot(kind, sid) {
       ${kind === "gold"
         ? `<button type="button" class="ghost slim" id="rawOpenRawBtn">原始数据</button><button type="button" class="ghost slim" id="drawerJsonBtn">标注 JSON</button>`
         : RAW_DRAWER.adopted ? `<button type="button" class="ghost slim" id="rawViewGoldBtn">黄金数据</button>` : ""}
-      ${!running ? sessionDeleteButton(sid) : ""}
+      ${!busy ? sessionDeleteButton(sid) : ""}
     </div>`;
 }
 

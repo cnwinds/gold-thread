@@ -21,6 +21,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 OBS_ROLES = frozenset({"observation", "tool", "function"})
 ASSISTANT_ROLES = frozenset({"gpt", "assistant"})
+_DEFAULT_TOKENIZER_ID = "Qwen/Qwen2.5-0.5B"
+TOKENIZER_ID = _DEFAULT_TOKENIZER_ID
+
+
+def resolve_tokenizer_id(explicit: Optional[str] = None) -> str:
+    """--tokenizer 优先，其次 GT_LENGTH_TOKENIZER，默认 HuggingFace ID。"""
+    if explicit is not None and explicit.strip():
+        return explicit.strip()
+    raw = os.environ.get("GT_LENGTH_TOKENIZER", "").strip()
+    return raw or _DEFAULT_TOKENIZER_ID
 SOFT_LIMIT_NORMAL = 500
 SOFT_LIMIT_DUMP = 200
 DUMP_HEAD_LINES = 20

@@ -28,8 +28,8 @@ from .common.store import (
 STAGE = "stage3"
 
 
-def _tools_json(flow_messages: List[Dict[str, Any]]) -> str:
-    return default_tools_json()
+def _tools_json(flow_messages: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None) -> str:
+    return default_tools_json(cfg)
 
 
 def _pick_split(projects: List[str], cfg: Dict[str, Any], persist: bool = True) -> Dict[str, str]:
@@ -537,8 +537,9 @@ def evaluate_session_synthesis(
         "weighted_steps": 0,
     }
 
-    tools_str = _tools_json(msgs)
+    tools_str = _tools_json(msgs, cfg)
     tools_obj = json.loads(tools_str)
+    re_patho = bool((cfg.get("domain") or {}).get("enable_re_pathologies", True))
 
     for rank, idx in enumerate(asst_idx):
         m = msgs[idx]
@@ -554,7 +555,9 @@ def evaluate_session_synthesis(
             thinking = compact_thinking(thinking, max_think_target)
 
         raw_q = m.get("raw_quality") or m.get("quality") or {}
-        eff_q = evaluate_effective_step(m, cwd, override_thinking=thinking, max_think_chars=4500)
+        eff_q = evaluate_effective_step(
+            m, cwd, override_thinking=thinking, max_think_chars=4500, enable_re_pathologies=re_patho
+        )
 
         hl_map = {h.get("msg_id"): h for h in (mrep.get("highlights") or [])}
         if mid in hl_map:

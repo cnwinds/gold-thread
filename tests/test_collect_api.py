@@ -85,13 +85,13 @@ class CollectConflictTests(unittest.TestCase):
         with sa.JOBS_LOCK:
             sa.JOBS[running.id] = running
         with patch("server.app.task_registry.register_job"), patch(
-            "server.app.threading.Thread"
+            "server.app._launch_job_thread"
         ) as thr:
-            thr.return_value = MagicMock()
             res = TestClient(app).post(
                 "/api/collect",
                 json={"source": "pi", "ids": ["other"], "analyze": False},
             )
+            thr.assert_not_called()
         self.assertEqual(200, res.status_code, res.text)
         body = res.json()
         self.assertEqual("queued", body["status"])

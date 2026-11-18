@@ -160,12 +160,40 @@ def cutoffs_for_root(root: Path) -> Tuple[int, int]:
 _TOKENIZER_CACHE: Dict[str, Tuple[Optional[Any], str]] = {}
 
 
+class _FastTokenizerAdapter:
+    """将 tokenizers.Tokenizer 适配为 length_gate 统一使用的 encode / decode 接口。"""
+
+    def __init__(self, backend: Any) -> None:
+        self._backend = backend
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> List[int]:
+        out = self._backend.encode(text or "", add_special_tokens=add_special_tokens)
+        return list(out.ids) if hasattr(out, "ids") else list(out)
+
+    def decode(self, ids: Sequence[int], skip_special_tokens: bool = True) -> str:
+        return self._backend.decode([int(i) for i in ids], skip_special_tokens=skip_special_tokens)
+
+
 def load_gate_tokenizer(
     model_id: str = TOKENIZER_ID,
 ) -> Tuple[Optional[Any], str]:
-    """返回 (tokenizer, 来源说明)。失败时 tokenizer=None，来源里写清原因。"""
+    """返回 (tokenizer, 来源说明)。优先复用本地离线分词器（与 seqlength 同源），不静默发起外网下载。"""
+    import os
+
     if model_id in _TOKENIZER_CACHE:
         return _TOKENIZER_CACHE[model_id]
+
+    # 1) 优先使用仓库本地分词器或显式路径（与 seqlength.py 保持单一真源，避免启动联网卡死）
+    explicit_local = model_id if (model_id and Path(model_id).exists()) else None
+    if model_id == TOKENIZER_ID or explicit_local is not None:
+        fast_tok, fast_src = sl.find_tokenizer(explicit=explicit_local)
+        if fast_tok is not None:
+            result: Tuple[Optional[Any], str] = (_FastTokenizerAdapter(fast_tok), fast_src)
+            _TOKENIZER_CACHE[model_id] = result
+            return result
+
+    # 2) 回退本地 HuggingFace 缓存（默认禁止外网拉取与远程代码执行，需联网可显式设 GT_ALLOW_REMOTE_TOKENIZER=1）
+    allow_remote = os.environ.get("GT_ALLOW_REMOTE_TOKENIZER", "").strip() == "1"
     try:
         from transformers import AutoTokenizer  # type: ignore
     except Exception as exc:  # noqa: BLE001
@@ -173,7 +201,11 @@ def load_gate_tokenizer(
         _TOKENIZER_CACHE[model_id] = result
         return result
     try:
-        tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        tok = AutoTokenizer.from_pretrained(
+            model_id,
+            local_files_only=not allow_remote,
+            trust_remote_code=allow_remote,
+        )
     except Exception as exc:  # noqa: BLE001
         result = (None, f"skip:tokenizer_load_failed:{model_id}:{type(exc).__name__}:{exc}")
         _TOKENIZER_CACHE[model_id] = result

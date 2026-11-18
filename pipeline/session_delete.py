@@ -46,8 +46,8 @@ def _inside(path: Path, root: Path) -> Path:
 def _id_matches(value: Any, sid: str) -> bool:
     if value is None:
         return False
-    text = str(value)
-    return text == sid or sid in text.split("::")
+    base = str(value).split("#w", 1)[0]
+    return base == sid or sid in base.split("::")
 
 
 def _row_belongs(row: Dict[str, Any], sid: str) -> bool:
@@ -188,11 +188,31 @@ def _update_state(tx: _Transaction, state: Path, sid: str) -> None:
 
     draft_path = state / "dataset_draft.json"
     draft = _read_json(draft_path)
-    if isinstance(draft, dict) and isinstance(draft.get("decisions"), dict):
-        decisions = draft["decisions"]
-        kept = {k: v for k, v in decisions.items() if not _id_matches(k, sid)}
-        if len(kept) != len(decisions):
-            draft["decisions"] = kept
+    if isinstance(draft, dict):
+        draft_changed = False
+        if isinstance(draft.get("decisions"), dict):
+            decisions = draft["decisions"]
+            kept = {k: v for k, v in decisions.items() if not _id_matches(k, sid)}
+            if len(kept) != len(decisions):
+                draft["decisions"] = kept
+                draft_changed = True
+        if isinstance(draft.get("scope_decisions"), dict):
+            scopes = draft["scope_decisions"]
+            target_keys = {f"session:{sid}", f"session_sft:{sid}", f"session_dpo:{sid}"}
+            kept_scopes = {
+                k: v for k, v in scopes.items()
+                if k not in target_keys and not _id_matches(k, sid)
+            }
+            if len(kept_scopes) != len(scopes):
+                draft["scope_decisions"] = kept_scopes
+                draft_changed = True
+        split_plan = draft.get("split_plan")
+        if isinstance(split_plan, dict) and isinstance(split_plan.get("session_assignments"), dict):
+            sess_assign = split_plan["session_assignments"]
+            if sid in sess_assign:
+                sess_assign.pop(sid, None)
+                draft_changed = True
+        if draft_changed:
             tx.write_json(draft_path, draft)
 
     for path in (state / "inbox").glob(f"**/{sid}.jsonl") if (state / "inbox").exists() else []:

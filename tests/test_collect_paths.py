@@ -92,12 +92,13 @@ class CollectPathTests(unittest.TestCase):
             session.write_text('{"type":"session","id":"j1"}\n', encoding="utf-8")
             link = root / "--D--fake-project--"
             root.mkdir()
-            subprocess.run(
+            proc = subprocess.run(
                 ["cmd", "/c", "mklink", "/J", str(link), str(real)],
-                check=True,
                 capture_output=True,
                 text=True,
             )
+            if proc.returncode != 0:
+                self.skipTest(f"当前运行环境禁止创建 NTFS Junction: {proc.stderr or proc.stdout}")
             self.assertTrue(link.exists())
             # resolve 会跳到 real，旧逻辑会误判超根
             self.assertNotEqual(session.resolve(), (link / "chat.jsonl").absolute())
@@ -222,12 +223,13 @@ class CollectPathTests(unittest.TestCase):
             )
             link = root / "--D--crack_test-teacher-com.pank0.usagishima_1.9.2--"
             root.mkdir()
-            subprocess.run(
+            proc = subprocess.run(
                 ["cmd", "/c", "mklink", "/J", str(link), str(real)],
-                check=True,
                 capture_output=True,
                 text=True,
             )
+            if proc.returncode != 0:
+                self.skipTest(f"当前运行环境禁止创建 NTFS Junction: {proc.stderr or proc.stdout}")
             catalog = f"{link.name}/{session.name}"
             cfg = {"paths": {"sessions_dir": str(root), "data_dir": str(tmp_path / "data")}}
             captured: dict = {}

@@ -7,11 +7,15 @@ data/00_state/
 data/01_raw/
 data/02_gold/
 
-# ── 训练数据文件（体积大，由 stage3 重新生成）───────────────────────
+# ── 训练数据文件与运行期临时产物（由 stage3 / 交付流程生成）─────────
 data/03_train/*.jsonl
 data/03_train/logs/
 data/03_train/*.log
 data/03_train/delivery/
+data/03_train/candidates/
+data/03_train/exports/
+data/03_train/releases/
+data/03_train/*.orig.*
 
 # ── 训练产物 ──────────────────────────────────────────────────────
 output/
@@ -39,8 +43,12 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
-# ���� �������� / ��ʱ / 04 �������� ��������������������������������������������������������������������
+
+# ── 本机缓存 / 临时调试 / 04 发布产物 ─────────────────────────────
 .cache/
+.scratch/
 .tokenizer/
 _tmp*/
+*_tmp.txt
+tools/_*.py
 data/04_release/

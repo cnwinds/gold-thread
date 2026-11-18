@@ -273,7 +273,7 @@ def write_handoff(
 统计：
 
 - 阶段权重分布（train）：{", ".join(f"{k} {_fmt(v)}" for k, v in stage_counts.items()) or "—"}
-  （`highlight` = 模型判定的关键决策步，权重最高；若你的 collator 支持 `metadata.sample_weight` 可直接用）
+  （`highlight` = 模型判定的关键决策步，权重最高；`sft.train.lf.jsonl` 已按 `metadata.sample_weight` 确定性展开）
 - 并行工具调用加权：`×{(cfg.get("synth") or {}).get("parallel_weight", 1.5)}`
   （一步里 >=2 个 `tool_call` 的步；`highlight` 不参与，避免双重计分。
   实测 train 并行步占比远低于 eval，不加权模型会退化成「一次一个调用」，见 `tools/check_parallel_calls.py`）
@@ -444,7 +444,7 @@ echo "使用代理: $GH_PROXY"
 
 # 1) git 全局改写：之后所有 https://github.com/... 自动走代理
 git config --global url."$GH_PROXY/https://github.com/".insteadOf "https://github.com/"
-git config --global --get-regexp 'url\..*insteadof'   # 确认写入
+git config --global --get-regexp 'url\\..*insteadof'   # 确认写入
 
 # 2) PyPI 镜像（清华，国内稳定）
 mkdir -p ~/.pip
@@ -642,7 +642,7 @@ PY
 
 - ShareGPT：`conversations: [{{from, value}}]`
   `system` 工程纪律提示词 / `human` 根任务 / `gpt` 助手步 / `observation` 工具输出
-- 助手步内容：` thinking…推理…` + `<tool_call>{{"name":"bash","arguments":{{...}}}}</tool_call>`
+- 助手步内容：`<think>…推理…</think>` + `<tool_call>{{"name":"bash","arguments":{{...}}}}</tool_call>`
 - `tools` 列是 JSON 字符串（5 个函数声明）。框架不支持时删掉即可（见 `check_data.py` 的 `--drop-tools`）
 - 单步窗口结构：`[system, 根任务] + 最近 N 步历史 + 目标步`，
   **历史步 thinking 已剥离，只有目标步带 thinking**
@@ -654,7 +654,7 @@ LLaMA-Factory 为这个模型族提供了**专用模板**：
 {_table([
     ["模板名", "`qwen3_8`", "`template_class=Qwen38ReasoningTemplate`，`preserve_thinking=True`，内置 `tool_format=qwen3_8`"],
     ["坑 1", "不要设 `tool_format`", "该模板内置工具格式，另设会直接抛 ValueError"],
-    ["坑 2", "不要用 `qwen3`", "通用模板不理解 qwen3_8 的推理段切分，可能重复注入 ` thinking`"],
+    ["坑 2", "不要用 `qwen3`", "通用模板不理解 qwen3_8 的推理段切分，可能重复注入 `<think>`"],
     ["坑 3", "多模态路径", "模板带 mm_plugin，纯文本数据集应可跑；若报缺 images 字段再按 §5.2 处理"],
 ], ["要点", "取值", "说明"])}
 
@@ -669,7 +669,7 @@ python -c "from llamafactory.data.template import TEMPLATES;print([k for k in TE
 
 ```bash
 python check_data.py --model /data/models/Qwen3.8-27B --template qwen3_8
-# 期望：每条样本 ` thinking` 与 `` 各出现 1 次；tool_call 数与目标步一致；
+# 期望：每条样本 `<think>` 与 `</think>` 各出现 1 次；tool_call 数与目标步一致；
 #       渲染后 token 数与 §2 的估算吻合
 ```
 

@@ -52,9 +52,14 @@ class DpoReviewProgressTests(unittest.TestCase):
         lines: List[str] = []
         call_count = {"n": 0}
 
-        def fake_call(*_a, **_k):
+        def fake_call(_system, _schema, payload, *_a, **_k):
             call_count["n"] += 1
-            return {"pairs": []}  # 全部按 good 落缓存
+            return {
+                "pairs": [
+                    {"sample_id": p["sample_id"], "verdict": "good", "reason": "偏好成立"}
+                    for p in payload["pairs"]
+                ]
+            }
 
         with patch("pipeline.judge._call", side_effect=fake_call), patch(
             "pipeline.judge._verdict_cache_path",
@@ -107,11 +112,14 @@ class DpoReviewProgressTests(unittest.TestCase):
         self.assertEqual("drop", cached["dpo::s1::p1"]["verdict"])
         self.assertEqual("仅风格差异", cached["dpo::s1::p1"]["reason"])
 
-    def test_review_dpo_omitted_good_gets_default_reason(self):
+    def test_review_dpo_good_with_empty_reason_gets_default_reason(self):
         pairs = [_pair(0)]
         cache_path = self.state / "data" / "00_state" / "dpo_review_cache.json"
 
-        with patch("pipeline.judge._call", return_value={"pairs": []}), patch(
+        def fake_call(_system, _schema, payload, *_a, **_k):
+            return {"pairs": [{"sample_id": p["sample_id"], "verdict": "good", "reason": ""} for p in payload["pairs"]]}
+
+        with patch("pipeline.judge._call", side_effect=fake_call), patch(
             "pipeline.judge._verdict_cache_path", return_value=cache_path,
         ), patch("pipeline.judge._model", return_value="test-model"), patch(
             "pipeline.judge.enabled", return_value=True
@@ -121,6 +129,30 @@ class DpoReviewProgressTests(unittest.TestCase):
 
         self.assertEqual("good", cached["dpo::s1::p0"]["verdict"])
         self.assertEqual("偏好成立", cached["dpo::s1::p0"]["reason"])
+
+    def test_review_dpo_omitted_pair_marks_review_failed_not_silent_good(self):
+        pairs = [_pair(0), _pair(1)]
+        cache_path = self.state / "data" / "00_state" / "dpo_review_cache.json"
+
+        def fake_call(_system, _schema, payload, *_a, **_k):
+            # 模型仅返回 p0，漏掉了 p1 -> 绝不静默当 good，拆单重试仍漏返则记 review_failed
+            out = []
+            for p in payload["pairs"]:
+                if p["sample_id"].endswith("p0"):
+                    out.append({"sample_id": p["sample_id"], "verdict": "good", "reason": "真实修正"})
+            return {"pairs": out}
+
+        with patch("pipeline.judge._call", side_effect=fake_call), patch(
+            "pipeline.judge._verdict_cache_path", return_value=cache_path,
+        ), patch("pipeline.judge._model", return_value="test-model"), patch(
+            "pipeline.judge.enabled", return_value=True
+        ):
+            out_map = judge.review_dpo(pairs, cfg=self.cfg, log=lambda _m: None)
+            cached = judge.cached_dpo_verdicts(pairs, cfg=self.cfg)
+
+        self.assertEqual("good", cached["dpo::s1::p0"]["verdict"])
+        self.assertEqual("review_failed", out_map["dpo::s1::p1"]["verdict"])
+        self.assertEqual("review_failed", cached["dpo::s1::p1"]["verdict"])
 
     def test_evaluate_dpo_pending_uses_catalog_step_id(self):
         root = self.state / "data"
@@ -138,8 +170,13 @@ class DpoReviewProgressTests(unittest.TestCase):
             "synth": {"eval_ratio": 0.0, "seed": 1},
         }
 
-        def fake_call(*_a, **_k):
-            return {"pairs": []}
+        def fake_call(_system, _schema, payload, *_a, **_k):
+            return {
+                "pairs": [
+                    {"sample_id": p["sample_id"], "verdict": "good", "reason": "ok"}
+                    for p in payload["pairs"]
+                ]
+            }
 
         with patch("pipeline.judge._call", side_effect=fake_call), patch(
             "pipeline.stage3_synth.synthesize_dpo_candidates",

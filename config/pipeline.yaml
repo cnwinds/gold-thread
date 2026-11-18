@@ -221,7 +221,7 @@ synth:
   # 理由：实测 train 并行步只有 5.3%、eval 26.2%（并行步几乎都在被整包留出的 meowdoku），
   # 不加权模型会退化成「一次一个调用」。只做 highlight 以外的加成，不参与 highlight 的模型给分。
   parallel_weight: 1.5
-  # 历史步是否保留  thinking：
+  # 历史步是否剥离 <think>…</think>：
   #   true （默认）= 历史只留 tool_calls + 工具结果，目标步才有思考
   #   false      = 历史也保留思考。实测 pi + vLLM 的真实上下文是「轮内多步调用时思考全带、
   #                跨轮也带（除非该轮回复为空白且无 tool_calls 被整条丢弃）」，

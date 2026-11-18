@@ -59,6 +59,7 @@ def analyze_step_quality(
     tool_results: List[Dict[str, Any]],
     session_cwd: str = "",
     max_think_chars: int = 4500,
+    enable_re_pathologies: bool = True,
 ) -> Dict[str, Any]:
     pathologies: List[str] = []
     strengths: List[str] = []
@@ -72,22 +73,22 @@ def analyze_step_quality(
         pathologies.append("over_rumination_length")
     if doubt_count >= 8:
         pathologies.append("over_rumination_doubt_loop")
-    if think_str and MENTAL_HEX_CHECK_REGEX.search(think_str):
-        pathologies.append("mental_hex_checkmark")
 
     combined_cmd = " ".join(json.dumps(tc.get("arguments", {}), ensure_ascii=False) for tc in tool_calls)
-    if HALLUCINATED_SEARCH_REGEX.search(think_str) or HALLUCINATED_SEARCH_REGEX.search(combined_cmd):
-        pathologies.append("hallucinated_source_search")
-
-    if session_cwd and "crack" in session_cwd.lower():
-        cwd_norm = session_cwd.replace("\\", "/").rstrip("/").lower()
-        cwd_name = cwd_norm.split("/")[-1]
-        base = cwd_name.split("-")[0]
-        for sib in CROSS_DIR_REGEX.findall(combined_cmd + " " + think_str):
-            sib_low = sib.lower().rstrip("/")
-            if sib_low != cwd_name and sib_low.startswith(base):
-                pathologies.append(f"cross_dir_violation:{sib}")
-                break
+    if enable_re_pathologies:
+        if think_str and MENTAL_HEX_CHECK_REGEX.search(think_str):
+            pathologies.append("mental_hex_checkmark")
+        if HALLUCINATED_SEARCH_REGEX.search(think_str) or HALLUCINATED_SEARCH_REGEX.search(combined_cmd):
+            pathologies.append("hallucinated_source_search")
+        if session_cwd and "crack" in session_cwd.lower():
+            cwd_norm = session_cwd.replace("\\", "/").rstrip("/").lower()
+            cwd_name = cwd_norm.split("/")[-1]
+            base = cwd_name.split("-")[0]
+            for sib in CROSS_DIR_REGEX.findall(combined_cmd + " " + think_str):
+                sib_low = sib.lower().rstrip("/")
+                if sib_low != cwd_name and sib_low.startswith(base):
+                    pathologies.append(f"cross_dir_violation:{sib}")
+                    break
 
     error_count = sum(1 for tr in tool_results if tr.get("isError"))
     combined_out = "\n".join(tr.get("content", "") for tr in tool_results)
@@ -150,6 +151,7 @@ def evaluate_effective_step(
     session_cwd: str = "",
     override_thinking: Optional[str] = None,
     max_think_chars: int = 4500,
+    enable_re_pathologies: bool = True,
 ) -> Dict[str, Any]:
     """评估步骤在应用脚本提纯、模型重写或人工编辑后的有效质量。
 
@@ -164,6 +166,7 @@ def evaluate_effective_step(
         tool_results=msg.get("tool_results", []),
         session_cwd=session_cwd,
         max_think_chars=max_think_chars,
+        enable_re_pathologies=enable_re_pathologies,
     )
     raw_q = msg.get("raw_quality") or msg.get("quality") or eff_q
     raw_pathos = set(raw_q.get("pathologies", []))
