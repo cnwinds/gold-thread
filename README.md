@@ -39,14 +39,27 @@ pi / Cursor 会话
 ```bash
 cd gold-thread          # 仓库根目录，下文命令均在此执行
 
+# 1. 启动本地留痕与血缘可观测看板
 python serve.py                 # 打开 http://127.0.0.1:8765
 python serve.py --port 9000 --no-browser
 
-# 或纯命令行
-python -m pipeline.run stage1            # 增量
-python -m pipeline.run stage2 --force    # 强制重建
-python -m pipeline.run all               # 三阶段顺序跑
-python -m pipeline.run review            # 模型评审（正例 + 待定）
+# 2. Agent-First 统一确定性 CLI（详见 skills/goldthread/SKILL.md）
+python gt.py inspect corpus --json                                       # 语料库全景摘要
+python gt.py inspect source --dir "D:\train-project\teacher" --unadopted # 扫描外部未入库轨迹
+python gt.py eval pack latest --json                                     # 训练包全身体检
+python gt.py eval diff d9dbbbd1 308e6497                                 # 两版交付包指标对比
+python gt.py curate adopt --from "..." --select <sids> --reason "..."    # 采纳会话并记账本
+python gt.py curate steps --file decisions.json --reason "..."           # 写入步级决策并重算黄金层
+python gt.py build --reason "构建新版训练集"                              # 纯确定性构建 + 硬门禁核验
+python gt.py gate check latest                                           # 单独校验 8 项硬性门禁
+python gt.py pack --profile qwen-xml --reason "打包交付 zip"              # 软压缩长度闸门 + 出包
+python gt.py report publish --title "..." --md report.md --after <hash>  # 归档评估报告至看板首页
+python gt.py ledger list --limit 50                                      # 查看全链路操作审计账本
+
+# 3. 兼容底层管线入口（纯确定性运行；可选小模型初筛走 gt assist turns|judge|dpo）
+python -m pipeline.run stage1
+python -m pipeline.run stage2 --force
+python -m pipeline.run stage3
 ```
 
 模型调用走 pi 自己的 `~/.pi/agent/models.json`（provider / baseUrl / apiKey），
@@ -72,24 +85,35 @@ python -m pipeline.run review            # 模型评审（正例 + 待定）
 ```
 gold-thread/
 ├── CONTEXT.md                    # 产品/领域词汇与控制台需求（Agent 先读）
-├── config/pipeline.yaml          # 全部规则（准入、标签、回合、提纯、合成）
+├── gt.py                         # Agent-First CLI 快捷入口（等价 python -m goldthread）
+├── skills/goldthread/SKILL.md    # 给模型看的标准化工具手册与闭环 SOP
+├── config/pipeline.yaml          # 全部规则（准入、标签、回合、提纯、合成、导出 profile）
+├── goldthread/                   # Agent-First 工具原语层（零隐式 LLM + 自动写 ledger）
+│   ├── cli.py                    # 统一命令行路由与 --json 输出
+│   ├── ledger.py                 # 统一操作审计账本（00_state/ledger.jsonl）
+│   ├── inspect_tools.py          # 源目录 / 语料库 / 会话 / 单步分级摘要检查器
+│   ├── eval_tools.py             # 训练包契约体检、学生实测归因、包间 Diff 引擎
+│   ├── curate_tools.py           # 采纳、删会话、回合/步级/DPO 决策落盘执行器
+│   ├── build_tools.py            # 纯确定性构建、8 项硬性门禁 (Gate)、打包器
+│   ├── report_tools.py           # 评估报告归档与版本演进关联
+│   └── assist_tools.py           # 显式可选的小模型初筛子命令
 ├── pipeline/
 │   ├── collect.py                # pi / Cursor 采集入口
 │   ├── common/                   # pilog 解析 · quality 检测 · llm 调用 · format 转换
-│   ├── stage1_extract.py         # 原始提取（正/负例分目录）
-│   ├── stage2_gold.py            # 黄金提纯（折叠/剪枝/去噪）
-│   ├── stage3_synth.py           # 训练数据合成
-│   ├── turnclassify.py           # 模型：回合语义分类
-│   ├── review.py                 # 模型：黄金裁决 + 长 CoT 重写
-│   └── run.py                    # CLI
-├── server/app.py                 # FastAPI 控制台
-├── web/index.html                # 单页前端（无构建）
+│   ├── stage1_extract.py         # 原始提取与规范 game::<slug> 归组
+│   ├── stage2_gold.py            # 黄金提纯（折叠/剪枝/结构化决策执行）
+│   ├── stage3_synth.py           # 训练数据合成与不可变 Build 固化
+│   ├── turnclassify.py           # 显式可选：回合语义分类辅助
+│   ├── judge.py                  # 显式可选：步级与 DPO 初筛辅助
+│   └── run.py                    # 底层阶段执行器
+├── server/app.py                 # FastAPI 留痕看板与数据血缘服务
+├── web/index.html                # 单页可观测看板前端（无构建）
 └── data/
-    ├── 00_state/                 # 增量状态、标签覆盖、运行历史、LLM 缓存
-    ├── 01_raw/                   # positive / negative / pending
+    ├── 00_state/                 # 操作账本 ledger.jsonl、决策、草稿、增量状态与缓存
+    ├── 01_raw/                   # positive / negative / pending 源副本与 .meta.json
     ├── 02_gold/                  # sessions / annotations / rejects / dpo_pairs
-    └── 03_train/                 # SFT / DPO / 诊断 / dataset_info / stats
-    └── 04_release/               # 冻结发布 / delivery zip / 训练 packs（与 03_train 工作区分离）
+    ├── 03_train/                 # 当前工作区 SFT / DPO / 诊断 / dataset_info / stats
+    └── 04_release/               # 不可变 builds/ · delivery/ zip · reports/ 评估报告
 ```
 
 `01_raw` 里的 `.jsonl` 是源文件**逐字节副本**，所有加工信息都在同名 `.meta.json`
@@ -188,16 +212,17 @@ LLaMA-Factory 的 `SharegptDatasetConverter` 要求严格 `user/assistant` 交�
 切分按 `project_group` 整包留出（默认 `eval_ratio` 取项目数比例），
 避免同一游戏的相邻步泄漏到验证集。
 
-## 控制台
+## 控制台（人类可观测性与留痕审阅中心）
 
-- **概览**：三阶段状态、标签分布、项目与健康度
-- **原始数据**：采集（pi/Cursor）· 已加入会话库 · 分析/重新分析 · 改标签 · 回合清洗
-- **黄金数据**：每会话 SFT 窗口 vs DPO 对去向 · 质量报告 · 血缘
-- **训练数据**：将要生成的数据集 · 样本回到 sid
-- **交付**：选 export profile 打包最新 Build · 历史 zip（说明 / 长度分布 / 按格式下载 / 删除）
-- **配置**：在线编辑 `pipeline.yaml`
+- **演进评估与精炼工作台 `#overview`**：最新 Build / 交付包快照、**评估报告与版本演进流**（阅读完整报告与包间指标对比）、**最近操作审计流**、三阶段漏斗与病态分布
+- **原始数据 `#raw`**：采集（pi/Cursor）· 已加入会话库 · 分析/重新分析 · 回合清洗 · 一键跳转三态血缘
+- **黄金数据与血缘 `#gold`（`#sessions`）**：每会话 SFT 窗口 vs DPO 对去向 · **三态血缘 Diff（回合折叠 + 原文/黄金改写/剪枝对照 + 会话账本）** · 应急步级/会话停用开关
+- **训练数据 `#train`（`#dataset`）**：按 `Train / Eval / 已停用` 树状检视全部样本 · 构建不可变 Build
+- **账本与任务 `#tasks`（`#ledger`）**：统一检索 **CLI + Web 全量操作审计账本（`ledger.jsonl`）** 与后台任务实时日志
+- **交付 `#runs`（`#packs`）**：选 export profile 打包最新 Build · 历史 zip（**硬性门禁体检** / 说明 / 长度分布 / **包间指标 Diff 对比** / 按格式下载 / 删除）
+- **配置 `#config`**：在线检视与编辑 `pipeline.yaml`
 
-（无独立「审核」侧栏；历史 `review.py` CLI 仍可跑模型评审，见 `python -m pipeline.run review`。）
+（无独立「审核」侧栏；策展判断统一由主模型经 `gt curate` 写入账本，控制台仅保留应急停用开关。）
 
 ## 配置要点
 
@@ -205,11 +230,11 @@ LLaMA-Factory 的 `SharegptDatasetConverter` 要求严格 `user/assistant` 交�
 paths.data_dir: "data"                          # 相对仓库根目录，可改绝对路径
 paths.sessions_dir: "~/.pi/agent/sessions"       # 支持 ~ 与绝对路径
 admission.workspace_prefixes: ["--d--crack-"]   # 新项目自动准入
-labeling.positive_model_patterns: ["^deepseek", "^glm-"]
+labeling.positive_model_patterns: ["^deepseek", "^glm-", "^minimax"]
 labeling.negative_model_patterns: ["qwen"]
-turns.use_model: true            # 关掉则纯正则（更快但易误判）
+turns.use_model: false           # 默认纯确定性规则，需要小模型初筛用 gt assist turns
 gold.min_gold_steps: 10          # 低于此步数不进黄金
-review.enabled: false            # 打开后 run_review 默认处理正例
+judge.enabled: false             # 默认纯确定性，主模型经 gt curate steps 写决策
 synth.window_turns: 8            # 单步窗口历史长度
 synth.eval_ratio: 0.25           # 按项目整包留出验证集
 ```
@@ -218,5 +243,4 @@ synth.eval_ratio: 0.25           # 按项目整包留出验证集
 
 - 工具输出里的乱码（Windows GBK 输出被记为 UTF-8）当前原样保留，未做编码修复；
 - 模型回合分类/评审对长会话会做均匀抽样，极端情况下可能漏掉局部问题；
-- 训练数据仍以「会话内可观测的成功证据」为准，没有执行级回放验证；
-- 旧的单文件脚本 `sync_pi_datasets.py` 与 `output/` 保留作为对照，不再演进。
+- 训练数据仍以「会话内可观测的成功证据」为准，没有执行级回放验证。

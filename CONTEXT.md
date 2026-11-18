@@ -2,13 +2,13 @@
 
 本文件是 **领域词汇与产品/工程需求的单一事实源**。Agent 写 issue、改管线或控制台前应先读这里；术语以本文为准，勿自造同义词。细节规范见 `DATASET_BEST_PRACTICES.md` 与 `README.md`；训练上机见 `data/03_train/handoff.md`。开发约束见 `agents.md`。
 
-**最后整理**：2026-11-05（自仓库文档、配置、控制台文案与近期产品决策归纳）。
+**最后整理**：2026-11-18（已完成 ADR-0008 Agent-First `gt` CLI 工具化、纯确定性构建门禁、统一操作账本与 Web 留痕看板升级）。
 
 ---
 
 ## 1. 我们在做什么
 
-**GoldThread（金线）** 是把 **pi / Cursor Agent 会话轨迹** 增量研磨成 **可审计的 SFT / DPO 训练数据** 的工具，附带本地 **Web 控制台**（`serve.py` → 默认 `http://127.0.0.1:8765`）。
+**GoldThread（金线）** 是以 **模型 Agent 为决策主体、确定性原语为执行底座、全链路留痕看板供人类审阅** 的训练数据精炼平台：把 **pi / Cursor Agent 会话轨迹** 增量研磨成 **可审计的 SFT / DPO 训练数据**，提供统一命令行入口 **`python gt.py`（`python -m goldthread`）**、模型技能书 [`skills/goldthread/SKILL.md`](skills/goldthread/SKILL.md) 与本地 **Web 留痕看板**（`serve.py` → 默认 `http://127.0.0.1:8765`）。
 
 **目标能力**：教会模型在 **移动游戏逆向分析** 场景下自主工程化拆解（Unity IL2CPP / Godot 等），强调工具调用、实测验证、长轨迹连贯执行，而不是半途停工等用户说「继续」。
 
@@ -38,11 +38,13 @@
 | 阶段 | 目录 | 含义 |
 |------|------|------|
 | **Stage 1 · 采集与清洗** | `01_raw/` | 源 `.jsonl` **逐字节不可变副本** + 同名 `.meta.json`（回合 kind、根任务、标签） |
-| **Stage 2 · 黄金提纯** | `02_gold/` | 每条会话的 `.gold.jsonl`、剪枝/DPO、模型 `annotations/` |
+| **Stage 2 · 黄金提纯** | `02_gold/` | 每条会话的 `.gold.jsonl`、剪枝/DPO、结构化决策与 `annotations/` |
 | **Stage 3 · 训练集合成** | `03_train/` | ShareGPT / OpenAI 窗口、DPO、切分、`dataset_info.json` |
-| **发布** | `04_release/` | 冻结版本、`delivery/` zip；工作区与 `03_train` 分离 |
+| **发布与归档** | `04_release/` | 不可变 `builds/`、`delivery/` zip、`reports/` 历次评估与迭代对比报告 |
 
-**增量状态**：`00_state/`（标签覆盖 `labels.json`、LLM 缓存、运行历史等）。
+**增量状态与全链路账本**：`00_state/`（统一操作审计账本 `ledger.jsonl`、步级决策 `step_decisions.json`、DPO 裁决 `dpo_verdicts.json`、数据集草稿 `dataset_draft.json`、标签覆盖 `labels.json`、LLM 缓存、运行历史等）。
+
+**构建确定性原则（ADR-0008）**：`gt curate` / `gt build` / `gt gate check` / `gt pack` 默认 **100% 纯确定性运行（零隐式外部 LLM 请求）**；主模型通过 CLI 直接写入结构化 JSON 决策并附带 `--reason` 留痕，小模型辅助初筛仅通过显式 `gt assist turns|judge|dpo` 触发。
 
 流水线步骤的 **唯一代码事实源**：`pipeline/steps.py`（界面「数据梳理」三阶段：**采集与清洗 → 黄金提纯 → 训练集合成**；已无独立「人工复核」阶段）。
 
@@ -116,16 +118,16 @@
 - **门控**：discard、模型否决、（遗留）复核态与步级质量决定样本去向，**不再按会话来源标签限制 SFT**。
 - **DPO**：Stage 2 剪枝对 + 来源会话病态步 +（可选）模型逐对复核 good/swap/drop；与 SFT 可来自同一会话。
 
-### 6.2 控制台页面与血缘（2026-11 需求）
+### 6.2 控制台页面与血缘（2026-11 Agent-First 留痕看板）
 
 | 页面 | 用户应一眼看到什么 |
 |------|-------------------|
-| **流程工作台 `#overview`** | 三阶段漏斗与项目/训练构成；顶部可展开 **进行中任务** 横条（最多 3 条） |
-| **原始数据 `#raw`** | 会话是否 **已分析**；按项目、主导模型与分析状态筛选；抽屉内 **分析 / 重新分析** |
-| **黄金数据 `#gold`** | 每会话 **SFT 窗口数 vs DPO 对数** 及来源关系；抽屉可切换 **黄金会话 / SFT 样本 / DPO 偏好对** 并查看正文 |
-| **训练数据 `#train`** | 审核将纳入样本并 **构建不可变 Build**；样本可回溯 sid。**不在此页打 zip** |
-| **任务中心 `#tasks`** | 采集、分析、管线 stage 与 **打包** 的进度、日志与失败原因；完成后按类型 **自动刷新** 相关页；可从详情 **打开原始/黄金/训练** |
-| **交付 `#runs`** | **历史交付包列表**：每包可看说明、卡片内嵌长度分布；可按格式下载或删除；顶部可「用当前 Build 新建包」。产品入口不再做发布/激活/回滚（`ACTIVE_RELEASE` API 仅保留给脚本） |
+| **演进评估与精炼工作台 `#overview`** | 最新 Build / 最新交付包快照、**历次评估与版本演进报告流**（含包间 Diff 表）、**最近操作审计账本（Ledger Feed）** 及三阶段精炼漏斗 |
+| **原始数据 `#raw`** | 会话是否 **已分析**；按项目、主导模型与分析状态筛选；抽屉内支持一键跳转 **三态血缘与审计** |
+| **黄金数据与血缘 `#gold`（别名 `#sessions`）** | 每会话 **SFT 窗口数 vs DPO 对数** 及去向；抽屉切换 **黄金会话 / 三态血缘 Diff（回合折叠 + 原文/黄金改写/剪枝对照 + 会话账本） / SFT 样本 / DPO 偏好对**，并保留应急步级/会话停用开关 |
+| **训练数据 `#train`（别名 `#dataset`）** | 按 `Train / Eval / 已停用` 树状检视全部样本与阶段权重，**构建不可变 Build**（**不在此页打 zip**） |
+| **操作审计账本与任务 `#tasks`（别名 `#ledger`）** | 统一检索 **Agent CLI + Web 全量操作审计账本（`ledger.jsonl`）**（按工具/主体/sid/关键词过滤，点击 sid 直达血缘），并可切换查看后台任务实时日志 |
+| **交付 `#runs`（别名 `#packs`）** | **历史交付包列表**：一键查看 **硬性门禁体检（Gate Check）**、说明、长度分布、**包间指标 Diff 对比**，按格式下载或删除；顶部可「用当前 Build 新建包」 |
 
 **异步作业 UX**：提交采集/分析/stage/打包后 **留在当前 tab**，toast 提示「任务中心可查看」；侧栏 **任务中心** 显示 **进行中 N** 角标。打包进度同时显示在 `#runs` 当前包状态区，完整日志统一在任务中心查看。
 
@@ -210,6 +212,7 @@
 | Unsloth | **非目标**，除非显式立项 | [ADR-0004](docs/adr/ADR-0004-no-unsloth-migration.md) |
 | 数据集草稿与切分计划 | 训练页操作持久化到草稿决策账本；项目归属跨重建稳定，显式重规划才允许批量移动 | [ADR-0006](docs/adr/ADR-0006-dataset-draft-and-split-plan.md) |
 | DPO 评估与不可变 Build | 评估先于构建；Build 固定输入与文件哈希，产品打包只读指定 Build，不自动激活 release | [ADR-0007](docs/adr/ADR-0007-dpo-evaluation-and-immutable-builds.md) |
+| Agent-First 工具集与操作账本 | 统一 `gt` CLI + `SKILL.md`；主构建默认 100% 纯确定性（小模型初筛收至 `gt assist`）；CLI/Web 写操作统一留痕 `00_state/ledger.jsonl`，评估报告归档至 `04_release/reports/` 并呈现在可观测看板 | [ADR-0008](docs/adr/ADR-0008-agent-first-cli-and-operation-ledger.md) |
 
 **本地 backlog**（`.scratch/goldthread-backlog/issues/`）：
 

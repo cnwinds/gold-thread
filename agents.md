@@ -27,7 +27,7 @@ python -m pytest tests/test_pipeline_flow.py -q
 
 | 改动类型 | 额外验证 |
 |----------|----------|
-| Python 管线 / `server/` | `python -m py_compile` 涉及模块 |
+| Python 管线 / `goldthread/` / `server/` | `python -m py_compile` 涉及模块 |
 | `web/index.html` 内联脚本 | 提取 `<script>` 后 `node --check` |
 | HTTP 接口行为 | 对相关路径做一次请求或已有测试覆盖 |
 
@@ -44,6 +44,7 @@ python -m pytest tests/test_pipeline_flow.py -q
 ## 4. 与本项目相关的注意点
 
 - 默认 Python 环境与本地 `python` 一致；跑测试前确认依赖已安装。
+- **操作训练语料、评估学生模型、修补黄金步/DPO、构建或打包时**：优先阅读 [`skills/goldthread/SKILL.md`](skills/goldthread/SKILL.md) 并调用统一的 `python gt.py ... --json --reason "..."`（`python -m goldthread`）确定性原语，使所有数据变更自动写入 `data/00_state/ledger.jsonl` 并在 Web 看板留痕；禁止编写绕过账本直接篡改 `data/` 的一次性临时脚本。
 - 不要为通过测试而削弱断言；不要提交仅用于本地调试的 `_tmp_*` 脚本作为正式测试。
 - 用户未要求时，不要 git commit / push。
 
