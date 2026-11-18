@@ -15,8 +15,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "你是一名顶尖的移动应用与游戏工程分析专家 Agent。在执行解包、反编译、资产恢复、协议与配置表解密任务时，必须遵守以下工程纪律：\n"
     "1. 严格在当前工作目录内独立完成研究与产出，严禁读取、参考或拷贝同级其他实验目录的文件；\n"
     "2. 禁止在思维链中心算十六进制偏移、XOR 或 IEEE-754 浮点数并自行打勾确认，一切字节偏移与结构假设必须通过 `python -c` 脚本实测验证；\n"
-    "3. 优先并发调用工具与复用成熟开源分析工具链（如 jadx、gdre_tools、Il2CppDumper、radare2 等），遇到连续 2 次搜索 404 立即止损切换方案；\n"
-    "4. 阶段性关键发现（魔数、密钥、结构体偏移）及时落盘记录，收尾编写报告前必须先完成全量文件计数与 SHA256/明文抽样核验。"
+    "3. 优先并发调用工具与复用成熟开源分析工具链（如 jadx、gdre_tools、Il2CppDumper、radare2 等），遇到连续 2 次搜索 404 立即止损切换方案；当动态 Frida Hook 或模拟器转译（如 libhoudini）崩溃受阻时，优先切换 Unicorn/Capstone 离线模拟目标 native 函数；\n"
+    "4. 阶段性关键发现（魔数、密钥、结构体偏移）及时落盘记录，必须完整排查并还原包内全部自定义容器、加密配置表、自定义纹理头与核心脚本逻辑，严禁仅做外层解压即半途停工或抛选择题等待用户指令，收尾编写报告前必须先完成全量文件计数与明文抽样核验。"
 )
 
 DEFAULT_TOOLS = [
@@ -119,6 +119,19 @@ def resolve_tools(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     if isinstance(custom, list) and custom:
         return copy.deepcopy(custom)
     return copy.deepcopy(DEFAULT_TOOLS)
+
+
+def unwrap_user_text(text: str) -> str:
+    """剥离 IDE / 采集器包裹在用户消息外层的 <user_query>、<file name="...">、<image_files>、<timestamp> 等标签。"""
+    if not text:
+        return ""
+    m = re.search(r"<user_query>\s*([\s\S]*?)\s*</user_query>", text, re.IGNORECASE)
+    if m:
+        text = m.group(1)
+    text = re.sub(r"<file\b[^>]*>\s*([\s\S]*?)\s*</file>", lambda g: g.group(1).strip(), text, flags=re.IGNORECASE)
+    text = re.sub(r"<image_files>[\s\S]*?</image_files>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<timestamp>[\s\S]*?</timestamp>", "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 
 def _text_from_content(content: Any) -> str:
@@ -230,7 +243,7 @@ def parse_session(path: Path, max_tool_output_chars: int = 12000) -> Dict[str, A
         ts = ev.get("timestamp", "")
 
         if role == "user":
-            text = _text_from_content(content).strip()
+            text = unwrap_user_text(_text_from_content(content)).strip()
             if not text:
                 continue
             messages.append(
@@ -522,30 +535,37 @@ def build_flow(
     drop_counts: Counter = Counter()
     dropped_steps_total = 0
 
-    def _pop_trailing_await() -> bool:
+    def _pop_trailing_await() -> Optional[Dict[str, Any]]:
         if (
             rules.fold_await
             and len(flow) > 1
             and flow[-1]["role"] == "assistant"
             and not flow[-1].get("tool_calls")
         ):
-            flow.pop()
-            return True
-        return False
+            return flow.pop()
+        return None
 
-    def _append_steps_from_folded(block_msgs: List[Dict[str, Any]], turn_idx: int, fold_type: str) -> None:
+    def _append_steps_from_folded(
+        block_msgs: List[Dict[str, Any]],
+        turn_idx: int,
+        fold_type: str,
+        popped_await_msg: Optional[Dict[str, Any]] = None,
+    ) -> None:
         first_asst = True
         for m in block_msgs:
             m["turn_index"] = turn_idx
             if m["role"] == "assistant" and first_asst:
                 m["folded_turn_index"] = turn_idx
                 m["folded_turn_type"] = fold_type
+                if popped_await_msg is not None and m.get("tool_calls"):
+                    m["popped_await_msg"] = copy.deepcopy(popped_await_msg)
                 first_asst = False
             flow.append(m)
 
     for idx, block in enumerate(blocks):
         user = block[0]
-        text = user["content"].strip()
+        text = unwrap_user_text(user["content"]).strip()
+        user["content"] = text
         asst = [m for m in block[1:] if m["role"] == "assistant"]
         man = manual_turns.get(idx)
         ann = ann_map.get(idx, {})
@@ -632,17 +652,19 @@ def build_flow(
 
         if eff_kind == "correction" and source == "model" and not rules.is_correction(text) and len(text) > 200:
             eff_kind = "task"
+        if source != "manual" and rules.is_continuation(text):
+            eff_kind = "continuation"
 
         if eff_kind == "correction" or (eff_kind is None and rules.is_correction(text)):
             constraints.append(text)
-            popped = _pop_trailing_await()
-            _append_steps_from_folded(block[1:], idx, "correction")
+            popped_msg = _pop_trailing_await()
+            _append_steps_from_folded(block[1:], idx, "correction", popped_await_msg=popped_msg)
             mark.update(
                 kind="correction",
                 action="internalized",
                 dropped=False,
                 folded=True,
-                popped_await_msg=popped,
+                popped_await_msg=bool(popped_msg),
                 reason=mark["reason"] or "correction_internalized",
             )
             drop_counts["correction_internalized"] += 1
@@ -650,14 +672,14 @@ def build_flow(
             continue
 
         if eff_kind == "continuation" or (eff_kind is None and rules.is_continuation(text)):
-            popped = _pop_trailing_await()
-            _append_steps_from_folded(block[1:], idx, "continuation")
+            popped_msg = _pop_trailing_await()
+            _append_steps_from_folded(block[1:], idx, "continuation", popped_await_msg=popped_msg)
             mark.update(
                 kind="continuation",
                 action="folded",
                 dropped=False,
                 folded=True,
-                popped_await_msg=popped,
+                popped_await_msg=bool(popped_msg),
                 reason=mark["reason"] or "folded_into_mainline",
             )
             drop_counts["continuation_folded"] += 1

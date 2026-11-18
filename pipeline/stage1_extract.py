@@ -33,12 +33,62 @@ from .turnclassify import classify_session
 STAGE = "stage1"
 
 
+_GENERIC_SEGMENTS = {
+    "crack", "crack_test", "train-project", "teacher", "student", "_retry",
+    "rerun_glm", "rerun_minimax", "from_crack", "from_crack_minimax",
+    "ds", "minimax", "glm",
+}
+
+_GAME_ALIAS_MAP = {
+    "words": "puzzle",
+    "mines": "minesweeper",
+}
+
+_PKG_SUFFIX_STOPWORDS = {"gp", "games", "remastered", "android", "free", "app"}
+
+
+def _slug_from_segment(seg: str, full_norm: str = "") -> str:
+    s = seg.strip().lower()
+    if s.startswith("from_crack_"):
+        tail = s[len("from_crack_") :]
+        if tail and tail not in ("minimax", "glm", "ds"):
+            return _GAME_ALIAS_MAP.get(tail, tail)
+    # 仅当首段以包名前缀（如 com. / net. / air. / draziw.）开头且点号出现在连字符之前时，按 Android 包名解析
+    first_hyphen = s.find("-")
+    first_dot = s.find(".")
+    if first_dot > 0 and (first_hyphen < 0 or first_dot < first_hyphen):
+        base = re.sub(r"_\d[\w.-]*$", "", s)
+        toks = [t for t in base.split(".") if t]
+        while len(toks) > 1 and toks[-1] in _PKG_SUFFIX_STOPWORDS:
+            toks.pop()
+        tok = toks[-1] if toks else base
+        if tok == "words" and "puzzle" in full_norm:
+            return "puzzle"
+        return _GAME_ALIAS_MAP.get(tok, tok)
+    head = s.split("-")[0]
+    return _GAME_ALIAS_MAP.get(head, head)
+
+
 def infer_project_group(cwd: str, rel_path: str) -> str:
     if cwd:
         norm = cwd.replace("\\", "/").rstrip("/")
-        leaf = norm.split("/")[-1].lower()
-        if "/crack/" in norm.lower() + "/":
+        low = norm.lower()
+        parts = [p for p in low.split("/") if p and not p.endswith(":")]
+        if any(tag in f"/{low}/" for tag in ("/crack/", "/crack_test/", "/train-project/")):
+            candidates = [
+                p for p in parts
+                if p not in _GENERIC_SEGMENTS
+                and not p.startswith("goldthread-")
+                and not p.startswith("run_")
+            ]
+            if candidates:
+                # 若末段是 from_crack_<game>（如 from_crack_puzzle），优先取该显式别名；否则取最靠后的有效包/游戏段
+                slug = _slug_from_segment(candidates[-1], low)
+                if slug:
+                    return f"game::{slug}"
+            leaf = parts[-1] if parts else "unknown"
             return "game::" + leaf.split("-")[0]
+        leaf = parts[-1] if parts else "unknown"
         return f"workspace::{leaf}"
     folder = rel_path.replace("\\", "/").split("/")[0].lower()
     if folder.startswith("--d--crack-"):

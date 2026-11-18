@@ -396,3 +396,33 @@ def build_delivery_zip(
             f"length_gate salvaged={salv} overlength_at_default={over})"
         )
     return result
+
+
+def build_delivery_zip_from_build(
+    cfg: Optional[Dict[str, Any]] = None,
+    *,
+    build_id: Optional[str] = None,
+    profile: Optional[str] = None,
+    log=None,
+    delivery_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """从不可变 Build 快照打包交付 zip，严格使用 Build 冻结的配置快照。"""
+    from pipeline import dataset_build  # noqa: PLC0415
+
+    cfg = cfg or load_config()
+    build_dir, manifest = dataset_build.resolve_build(cfg, build_id)
+    build_cfg = dataset_build.load_build_config(build_dir, cfg)
+    out_dir = (
+        Path(delivery_dir)
+        if delivery_dir
+        else (stage_dirs(cfg)["root"] / "04_release" / "delivery")
+    )
+    result = build_delivery_zip(
+        build_dir,
+        build_cfg,
+        log=log,
+        profile=profile,
+        delivery_dir=out_dir,
+    )
+    result["build_id"] = manifest["build_id"]
+    return result

@@ -167,6 +167,8 @@ def source_revisions(
     input_paths = {
         "dpo_pairs": stage_dirs(cfg)["gold"] / "dpo_pairs.jsonl",
         "dpo_exclusions": stage_dirs(cfg)["state"] / "dpo_exclusions.json",
+        "step_decisions": stage_dirs(cfg)["state"] / "step_decisions.json",
+        "dpo_verdicts": stage_dirs(cfg)["state"] / "dpo_verdicts.json",
     }
     if include_review_cache:
         input_paths["dpo_review_cache"] = stage_dirs(cfg)["state"] / "dpo_review_cache.json"

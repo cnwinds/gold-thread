@@ -600,6 +600,9 @@ def evaluate_session_synthesis(
         elif "thinking_synthesized" in (m.get("flags") or []) and not is_rewritten and mid not in human_kept:
             reason = "synthesized_thinking_unverified"
             funnel["synthesized_dropped"] += 1
+        elif rank < total - 1 and not (m.get("tool_calls") or []) and mid not in human_kept:
+            reason = "premature_stop_without_tool"
+            funnel["excluded_steps"] += 1
         elif mid in human_kept:
             status = "admitted"
             reason = "rescued_by_human_edit" if (is_rewritten and not raw_q.get("is_clean", True)) else "human_kept"
@@ -816,13 +819,32 @@ def synthesize_dpo_candidates(
         effective = curation.resolve(annotation, cfg)
         review_count = 0
         negative_count = 0
-        if dcfg.get("from_review_rewrites", True) and effective["rewrites"]:
-            generated = _review_rewrite_dpo(
-                msgs, effective["rewrites"], set(effective["excluded"]), sys_msg, root_msg,
-                window_turns, sid, project, split, model,
-            )
-            pairs.extend(generated)
-            review_count = len(generated)
+        if dcfg.get("from_review_rewrites", True):
+            merged_rewrites = dict(effective["rewrites"])
+            for m in msgs:
+                if m.get("role") != "assistant":
+                    continue
+                mid = m.get("id")
+                if not mid or mid in merged_rewrites:
+                    continue
+                raw_th = (m.get("raw_thinking") or "").strip()
+                cur_th = (m.get("thinking") or "").strip()
+                raw_pathos = (m.get("raw_quality") or {}).get("pathologies") or []
+                if (
+                    raw_th
+                    and cur_th
+                    and raw_th != cur_th
+                    and ("thinking_compressed" in (m.get("flags") or []) or bool(m.get("judge_reason")))
+                    and raw_pathos
+                ):
+                    merged_rewrites[mid] = cur_th
+            if merged_rewrites:
+                generated = _review_rewrite_dpo(
+                    msgs, merged_rewrites, set(effective["excluded"]), sys_msg, root_msg,
+                    window_turns, sid, project, split, model,
+                )
+                pairs.extend(generated)
+                review_count = len(generated)
         if label == "negative" and dcfg.get("from_negative_steps", True):
             generated = _negative_dpo(
                 msgs, sys_msg, root_msg, dcfg, window_turns, sid, project, split, model
@@ -1324,29 +1346,30 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             f"{len(pending)} 个 DPO 偏好对尚未完成模型复核；"
             "请运行「评估并构建」（Stage 3 会先评估）或单独的 DPO 评估"
         )
-    if dpo_pairs and judge.enabled(cfg):
-        dpo_review_stats["checked"] = len(dpo_pairs)
+    if dpo_pairs:
         kept_pairs = []
         for pair in dpo_pairs:
             verdict = verdicts.get(str(pair.get("sample_id"))) or {}
             kind = verdict.get("verdict")
             if kind == "drop":
+                dpo_review_stats["checked"] += 1
                 dpo_review_stats["dropped"] += 1
                 continue
             if kind == "swap":
                 pair["chosen"], pair["rejected"] = pair["rejected"], pair["chosen"]
                 dpo_review_stats["swapped"] += 1
-            pair.setdefault("metadata", {})["model_review"] = kind
-            pair["metadata"]["model_review_reason"] = verdict.get("reason", "")
+            if kind in ("good", "swap"):
+                dpo_review_stats["checked"] += 1
+                pair.setdefault("metadata", {})["model_review"] = kind
+                pair["metadata"]["model_review_reason"] = verdict.get("reason", "")
             kept_pairs.append(pair)
         dpo_pairs = kept_pairs
-        log(
-            f"[stage3] DPO 缓存门禁：调换 {dpo_review_stats['swapped']} / "
-            f"丢弃 {dpo_review_stats['dropped']} / 内容无效 {dpo_review_stats['invalid']}，"
-            f"保留 {len(dpo_pairs)}"
-        )
-    elif dpo_review_stats["invalid"]:
-        log(f"[stage3] DPO 内容门禁：丢弃空/相同偏好对 {dpo_review_stats['invalid']}")
+        if dpo_review_stats["checked"] or dpo_review_stats["invalid"]:
+            log(
+                f"[stage3] DPO 缓存门禁：调换 {dpo_review_stats['swapped']} / "
+                f"丢弃 {dpo_review_stats['dropped']} / 内容无效 {dpo_review_stats['invalid']}，"
+                f"保留 {len(dpo_pairs)}"
+            )
 
     # 构建中只比较源输入；handoff/YAML 在生成后单独计入 Build 身份。
     if dataset_draft.plan_fingerprint(cfg, draft, include_aux_outputs=False) != input_hash:

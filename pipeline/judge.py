@@ -164,7 +164,7 @@ def _dpo_default_reason(verdict: str) -> str:
 def _jcfg(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     cfg = cfg or load_config()
     j = dict(cfg.get("judge", {}) or {})
-    j.setdefault("enabled", True)
+    j.setdefault("enabled", False)
     j.setdefault("model", "")
     j.setdefault("decide_model", "")
     j.setdefault("audit_model", "")
@@ -215,7 +215,7 @@ def _model(cfg: Dict[str, Any], j: Dict[str, Any], task: str = "") -> Optional[s
         m = j.get("audit_model")
     else:
         m = None
-    return m or j.get("model") or cfg["llm"].get("model")
+    return m or j.get("model") or (cfg.get("llm") or {}).get("model")
 
 
 _SEM_LOCK = threading.Lock()
@@ -600,6 +600,12 @@ def _verdict_cache_path(cfg: Dict[str, Any]) -> Path:
     return stage_dirs(cfg)["state"] / "dpo_review_cache.json"
 
 
+def dpo_verdicts_path(cfg: Optional[Dict[str, Any]] = None) -> Path:
+    from .common.config import stage_dirs  # noqa: PLC0415
+
+    return stage_dirs(cfg or load_config())["state"] / "dpo_verdicts.json"
+
+
 _THINK_SPLIT_RE = re.compile(r"^\s*<" + r"think>\s*([\s\S]*?)\s*</" + r"think>\s*", re.I)
 
 
@@ -689,28 +695,47 @@ def _vkey(model: str, tag: str, p: Dict[str, Any]) -> str:
 
 
 def cached_dpo_verdicts(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
-    """只读 DPO 评估状态，不调用模型；缺失统一返回 pending。"""
+    """只读 DPO 评估状态，不调用模型。
+
+    优先级：
+    1. 00_state/dpo_verdicts.json（Agent/人工显式裁决，无论 judge.enabled 是否开启都生效）
+    2. 00_state/dpo_review_cache.json（good/swap/drop 命中即生效；未命中/review_failed 时按 judge.enabled 决定 pending 或 bypassed）
+    """
     cfg = cfg or load_config()
-    if not enabled(cfg):
-        return {
-            str(p.get("sample_id")): {"verdict": "bypassed", "reason": "模型判断已关闭"}
-            for p in pairs
-        }
     j = _jcfg(cfg)
     model_id = _model(cfg, j, "dpo") or ""
+    agent_verdicts = read_json(dpo_verdicts_path(cfg), default={}) or {}
     cache = read_json(_verdict_cache_path(cfg), default={}) or {}
+    is_enabled = enabled(cfg)
     out: Dict[str, Dict[str, Any]] = {}
     for pair in pairs:
         sample_id = str(pair.get("sample_id"))
+        av = agent_verdicts.get(sample_id) if isinstance(agent_verdicts, dict) else None
+        if isinstance(av, dict) and av.get("verdict") in ("good", "swap", "drop"):
+            verdict = str(av["verdict"])
+            out[sample_id] = {
+                "verdict": verdict,
+                "reason": str(av.get("reason") or "").strip() or _dpo_default_reason(verdict),
+            }
+            continue
         hit = cache.get(_vkey(model_id, "dpo", pair))
-        if isinstance(hit, dict) and hit.get("verdict") in ("good", "swap", "drop", "review_failed"):
+        if isinstance(hit, dict) and hit.get("verdict") in ("good", "swap", "drop"):
             verdict = str(hit["verdict"])
             out[sample_id] = {
                 "verdict": verdict,
                 "reason": str(hit.get("reason") or "").strip() or _dpo_default_reason(verdict),
             }
+            continue
+        if is_enabled:
+            if isinstance(hit, dict) and hit.get("verdict") == "review_failed":
+                out[sample_id] = {
+                    "verdict": "review_failed",
+                    "reason": str(hit.get("reason") or "").strip() or _dpo_default_reason("review_failed"),
+                }
+            else:
+                out[sample_id] = {"verdict": "pending", "reason": _dpo_default_reason("pending")}
         else:
-            out[sample_id] = {"verdict": "pending", "reason": _dpo_default_reason("pending")}
+            out[sample_id] = {"verdict": "bypassed", "reason": _dpo_default_reason("bypassed")}
     return out
 
 

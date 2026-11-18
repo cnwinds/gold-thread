@@ -41,6 +41,7 @@ labeling:
   positive_model_patterns:
   - "^deepseek"
   - "^glm-"
+  - "^minimax"
   negative_model_patterns:
   - "qwen"
   # 主导模型出现歧义（第二模型占比超过该值）时降到 pending 待复核
@@ -53,7 +54,7 @@ labeling:
 turns:
   # 是否让模型做回合语义分类（根任务/任务/环境准备/噪音/催促/纠偏）
   # 关闭则完全依赖下方正则规则（更快，但新项目容易误判）
-  use_model: true
+  use_model: false
   model_max_turn_chars: 800
   # 根任务指令识别（命中第一条后，之前的一切回合视为前置噪音）
   root_task_patterns:
@@ -101,12 +102,26 @@ turns:
   # 过程催促 / 确认 / 纪律纠偏：折叠进主线，不产生「无头 Prompt」
   continuation_patterns:
   - "^继续$"
-  - "^继续[A-Za-z]?$"
+  - "^继续[A-Za-z0-9]?$"
   - "^可以$"
   - "^可以。?$"
   - "^好的?$"
+  - "^[12aA]$"
   - "^补全结构$"
   - "^所有的文件都要还原成明文$"
+  - "继续原任务"
+  - "继续在本会话完成"
+  - "继续逆向本包"
+  - "上次因账号池返回"
+  - "你要把所有的代码函数全部逆向出来"
+  - "函数名即刻恢复"
+  - "你已经卡在这很久了"
+  - "你生成了函数名和代码逻辑的文件吗"
+  - "现在所有的配置表文件都能拿到吗"
+  - "这样你在D:\\\\crack\\\\jigsawcard"
+  - "如果不需要人能看懂"
+  - "config\\.bin\\s*收尾"
+  - "先按只提取纹理与普通文本做最终收尾"
   correction_patterns:
   - "不要参考其他的目录"
   - "你不要看其他的目录"
@@ -120,7 +135,7 @@ turns:
 # 程序只负责执行决定、留血缘、校验不变量、提取接缝。详见 DATASET_BEST_PRACTICES.md
 # ---------------------------------------------------------------------------
 judge:
-  enabled: true
+  enabled: false
   # 兜底模型（下面 decide_model / audit_model 为空时用它；再空则跟随 llm.model）
   model: ""
   # 留空 = 跟随主模型 llm.model。单独指定才会和主模型分开。
@@ -182,35 +197,14 @@ gold:
   # 单会话至少保留多少步才算有效黄金轨迹
   min_gold_steps: 10
 
-# 模型参与的评审（stage2 --review）
-review:
-  enabled: false
-  # 只对这些标签做评审
-  labels: ["positive", "pending"]
-  # 1) thinking 压缩：只处理超过阈值的长 CoT
-  compress_thinking_over: 1200
-  # 送给裁决模型的步数上限（超出则均匀抽样）
-  max_steps_per_session: 40
-  judge_max_think_chars: 3000
-  # 评审温度：0 更稳定可复现
-  temperature: 0.0
-  # 重写分批：每批步数 / 最多批数（超出部分保留脚本压缩结果）
-  rewrite_batch_size: 4
-  max_rewrite_batches: 6
-  # 2) 黄金存废裁决
-  judge_gold: true
-  judge_min_score: 60
-  # 低于该置信度 -> needs_review（不直接淘汰）
-  judge_confidence_min: 0.7
-
 # ---------------------------------------------------------------------------
 # 第 5 层：训练数据合成（stage3）
 # ---------------------------------------------------------------------------
 synth:
   # 单步窗口历史步数（不含 system + root task 锚定）
   window_turns: 8
-  # 工具输出截断
-  max_tool_output_chars: 12000
+  # 工具输出截断（控制在 4000 字符以内，消除 14K-22K 超长尾并保留首尾关键诊断信息）
+  max_tool_output_chars: 4000
   # 阶段过采样权重
   weights:
     opening: 3
@@ -225,9 +219,9 @@ synth:
   #   true （默认）= 历史只留 tool_calls + 工具结果，目标步才有思考
   #   false      = 历史也保留思考。实测 pi + vLLM 的真实上下文是「轮内多步调用时思考全带、
   #                跨轮也带（除非该轮回复为空白且无 tool_calls 被整条丢弃）」，
-  #                所以严格对齐推理要设 false；代价是每条样本 +约 800 tokens（超 12K 的样本变多）。
+  #                所以严格对齐推理要设 false；代价是每条样本 +约 468 tokens（cap=600 时）。
   # 改之前先跑 tools/simulate_history_thinking.py 算账，改之后跑 tools/check_thinking_shape.py 验收。
-  strip_history_thinking: true
+  strip_history_thinking: false
   # strip_history_thinking=false 时，历史里每步思考压缩到多少字符（0=不压缩）。
   # 实测（cap=3000）：不压缩 +1911 tokens/条（20 条超 12K）；压到 600 → +468（0 条超）。
   history_thinking_max_chars: 600

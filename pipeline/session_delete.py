@@ -161,6 +161,7 @@ def _remove_map_entry(tx: _Transaction, path: Path, sid: str, key: str = "") -> 
 def _update_state(tx: _Transaction, state: Path, sid: str) -> None:
     _remove_map_entry(tx, state / "labels.json", sid)
     _remove_map_entry(tx, state / "turn_overrides.json", sid)
+    _remove_map_entry(tx, state / "step_decisions.json", sid)
     _remove_map_entry(tx, state / "stage1.json", sid, "files")
     _remove_map_entry(tx, state / "stage2.json", sid, "files")
 
@@ -178,11 +179,14 @@ def _update_state(tx: _Transaction, state: Path, sid: str) -> None:
         if changed:
             tx.write_json(collected_path, collected)
 
-    for name in ("dpo_exclusions.json",):
+    for name in ("dpo_exclusions.json", "dpo_verdicts.json"):
         path = state / name
         data = _read_json(path)
         if isinstance(data, dict):
-            kept = {k: v for k, v in data.items() if not _id_matches(k, sid)}
+            kept = {
+                k: v for k, v in data.items()
+                if not _id_matches(k, sid) and not (isinstance(v, dict) and v.get("session_id") == sid)
+            }
             if len(kept) != len(data):
                 tx.write_json(path, kept)
 

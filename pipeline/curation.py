@@ -119,7 +119,7 @@ def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
     fresh = bool(decision) and not is_stale(ann)
     if fresh and decision == "approved" and hr.get("finalized"):
         return {"state": "finalized", "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
-    if ann.get("review_rounds_stale") and not fresh:
+    if ann.get("review_rounds_stale") and not fresh and not ann.get("model_report"):
         return {"state": "stale", "rewrites": {}, "excluded": [], "kept": []}
     if fresh:
         state = "approved" if decision == "approved" else "rejected"
