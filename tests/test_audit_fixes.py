@@ -718,6 +718,95 @@ class P2AndP3EngineeringTests(unittest.TestCase):
         self.assertIn("mental_hex_checkmark", q_re_on["pathologies"])
         self.assertEqual([], q_re_off["pathologies"])
 
+    def test_gold_sessions_and_draft_tree_sort_by_train_eval_disabled_category(self) -> None:
+        import server.app as sa
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "data"
+            for sub in ("00_state", "01_raw", "02_gold", "03_train"):
+                (data / sub).mkdir(parents=True)
+            cfg = copy.deepcopy(DEFAULTS)
+            cfg["paths"]["data_dir"] = str(data)
+
+            # 故意用字典序靠前的 id 作为 eval 和停用会话，验证排序按「训练 -> 评估 -> 已停用」而非字母序
+            sessions = {}
+            for sid, label, proj in (
+                ("01_disabled_full", "negative", "game::aaa"),
+                ("02_eval_active", "positive", "game::bbb"),
+                ("03_disabled_sft", "negative", "game::ccc"),
+                ("04_train_active", "positive", "game::ddd"),
+            ):
+                gf = data / "02_gold" / f"{sid}.gold.jsonl"
+                af = data / "02_gold" / f"{sid}.ann.json"
+                write_jsonl_atomic(gf, [{
+                    "session_id": sid,
+                    "label": label,
+                    "project_group": proj,
+                    "cwd": r"D:\crack\demo",
+                    "dominant_model": "glm-5",
+                    "stats": {"raw_steps": 1, "gold_steps": 1},
+                    "messages": [
+                        {"id": "sys", "role": "system", "content": "sys"},
+                        {"id": "u0", "role": "user", "content": "task"},
+                        {"id": "a1", "role": "assistant", "thinking": "正常思考验证偏移。", "text": "ok", "tool_calls": [], "tool_results": []},
+                    ],
+                }])
+                write_json_atomic(af, {"model_report": {"verdict": "trainable", "confidence": 0.9}, "review_key": "1:x:6"})
+                sessions[sid] = {
+                    "session_id": sid,
+                    "label": label,
+                    "project_group": proj,
+                    "dominant_model": "glm-5",
+                    "gold_file": str(gf),
+                    "annotation_file": str(af),
+                    "stats": {"gold_steps": 1, "raw_steps": 1},
+                }
+            write_json_atomic(data / "02_gold" / "index.json", {"sessions": sessions})
+            write_jsonl_atomic(data / "02_gold" / "dpo_pairs.jsonl", [])
+            write_json_atomic(data / "00_state" / "dataset_draft.json", {
+                "version": 1,
+                "decisions": {},
+                "scope_decisions": {
+                    "session:01_disabled_full": {"action": "exclude", "reason": "整条停用"},
+                    "session_sft:03_disabled_sft": {"action": "exclude", "reason": "SFT停用"},
+                },
+                "split_plan": {
+                    "version": 1,
+                    "eval_ratio": 0.25,
+                    "seed": 42,
+                    "assignments": {
+                        "game::aaa": "train",
+                        "game::bbb": "eval",
+                        "game::ccc": "train",
+                        "game::ddd": "train",
+                    },
+                    "pinned": ["game::bbb"],
+                    "session_assignments": {},
+                },
+            })
+
+            with patch("server.app.load_config", return_value=cfg), patch(
+                "pipeline.stage3_synth.load_config", return_value=cfg
+            ):
+                res = sa.gold_sessions()
+                ordered_ids = [r["session_id"] for r in res["sessions"]]
+                ordered_cats = [r["usage_category"] for r in res["sessions"]]
+                self.assertEqual(
+                    ["04_train_active", "02_eval_active", "03_disabled_sft", "01_disabled_full"],
+                    ordered_ids,
+                )
+                self.assertEqual(["train", "eval", "disabled", "disabled"], ordered_cats)
+                self.assertEqual({"train": 1, "eval": 1, "disabled": 2}, res["category_counts"])
+
+                # 按 category 过滤
+                only_disabled = sa.gold_sessions(category="disabled")
+                self.assertEqual(["03_disabled_sft", "01_disabled_full"], [r["session_id"] for r in only_disabled["sessions"]])
+
+                # 训练数据树同样按「训练 -> 评估 -> 已停用」排序项目组
+                tree = sa.dataset_draft_tree(group_by="project")
+                group_keys = [g["key"] for g in tree["groups"]]
+                self.assertEqual(["game::ddd", "game::bbb", "game::aaa", "game::ccc"], group_keys)
+
 
 if __name__ == "__main__":
     unittest.main()

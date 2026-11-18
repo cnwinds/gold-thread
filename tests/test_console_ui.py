@@ -41,12 +41,14 @@ class ConsoleWorkspaceTests(unittest.TestCase):
                 "入集：剪枝", "dpo_candidates",
             ),
             "gold": (
-                'id="goldProject"', 'id="goldModel"', 'id="goldOutput"', 'id="goldSearch"',
+                'id="goldCategory"', 'id="goldProject"', 'id="goldModel"', 'id="goldOutput"', 'id="goldSearch"',
                 'data-gold-open="${esc(s.session_id)}"', "goldSetStepGate",
                 "goldSetUsage", "goldSetKindUsage", "goldSetSampleDecision",
                 "data-gold-split", "session_sft", "session_dpo",
                 "停用本会话全部", "SFT 停用", "DPO 停用",
                 "usage-badge", "usage-badge sft-off", "usage-badge dpo-off", "col-dest",
+                "group-sep-row", "GOLD_CATEGORY_META",
+                "toggle-pill", "sample-toggle-slot", "已停用 · 恢复", "全部停用",
             ),
             "train": (
                 'id="dsProject"', 'id="dsSplit"', 'id="dsSearch"',

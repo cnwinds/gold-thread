@@ -181,11 +181,12 @@ class TaskRegistryTests(unittest.TestCase):
         self.assertIn("DPO 评估未全部完成", job.error or "")
         stage3.assert_not_called()
 
-    def test_review_does_not_hide_dpo_gate_failure(self):
-        job = Job("review", False, {})
+    def test_all_does_not_hide_dpo_gate_failure(self):
+        job = Job("all", False, {})
         mocks = self._run_job_isolated(
             job,
-            patch("pipeline.review.run_review", return_value={}),
+            patch("server.app.stage1_extract.run", return_value={}),
+            patch("server.app.stage2_gold.run", return_value={}),
             patch(
                 "server.app.stage3_synth.evaluate_dpo_pending",
                 side_effect=RuntimeError("DPO 尚未完成模型复核"),
@@ -197,11 +198,12 @@ class TaskRegistryTests(unittest.TestCase):
         self.assertIn("尚未完成模型复核", job.error)
         stage3.assert_not_called()
 
-    def test_review_aborts_when_dpo_evaluation_incomplete(self):
-        job = Job("review", False, {})
+    def test_all_aborts_when_dpo_evaluation_incomplete(self):
+        job = Job("all", False, {})
         mocks = self._run_job_isolated(
             job,
-            patch("pipeline.review.run_review", return_value={}),
+            patch("server.app.stage1_extract.run", return_value={}),
+            patch("server.app.stage2_gold.run", return_value={}),
             patch(
                 "server.app.stage3_synth.evaluate_dpo_pending",
                 return_value={"pending": 1, "failed": 0},
@@ -220,10 +222,11 @@ class TaskRegistryTests(unittest.TestCase):
 
         runs_path = stage_dirs(load_config())["state"] / "runs.json"
         before = read_json(runs_path, default=[]) or []
-        job = Job("review", False, {})
+        job = Job("all", False, {})
         self._run_job_isolated(
             job,
-            patch("pipeline.review.run_review", return_value={}),
+            patch("server.app.stage1_extract.run", return_value={}),
+            patch("server.app.stage2_gold.run", return_value={}),
             patch(
                 "server.app.stage3_synth.evaluate_dpo_pending",
                 return_value={"pending": 1, "failed": 0},
@@ -234,6 +237,13 @@ class TaskRegistryTests(unittest.TestCase):
         self.assertEqual("failed", job.status)
         self.assertEqual(before, after)
         self.assertTrue(not after or after[0].get("id") != job.id)
+
+    def test_api_run_rejects_removed_review_and_refine_stages(self):
+        client = TestClient(app)
+        for bad_stage in ("review", "refine"):
+            with self.subTest(stage=bad_stage):
+                res = client.post("/api/run", json={"stage": bad_stage})
+                self.assertEqual(400, res.status_code)
 
 class TasksApiTests(unittest.TestCase):
     @patch("server.app._start")

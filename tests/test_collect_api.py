@@ -1,11 +1,14 @@
 """POST /api/collect 与 collect 作业的 analyze 开关。"""
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
+from goldthread import ledger
 from server.app import Job, _run_job, app
 
 
@@ -18,13 +21,18 @@ class CollectJobTests(unittest.TestCase):
     def test_collect_ingest_only_skips_stage2(
         self, mock_load_cfg, mock_ingest, mock_stage2, _mock_persist, _mock_sync
     ):
-        mock_load_cfg.return_value = {"paths": {"data_dir": "data"}}
-        mock_ingest.return_value = ["sid01"]
-        job = Job("collect", False, {"source": "pi", "ids": ["cat1"], "analyze": False})
-        _run_job(job)
-        mock_stage2.assert_not_called()
-        self.assertEqual("done", job.status)
-        self.assertEqual({"sessions": ["sid01"]}, job.result)
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = {"paths": {"data_dir": str(Path(tmp) / "data")}}
+            mock_load_cfg.return_value = cfg
+            mock_ingest.return_value = ["sid01"]
+            job = Job("collect", False, {"source": "pi", "ids": ["cat1"], "analyze": False})
+            _run_job(job)
+            mock_stage2.assert_not_called()
+            self.assertEqual("done", job.status)
+            self.assertEqual({"sessions": ["sid01"]}, job.result)
+            events = ledger.read_ledger(cfg=cfg, tool="web.collect")
+            self.assertEqual(1, len(events))
+            self.assertEqual(["sid01"], events[0]["affected"]["sids"])
 
     @patch("server.app.task_registry.sync_job")
     @patch("server.app._persist_job")
@@ -34,15 +42,17 @@ class CollectJobTests(unittest.TestCase):
     def test_collect_with_analyze_runs_stage2(
         self, mock_load_cfg, mock_ingest, mock_stage2, _mock_persist, _mock_sync
     ):
-        mock_load_cfg.return_value = {"paths": {"data_dir": "data"}}
-        mock_ingest.return_value = ["sid01"]
-        mock_stage2.return_value = {"sessions": 1}
-        job = Job("collect", False, {"source": "pi", "ids": ["cat1"], "analyze": True})
-        _run_job(job)
-        mock_stage2.assert_called_once()
-        self.assertEqual(mock_stage2.call_args.kwargs.get("only"), ["sid01"])
-        self.assertEqual(job.result["sessions"], ["sid01"])
-        self.assertEqual(job.result["stage2"], {"sessions": 1})
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = {"paths": {"data_dir": str(Path(tmp) / "data")}}
+            mock_load_cfg.return_value = cfg
+            mock_ingest.return_value = ["sid01"]
+            mock_stage2.return_value = {"sessions": 1}
+            job = Job("collect", False, {"source": "pi", "ids": ["cat1"], "analyze": True})
+            _run_job(job)
+            mock_stage2.assert_called_once()
+            self.assertEqual(mock_stage2.call_args.kwargs.get("only"), ["sid01"])
+            self.assertEqual(job.result["sessions"], ["sid01"])
+            self.assertEqual(job.result["stage2"], {"sessions": 1})
 
 
 class CollectApiTests(unittest.TestCase):

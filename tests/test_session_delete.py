@@ -311,17 +311,27 @@ class SessionDeleteApiTests(unittest.TestCase):
         requests = [
             ("post", f"/api/raw/session/{SID}/relabel", {"label": "positive"}),
             ("put", f"/api/raw/session/{SID}/turns", {}),
-            ("put", f"/api/gold/session/{SID}/review/items", {"items": {}}),
-            ("post", f"/api/gold/session/{SID}/review/batch", {"action": "reset_all"}),
-            ("post", f"/api/gold/session/{SID}/review/decision", {"decision": None}),
-            ("post", f"/api/gold/session/{SID}/review/refine", {"items": {}}),
-            ("post", f"/api/gold/session/{SID}/finalize", {"finalized": False}),
         ]
         for method, path, body in requests:
             with self.subTest(path=path):
                 response = getattr(client, method)(path, json=body)
                 self.assertEqual(409, response.status_code)
                 self.assertIn("正在删除会话", response.json()["detail"])
+
+    def test_removed_review_routes_return_404_or_405(self) -> None:
+        client = TestClient(app)
+        removed = [
+            ("post", f"/api/gold/session/{SID}/review", {}),
+            ("put", f"/api/gold/session/{SID}/review/items", {"items": {}}),
+            ("post", f"/api/gold/session/{SID}/review/batch", {"action": "reset_all"}),
+            ("post", f"/api/gold/session/{SID}/review/decision", {"decision": None}),
+            ("post", f"/api/gold/session/{SID}/review/refine", {"items": {}}),
+            ("post", f"/api/gold/session/{SID}/finalize", {"finalized": False}),
+        ]
+        for method, path, body in removed:
+            with self.subTest(path=path):
+                response = getattr(client, method)(path, json=body)
+                self.assertIn(response.status_code, (404, 405))
 
     def test_delete_job_queues_when_other_writers_running(self) -> None:
         from unittest.mock import patch

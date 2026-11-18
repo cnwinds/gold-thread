@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from goldthread import build_tools, curate_tools, eval_tools, inspect_tools, ledger, report_tools
 from pipeline import (
     curation,
     dataset_build,
@@ -305,6 +306,17 @@ def _run_job(job: Job) -> None:
             sid = str((job.extra.get("sessions") or [""])[0])
             job.result = delete_session(sid, cfg=cfg, log=job.log)
             _ROW_CACHE.clear()
+            try:
+                ledger.record_operation(
+                    "web.delete_session",
+                    reason=f"Web 控制台删除会话 {sid[:8]}",
+                    actor="human",
+                    params={"sid": sid},
+                    affected={"sids": [sid]},
+                    cfg=cfg,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         elif job.stage == "stage1":
             job.result = stage1_extract.run(force=job.force, log=job.log, cfg=cfg)
         elif job.stage == "stage2":
@@ -329,6 +341,18 @@ def _run_job(job: Job) -> None:
                     force=False, log=job.log, cfg=cfg, only=sids
                 )
             job.result = result
+            if sids:
+                try:
+                    ledger.record_operation(
+                        "web.collect",
+                        reason=f"Web 控制台采集 {len(sids)} 条会话",
+                        actor="human",
+                        params={"source": job.extra.get("source"), "count": len(sids), "analyze": bool(job.extra.get("analyze"))},
+                        affected={"sids": sids},
+                        cfg=cfg,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
         elif job.stage == "stage3":
             # 与全流程一致：构建前先评估，用户不必先跳到训练页单独点「DPO 评估」。
             job.log("[stage3] 先评估待复核 DPO，再合成训练集")
@@ -343,21 +367,6 @@ def _run_job(job: Job) -> None:
             evaluation = _evaluate_dpo_or_raise(job.log, cfg)
             r3 = stage3_synth.run(force=job.force, log=job.log, cfg=cfg)
             job.result = {"stage1": r1, "stage2": r2, "dpo_evaluation": evaluation, "stage3": r3}
-        elif job.stage == "review":
-            from pipeline.review import run_review
-            res = run_review(
-                session_ids=job.extra.get("sessions"), force=job.force, log=job.log, cfg=cfg
-            )
-            # 评审完成后先刷新 DPO 评估，再构建；门禁失败必须让任务失败可见。
-            _evaluate_dpo_or_raise(job.log, cfg)
-            stage3_synth.run(force=False, log=job.log, cfg=cfg)
-            job.result = res
-        elif job.stage == "refine":
-            from pipeline.review import run_refine
-            res = run_refine((job.extra.get("sessions") or [None])[0], log=job.log, cfg=cfg)
-            _evaluate_dpo_or_raise(job.log, cfg)
-            stage3_synth.run(force=False, log=job.log, cfg=cfg)
-            job.result = res
         elif job.stage == "classify":
             from pipeline.turnclassify import classify_session
             sid = (job.extra.get("sessions") or [None])[0]
@@ -390,6 +399,17 @@ def _run_job(job: Job) -> None:
                 delivery_dir=stage_dirs(cfg)["root"] / "04_release" / "delivery",
             )
             job.result = {**result, "build_id": manifest["build_id"]}
+            try:
+                ledger.record_operation(
+                    "web.package",
+                    reason=f"Web 控制台打包 {result.get('zip_name') or ''}".strip(),
+                    actor="human",
+                    params={"build_id": manifest["build_id"], "profile": job.extra.get("profile")},
+                    affected={"build_id": manifest["build_id"], "pack": result.get("package_hash")},
+                    cfg=cfg,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         else:
             raise RuntimeError(f"未知阶段: {job.stage}")
         job.status = "done"
@@ -926,8 +946,8 @@ class RunBody(BaseModel):
 
 @app.post("/api/run")
 def run_stage(body: RunBody) -> Dict[str, Any]:
-    if body.stage not in ("stage1", "stage2", "stage3", "dataset_evaluate", "all", "review", "refine", "classify"):
-        raise HTTPException(400, "stage 必须是 stage1|stage2|stage3|dataset_evaluate|all|review|refine|classify")
+    if body.stage not in ("stage1", "stage2", "stage3", "dataset_evaluate", "all", "classify"):
+        raise HTTPException(400, "stage 必须是 stage1|stage2|stage3|dataset_evaluate|all|classify")
     job = _start(body.stage, body.force, {"sessions": body.sessions})
     return {"job_id": job.id, "status": job.status}
 
@@ -1109,17 +1129,67 @@ def overview() -> Dict[str, Any]:
         or (latest_review_action_at and s3_at and latest_review_action_at > s3_at)
     )
 
+    latest_build_idx = read_json(
+        dirs["root"] / "04_release" / "builds" / "LATEST_BUILD.json", default={}
+    ) or {}
+    latest_build_id = str(latest_build_idx.get("build_id") or "").strip()
+    latest_build: Optional[Dict[str, Any]] = None
+    if latest_build_id:
+        b_meta = read_json(
+            dirs["root"] / "04_release" / "builds" / latest_build_id / "BUILD.json",
+            default={},
+        ) or {}
+        latest_build = {
+            "build_id": latest_build_id,
+            "created_at": b_meta.get("created_at") or latest_build_idx.get("created_at"),
+            "counts": b_meta.get("counts") or latest_build_idx.get("counts") or {},
+            "plan_hash": b_meta.get("plan_hash") or latest_build_idx.get("plan_hash"),
+            "config_hash": b_meta.get("config_hash") or latest_build_idx.get("config_hash"),
+            "split_plan": b_meta.get("split_plan") or latest_build_idx.get("split_plan") or {},
+        }
+
+    latest_pack: Optional[Dict[str, Any]] = None
+    zips = _delivery_zips(_delivery_dir(cfg))
+    if zips:
+        zp = zips[0]
+        man = _zip_manifest(zp)
+        p_counts = man.get("counts") if isinstance(man.get("counts"), dict) else {}
+        p_fmt = (
+            man.get("format")
+            if isinstance(man.get("format"), dict)
+            else (man.get("format_contract") if isinstance(man.get("format_contract"), dict) else {})
+        )
+        latest_pack = {
+            "name": zp.name,
+            "package_hash": man.get("package_hash") or _package_hash_from_name(zp.name),
+            "build_id": man.get("build_id") or "",
+            "generated_at": man.get("generated_at") or time.strftime(
+                "%Y-%m-%dT%H:%M:%S", time.localtime(zp.stat().st_mtime)
+            ),
+            "size_bytes": zp.stat().st_size,
+            "profile": p_fmt.get("profile") or "",
+            "format_label": p_fmt.get("label") or "",
+            "sft_train": p_counts.get("sft.train.lf.jsonl"),
+            "sft_eval": p_counts.get("sft.eval.lf.jsonl"),
+            "dpo_train": p_counts.get("dpo.train.lf.jsonl"),
+            "dpo_eval": p_counts.get("dpo.eval.lf.jsonl"),
+            "length_gate_ok": bool(man.get("length_gate") and "_skip" not in (man.get("length_gate") or {})),
+        }
+
+    reports_rows = report_tools.list_reports(cfg=cfg)
+    recent_ledger_events = ledger.read_ledger(cfg=cfg, limit=15)
+
     return {
         "generated_at": now_iso(),
         "sync_dirty": sync_dirty,
         "config": {
             "path": str(CONFIG_PATH),
             "hash": config_hash(cfg),
-            "model": cfg["llm"]["model"],
-            "use_model_turns": cfg["turns"].get("use_model", False),
-            "review_enabled": cfg["review"].get("enabled", False),
-            "sessions_dir": cfg["paths"]["sessions_dir"],
-            "data_dir": cfg["paths"]["data_dir"],
+            "model": (cfg.get("llm") or {}).get("model", ""),
+            "use_model_turns": (cfg.get("turns") or {}).get("use_model", False),
+            "review_enabled": (cfg.get("review") or {}).get("enabled", False),
+            "sessions_dir": (cfg.get("paths") or {}).get("sessions_dir", ""),
+            "data_dir": (cfg.get("paths") or {}).get("data_dir", ""),
         },
         "stages": {
             "stage1": {
@@ -1162,6 +1232,10 @@ def overview() -> Dict[str, Any]:
         "skipped": raw_index.get("skipped", {}),
         "folder_stats": raw_index.get("folder_stats", {}),
         "duplicates": raw_index.get("duplicates", {}),
+        "latest_build": latest_build,
+        "latest_pack": latest_pack,
+        "reports": reports_rows,
+        "recent_ledger": recent_ledger_events,
     }
 
 
@@ -1434,6 +1508,17 @@ def save_turn_overrides(sid: str, body: TurnOverridesBody) -> Dict[str, Any]:
             if gold_idx.get("sessions"):
                 stage2_gold.run(force=False, log=lambda *_: None, cfg=cfg)
                 stage3_synth.run(force=False, log=lambda *_: None, cfg=cfg)
+        try:
+            ledger.record_operation(
+                "web.turns",
+                reason="Web 控制台重置回合覆盖" if body.reset else "Web 控制台修改回合分类覆盖",
+                actor="human",
+                params={"sid": sid, "reset": bool(body.reset), "turns": body.turns},
+                affected={"sids": [sid]},
+                cfg=cfg,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return res
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -1535,8 +1620,45 @@ def raw_to_gold(sid: str) -> Dict[str, Any]:
 # 黄金数据与人机协同复核 (Stage 2 & Review)
 # ---------------------------------------------------------------------------
 
+def _gold_usage_category(
+    *,
+    dataset_excluded: bool,
+    sft_excluded: bool,
+    dpo_excluded: bool,
+    split: str,
+) -> str:
+    if dataset_excluded or sft_excluded or dpo_excluded:
+        return "disabled"
+    return "eval" if split == "eval" else "train"
+
+
+def _gold_row_sort_key(r: Dict[str, Any]) -> tuple:
+    cat = str(r.get("usage_category") or "train")
+    cat_rank = {"train": 0, "eval": 1, "disabled": 2}.get(cat, 3)
+    full_off = 1 if (r.get("dataset_excluded") or (r.get("sft_excluded") and r.get("dpo_excluded"))) else 0
+    split_rank = 0 if r.get("split") == "train" else 1
+    lin = r.get("lineage") or {}
+    has_output = 1 if ((lin.get("sft_windows") or 0) > 0 or (lin.get("dpo_train") or 0) > 0) else 0
+    return (
+        cat_rank,
+        full_off,
+        split_rank,
+        0 if has_output else 1,
+        str(r.get("project_group") or ""),
+        str(r.get("session_id") or ""),
+    )
+
+
 @app.get("/api/gold/sessions")
-def gold_sessions(label: str = "", project: str = "", status: str = "", q: str = "", model: str = "", output: str = "") -> Dict[str, Any]:
+def gold_sessions(
+    label: str = "",
+    project: str = "",
+    status: str = "",
+    q: str = "",
+    model: str = "",
+    output: str = "",
+    category: str = "",
+) -> Dict[str, Any]:
     cfg = load_config()
     dirs = stage_dirs(cfg)
     idx = load_index(dirs["gold"] / "index.json")
@@ -1546,6 +1668,7 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
     draft = dataset_draft.load_draft(cfg)
     split_plan = draft.get("split_plan") or {}
     rows = []
+    category_counts = {"train": 0, "eval": 0, "disabled": 0}
     for sid, e in idx["sessions"].items():
         if model and _dominant_model(e) != model:
             continue
@@ -1572,6 +1695,16 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
             continue
         if output == "unwritten" and lineage["train_written"]:
             continue
+        dataset_excluded = layer["action"] == "exclude"
+        usage_cat = _gold_usage_category(
+            dataset_excluded=dataset_excluded,
+            sft_excluded=bool(usage["sft_excluded"]),
+            dpo_excluded=bool(usage["dpo_excluded"]),
+            split=lineage["split"],
+        )
+        category_counts[usage_cat] = category_counts.get(usage_cat, 0) + 1
+        if category and usage_cat != category:
+            continue
         rows.append(
             {
                 **{k: v for k, v in e.items() if k != "annotation_file"},
@@ -1587,7 +1720,7 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
                 "review_progress": curation.progress(ann),
                 "funnel": funnel_info,
                 "lineage": lineage,
-                "dataset_excluded": layer["action"] == "exclude",
+                "dataset_excluded": dataset_excluded,
                 "exclusion_scope": layer.get("scope", ""),
                 "exclusion_reason": layer.get("reason", ""),
                 "sft_excluded": usage["sft_excluded"],
@@ -1596,11 +1729,13 @@ def gold_sessions(label: str = "", project: str = "", status: str = "", q: str =
                 "dpo_exclusion_scope": usage["dpo_exclusion_scope"],
                 "split": lineage["split"],
                 "split_source": dataset_draft.split_source(project_group, sid, split_plan),
+                "usage_category": usage_cat,
             }
         )
-    rows.sort(key=lambda r: (r.get("label", ""), r.get("project_group", ""), r["session_id"]))
+    rows.sort(key=_gold_row_sort_key)
     return {
         "total": len(rows),
+        "category_counts": category_counts,
         "source_models": sorted({_dominant_model(e) for e in idx["sessions"].values() if _dominant_model(e)}),
         "sessions": rows,
     }
@@ -1649,196 +1784,6 @@ def gold_session(sid: str) -> Dict[str, Any]:
         "sft_exclusion_scope": usage["sft_exclusion_scope"],
         "dpo_excluded": usage["dpo_excluded"],
         "dpo_exclusion_scope": usage["dpo_exclusion_scope"],
-    }
-
-
-@app.post("/api/gold/session/{sid}/review")
-def review_one(sid: str) -> Dict[str, Any]:
-    job = _start("review", True, {"sessions": [sid]})
-    return {"job_id": job.id}
-
-
-class ReviewItemsBody(BaseModel):
-    items: Dict[str, Dict[str, Any]] = {}
-    note: Optional[str] = None
-
-
-class ReviewBatchBody(BaseModel):
-    action: str
-
-
-class ReviewDecisionBody(BaseModel):
-    decision: Optional[str] = None
-    note: str = ""
-    auto_sync_stage3: bool = True
-
-
-def _gold_entry(sid: str) -> Dict[str, Any]:
-    cfg = load_config()
-    e = load_index(stage_dirs(cfg)["gold"] / "index.json")["sessions"].get(sid)
-    if not e:
-        raise HTTPException(404, "黄金数据不存在")
-    return e
-
-
-def _load_ann(sid: str) -> tuple:
-    e = _gold_entry(sid)
-    path = Path(e["annotation_file"])
-    return path, read_json(path, default={}) or {}
-
-
-@app.put("/api/gold/session/{sid}/review/items")
-def save_review_items(sid: str, body: ReviewItemsBody) -> Dict[str, Any]:
-    _assert_no_delete_running()
-    cfg = load_config()
-    path, ann = _load_ann(sid)
-    try:
-        curation.update_items(ann, body.items, body.note)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    write_json_atomic(path, ann)
-    preview = {}
-    try:
-        preview = stage3_synth.preview_session_synthesis(sid, cfg=cfg)
-    except Exception:  # noqa: BLE001
-        pass
-    return {
-        "ok": True,
-        "progress": curation.progress(ann),
-        "effective": curation.resolve(ann, cfg)["state"],
-        "synthesis_preview": preview,
-    }
-
-
-@app.post("/api/gold/session/{sid}/review/batch")
-def batch_review_items(sid: str, body: ReviewBatchBody) -> Dict[str, Any]:
-    _assert_no_delete_running()
-    cfg = load_config()
-    path, ann = _load_ann(sid)
-    hr = curation.human(ann)
-    rnd = curation.latest_round(ann)
-    rw_ids = [rw["msg_id"] for rw in (rnd.get("thinking_rewrites") or []) if rw.get("msg_id")]
-    bad_ids = list(rnd.get("bad_step_ids") or [])
-
-    act = body.action
-    if act == "accept_all_rewrites":
-        for mid in rw_ids:
-            it = hr["items"].setdefault(mid, {})
-            if not it.get("rewrite"):
-                it["rewrite"] = "accepted"
-    elif act == "accept_all_rewrites_force":
-        for mid in rw_ids:
-            it = hr["items"].setdefault(mid, {})
-            it["rewrite"] = "accepted"
-    elif act == "reject_all_rewrites":
-        for mid in rw_ids:
-            it = hr["items"].setdefault(mid, {})
-            if not it.get("rewrite"):
-                it["rewrite"] = "rejected"
-    elif act == "exclude_all_bad":
-        for mid in bad_ids:
-            it = hr["items"].setdefault(mid, {})
-            if not it.get("step"):
-                it["step"] = "exclude"
-    elif act == "keep_all_bad":
-        for mid in bad_ids:
-            it = hr["items"].setdefault(mid, {})
-            if not it.get("step"):
-                it["step"] = "keep"
-    elif act == "reset_all":
-        hr["items"] = {}
-    else:
-        raise HTTPException(400, f"未知批量操作: {act}")
-
-    hr["updated_at"] = now_iso()
-    write_json_atomic(path, ann)
-    preview = {}
-    try:
-        preview = stage3_synth.preview_session_synthesis(sid, cfg=cfg)
-    except Exception:  # noqa: BLE001
-        pass
-    return {
-        "ok": True,
-        "items": hr["items"],
-        "progress": curation.progress(ann),
-        "effective": curation.resolve(ann, cfg)["state"],
-        "synthesis_preview": preview,
-    }
-
-
-@app.post("/api/gold/session/{sid}/review/decision")
-def review_decision(sid: str, body: ReviewDecisionBody) -> Dict[str, Any]:
-    if body.auto_sync_stage3:
-        _assert_no_gold_write_running()
-    else:
-        _assert_no_delete_running()
-    cfg = load_config()
-    path, ann = _load_ann(sid)
-    try:
-        curation.decide(ann, body.decision, body.note)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    write_json_atomic(path, ann)
-    eff = curation.resolve(ann, cfg)
-    s3_res = None
-    if body.auto_sync_stage3:
-        try:
-            s3_res = stage3_synth.run(force=False, log=lambda *_: None, cfg=cfg)
-        except Exception:  # noqa: BLE001
-            s3_res = None
-    return {
-        "ok": True,
-        "effective": eff["state"],
-        "stage3_synced": bool(s3_res),
-        "note": "已通过并同步更新 Stage 3 训练集" if s3_res else "结论已保存",
-    }
-
-
-@app.post("/api/gold/session/{sid}/review/refine")
-def review_refine(sid: str, body: ReviewItemsBody) -> Dict[str, Any]:
-    _assert_no_delete_running()
-    path, ann = _load_ann(sid)
-    try:
-        curation.update_items(ann, body.items, body.note)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    if not curation.feedback_targets(ann) and not (ann.get("human_review") or {}).get("note", "").strip():
-        raise HTTPException(400, "没有可供模型修订的意见：请先批注步骤、拒绝改写或填写整体意见")
-    write_json_atomic(path, ann)
-    job = _start("refine", False, {"sessions": [sid]})
-    return {"job_id": job.id}
-
-
-class FinalizeBody(BaseModel):
-    finalized: bool
-    note: str = ""
-
-
-@app.post("/api/gold/session/{sid}/finalize")
-def gold_finalize(sid: str, body: FinalizeBody) -> Dict[str, Any]:
-    _assert_no_gold_write_running()
-    cfg = load_config()
-    path, ann = _load_ann(sid)
-    try:
-        if body.finalized:
-            curation.finalize(ann, body.note)
-        else:
-            curation.unfinalize(ann, body.note)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    write_json_atomic(path, ann)
-    eff = curation.resolve(ann, cfg)
-    synced = False
-    try:
-        stage3_synth.run(force=False, log=lambda *_: None, cfg=cfg)
-        synced = True
-    except Exception:  # noqa: BLE001
-        pass
-    return {
-        "ok": True,
-        "effective": eff["state"],
-        "finalized": bool((ann.get("human_review") or {}).get("finalized")),
-        "stage3_synced": synced,
     }
 
 
@@ -1906,9 +1851,10 @@ def _package_layout_note(name: str) -> str:
 
 
 def _package_hash_from_name(name: str) -> str:
+    stem = Path(name).stem if str(name).endswith(".zip") else str(name)
     for prefix in _ZIP_NAME_PREFIXES:
-        if name.startswith(prefix):
-            return name[len(prefix):]
+        if stem.startswith(prefix):
+            return stem[len(prefix):]
     return ""
 
 
@@ -2095,7 +2041,11 @@ def export_history() -> Dict[str, Any]:
         zips = sorted(delivery_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
         for z in zips:
             man = _zip_manifest(z)
-            fmt = man.get("format_contract") if isinstance(man.get("format_contract"), dict) else {}
+            fmt = (
+                man.get("format_contract")
+                if isinstance(man.get("format_contract"), dict)
+                else (man.get("format") if isinstance(man.get("format"), dict) else {})
+            )
             counts = man.get("counts") if isinstance(man.get("counts"), dict) else {}
             length = ls.pack_length_preview(ls.read_length_stats_static(z))
             rows.append({
@@ -2104,7 +2054,7 @@ def export_history() -> Dict[str, Any]:
                 "generated_at": man.get("generated_at") or time.strftime(
                     "%Y-%m-%dT%H:%M:%S", time.localtime(z.stat().st_mtime)
                 ),
-                "package_hash": man.get("package_hash") or "",
+                "package_hash": man.get("package_hash") or _package_hash_from_name(z.name),
                 "build_id": man.get("build_id") or "",
                 "format_label": (fmt or {}).get("label") or "",
                 "profile": (fmt or {}).get("profile") or "",
@@ -2112,6 +2062,7 @@ def export_history() -> Dict[str, Any]:
                 "sft_eval": counts.get("sft.eval.lf.jsonl"),
                 "dpo_train": counts.get("dpo.train.lf.jsonl"),
                 "dpo_eval": counts.get("dpo.eval.lf.jsonl"),
+                "length_gate_ok": bool(man.get("length_gate") and "_skip" not in (man.get("length_gate") or {})),
                 "length": length,
             })
     return {"total": len(rows), "packs": rows}
@@ -2522,12 +2473,32 @@ def dataset_draft_tree(group_by: str = "project") -> Dict[str, Any]:
         })
         group["sessions"].append(node)
         group["samples"].extend(_flatten_session_samples(node))
+    def _tree_session_sort_key(n: Dict[str, Any]) -> tuple:
+        cat = _gold_usage_category(
+            dataset_excluded=bool(n.get("excluded")),
+            sft_excluded=bool(n.get("sft_excluded")),
+            dpo_excluded=bool(n.get("dpo_excluded")),
+            split=str(n.get("split") or "train"),
+        )
+        cat_rank = {"train": 0, "eval": 1, "disabled": 2}.get(cat, 3)
+        full_off = 1 if (n.get("excluded") or (n.get("sft_excluded") and n.get("dpo_excluded"))) else 0
+        split_rank = 0 if n.get("split") == "train" else 1
+        return (cat_rank, full_off, split_rank, str(n.get("project_group") or ""), str(n.get("session_id") or ""))
+
+    def _tree_group_sort_key(g: Dict[str, Any]) -> tuple:
+        all_sessions_off = bool(g["sessions"]) and all(
+            s.get("excluded") or s.get("sft_excluded") or s.get("dpo_excluded") for s in g["sessions"]
+        )
+        group_off = bool(g.get("own_excluded")) or all_sessions_off
+        cat_rank = 2 if group_off else (1 if g.get("split") == "eval" else 0)
+        return (cat_rank, 1 if g.get("own_excluded") else 0, str(g.get("key") or ""))
+
     out_groups = []
     for group in groups.values():
         group["counts"] = _draft_tree_counts(group.pop("samples"))
-        group["sessions"].sort(key=lambda n: n["session_id"])
+        group["sessions"].sort(key=_tree_session_sort_key)
         out_groups.append(group)
-    out_groups.sort(key=lambda g: g["key"])
+    out_groups.sort(key=_tree_group_sort_key)
     return {
         "group_by": group_by,
         "groups": out_groups,
@@ -2543,12 +2514,27 @@ def dataset_draft_tree(group_by: str = "project") -> Dict[str, Any]:
 @app.put("/api/dataset/draft/decisions")
 def update_dataset_draft_decisions(body: DraftDecisionsBody) -> Dict[str, Any]:
     _assert_no_delete_running()
+    cfg = load_config()
     try:
         result = dataset_draft.update_decisions(
-            [item.model_dump() for item in body.decisions], load_config()
+            [item.model_dump() for item in body.decisions], cfg
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if result.get("changed", 0) > 0:
+        try:
+            reasons = [item.reason.strip() for item in body.decisions if item.reason and item.reason.strip()]
+            samples = [item.sample_id for item in body.decisions if item.sample_id]
+            ledger.record_operation(
+                "web.draft_decisions",
+                reason=reasons[0] if reasons else "Web 控制台样本停用/恢复",
+                actor="human",
+                params={"count": len(body.decisions), "decisions": [item.model_dump() for item in body.decisions[:10]]},
+                affected={"samples": samples},
+                cfg=cfg,
+            )
+        except Exception:  # noqa: BLE001
+            pass
     return {"ok": True, **result}
 
 
@@ -2556,12 +2542,28 @@ def update_dataset_draft_decisions(body: DraftDecisionsBody) -> Dict[str, Any]:
 def update_dataset_draft_scopes(body: ScopeDecisionsBody) -> Dict[str, Any]:
     """项目层或会话层停用/恢复，下面的切片一并生效。"""
     _assert_no_delete_running()
+    cfg = load_config()
     try:
         result = dataset_draft.update_scope_decisions(
-            [item.model_dump() for item in body.updates], load_config()
+            [item.model_dump() for item in body.updates], cfg
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if result.get("changed", 0) > 0:
+        try:
+            reasons = [item.reason.strip() for item in body.updates if item.reason and item.reason.strip()]
+            sids = [item.id for item in body.updates if item.scope in ("session", "session_sft", "session_dpo") and item.id]
+            projects = [item.id for item in body.updates if item.scope == "project" and item.id]
+            ledger.record_operation(
+                "web.draft_scopes",
+                reason=reasons[0] if reasons else "Web 控制台作用域停用/恢复",
+                actor="human",
+                params={"count": len(body.updates), "updates": [item.model_dump() for item in body.updates[:10]]},
+                affected={"sids": sids, "projects": projects},
+                cfg=cfg,
+            )
+        except Exception:  # noqa: BLE001
+            pass
     return {"ok": True, **result}
 
 
@@ -2578,6 +2580,21 @@ def update_dataset_draft_split(body: DraftSplitBody) -> Dict[str, Any]:
         plan = dataset_draft.load_draft(cfg)["split_plan"]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if body.assignments or body.session_assignments:
+        try:
+            ledger.record_operation(
+                "web.draft_split",
+                reason="Web 控制台更新项目/会话切分归属",
+                actor="human",
+                params={"assignments": body.assignments, "session_assignments": body.session_assignments},
+                affected={
+                    "projects": sorted((body.assignments or {}).keys()),
+                    "sids": sorted((body.session_assignments or {}).keys()),
+                },
+                cfg=cfg,
+            )
+        except Exception:  # noqa: BLE001
+            pass
     return {"ok": True, "split_plan": plan}
 
 
@@ -2599,6 +2616,18 @@ def replan_dataset_draft_split(body: DraftReplanBody) -> Dict[str, Any]:
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if not body.dry_run and result.get("changes"):
+        try:
+            ledger.record_operation(
+                "web.draft_split_replan",
+                reason=f"Web 控制台重规划切分 (eval_ratio={body.eval_ratio}, seed={body.seed})",
+                actor="human",
+                params={"eval_ratio": body.eval_ratio, "seed": body.seed},
+                affected={"projects": sorted((result.get("changes") or {}).keys())},
+                cfg=cfg,
+            )
+        except Exception:  # noqa: BLE001
+            pass
     return {
         "ok": True,
         **result,
@@ -2842,6 +2871,745 @@ def _preview(row: Dict[str, Any], dataset_name: str = "") -> Dict[str, Any]:
         "target": (body or think)[:220],
         "tools": tools[:3],
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: 账本、评估报告、包体检/Diff 与统一语料血缘
+# ---------------------------------------------------------------------------
+
+_EVAL_PACK_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+_EVAL_CACHE_LOCK = threading.Lock()
+
+
+def _eval_cache_key(resolved: Dict[str, Any], style: Optional[str]) -> Tuple[Any, ...]:
+    path = Path(resolved["path"])
+    if resolved["kind"] == "zip":
+        st = path.stat()
+        return (str(path), int(st.st_mtime_ns), int(st.st_size), style or "")
+    sigs: List[Tuple[str, int, int]] = []
+    for base in (path, path / "data"):
+        if not base.is_dir():
+            continue
+        for fname in (
+            "BUILD.json",
+            "MANIFEST.json",
+            "length_stats.json",
+            "sft.train.lf.jsonl",
+            "sft.eval.lf.jsonl",
+            "sft_step_windows_sharegpt.train.jsonl",
+            "dpo.train.lf.jsonl",
+        ):
+            fp = base / fname
+            if fp.is_file():
+                st = fp.stat()
+                sigs.append((str(fp), int(st.st_mtime_ns), int(st.st_size)))
+    dir_st = path.stat()
+    return (str(path), int(dir_st.st_mtime_ns), tuple(sigs), style or "")
+
+
+def _cached_eval_pack(
+    target: str, cfg: Dict[str, Any], style: Optional[str] = None
+) -> Dict[str, Any]:
+    resolved = eval_tools.resolve_pack_or_build(target, cfg)
+    key = _eval_cache_key(resolved, style)
+    with _EVAL_CACHE_LOCK:
+        hit = _EVAL_PACK_CACHE.get(key)
+        if hit is not None:
+            return hit
+    ev = eval_tools.eval_pack(target, cfg=cfg, expected_style=style)
+    with _EVAL_CACHE_LOCK:
+        if len(_EVAL_PACK_CACHE) >= 64:
+            oldest = next(iter(_EVAL_PACK_CACHE))
+            _EVAL_PACK_CACHE.pop(oldest, None)
+        _EVAL_PACK_CACHE[key] = ev
+    return ev
+
+
+@app.get("/api/ledger")
+def api_ledger(
+    limit: int = Query(100, ge=1, le=500),
+    sid: str = "",
+    project: str = "",
+    tool: str = "",
+    build_id: str = "",
+    actor: str = "",
+    q: str = "",
+) -> Dict[str, Any]:
+    cfg = load_config()
+    events = ledger.read_ledger(
+        cfg=cfg,
+        limit=limit if not q else 500,
+        sid=sid or None,
+        project=project or None,
+        tool=tool or None,
+        build_id=build_id or None,
+        actor=actor or None,
+    )
+    if q:
+        needle = q.lower()
+        events = [
+            ev for ev in events if needle in json.dumps(ev, ensure_ascii=False).lower()
+        ][:limit]
+    all_recent = ledger.read_ledger(cfg=cfg, limit=500)
+    sorted_tools = sorted({str(e.get("tool")) for e in all_recent if e.get("tool")})
+    sorted_actors = sorted({str(e.get("actor")) for e in all_recent if e.get("actor")})
+    return {
+        "events": events,
+        "count": len(events),
+        "tools": sorted_tools,
+        "actors": sorted_actors,
+    }
+
+
+@app.get("/api/reports")
+def api_reports() -> Dict[str, Any]:
+    cfg = load_config()
+    rows = report_tools.list_reports(cfg=cfg)
+    return {"reports": rows, "count": len(rows)}
+
+
+@app.get("/api/reports/{report_id}")
+def api_report_detail(report_id: str) -> Dict[str, Any]:
+    cfg = load_config()
+    try:
+        return report_tools.get_report(report_id, cfg=cfg)
+    except (FileNotFoundError, KeyError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/eval/pack")
+def api_eval_pack(
+    target: str = Query("latest", min_length=1),
+    style: Optional[str] = None,
+) -> Dict[str, Any]:
+    cfg = load_config()
+    try:
+        ev = _cached_eval_pack(target, cfg, style=style)
+        gate = build_tools.gate_check(target, style=style, cfg=cfg, ev=ev)
+        return {"eval": ev, "gate": gate}
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/eval/diff")
+def api_eval_diff(
+    before: str = Query(..., min_length=1),
+    after: str = Query(..., min_length=1),
+) -> Dict[str, Any]:
+    cfg = load_config()
+    try:
+        ev_before = _cached_eval_pack(before, cfg)
+        ev_after = _cached_eval_pack(after, cfg)
+        return eval_tools.eval_diff(
+            before, after, cfg=cfg, before_eval=ev_before, after_eval=ev_after
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def _compact_args_preview(args: Any, max_len: int = 120) -> str:
+    if args is None:
+        return ""
+    if isinstance(args, dict):
+        gist = (
+            args.get("command")
+            or args.get("path")
+            or args.get("file_path")
+            or args.get("pattern")
+            or args.get("query")
+        )
+        raw = str(gist) if gist is not None else json.dumps(args, ensure_ascii=False)
+    else:
+        raw = str(args)
+    raw = " ".join(raw.split())
+    return raw if len(raw) <= max_len else raw[: max_len - 1] + "…"
+
+
+@app.get("/api/sessions")
+def api_sessions(
+    project: str = "",
+    model: str = "",
+    category: str = "",
+    output: str = "",
+    q: str = "",
+) -> Dict[str, Any]:
+    cfg = load_config()
+    dirs = stage_dirs(cfg)
+    raw_idx = load_index(dirs["raw"] / "index.json")
+    gold_idx = load_index(dirs["gold"] / "index.json")
+    raw_sessions = raw_idx.get("sessions") or {}
+    gold_sessions = gold_idx.get("sessions") or {}
+
+    train_stats = read_json(dirs["train"] / "stats.json", default={}) or {}
+    session_funnels = train_stats.get("session_funnels") or {}
+    dpo_written = _dpo_written_by_session(dirs["train"])
+    draft = dataset_draft.load_draft(cfg)
+    split_plan = draft.get("split_plan") or {}
+    step_decisions_all = stage2_gold.load_step_decisions(cfg)
+
+    all_sids = sorted(set(raw_sessions) | set(gold_sessions))
+    all_projects: set[str] = set()
+    all_models: set[str] = set()
+    category_counts = {"train": 0, "eval": 0, "disabled": 0}
+    rows: List[Dict[str, Any]] = []
+
+    for sid in all_sids:
+        raw_e = raw_sessions.get(sid) if isinstance(raw_sessions.get(sid), dict) else {}
+        gold_e = gold_sessions.get(sid) if isinstance(gold_sessions.get(sid), dict) else {}
+        has_gold = bool(gold_e)
+        project_group = str(
+            gold_e.get("project_group") or raw_e.get("project_group") or "unknown"
+        )
+        dominant_model = _dominant_model(gold_e) or _dominant_model(raw_e) or "unknown"
+        all_projects.add(project_group)
+        if dominant_model:
+            all_models.add(dominant_model)
+
+        if project and project_group != project:
+            continue
+        if model and dominant_model != model:
+            continue
+
+        origin = str(raw_e.get("origin") or (gold_e.get("source") or {}).get("origin") or "pi")
+        label = str(gold_e.get("label") or raw_e.get("label") or "pending")
+        r_stats = raw_e.get("stats") or {}
+        g_stats = gold_e.get("stats") or {}
+        raw_stats = {
+            "assistant_steps": int(r_stats.get("assistant_steps") or g_stats.get("raw_steps") or 0),
+            "clean_steps": int(r_stats.get("clean_steps") or 0),
+            "turns_total": int(r_stats.get("turns_total") or 0),
+            "turns_kept": int(r_stats.get("turns_kept") or 0),
+            "turns_folded": int(r_stats.get("turns_folded") or g_stats.get("turns_folded") or 0),
+            "turns_dropped": int(
+                r_stats.get(
+                    "turns_dropped",
+                    max(0, int(r_stats.get("turns_total") or 0) - int(r_stats.get("turns_kept") or 0)),
+                )
+            ),
+            "root_prompt": str(g_stats.get("root_prompt") or r_stats.get("root_prompt") or ""),
+        }
+        gold_stats = {
+            "gold_steps": int(g_stats.get("gold_steps") or 0),
+            "folded": int(g_stats.get("folded") or 0),
+            "pruned_detours": int(g_stats.get("pruned_detours") or 0),
+            "thinking_compressed": int(g_stats.get("thinking_compressed") or 0),
+        }
+
+        ann: Dict[str, Any] = {}
+        ann_file = gold_e.get("annotation_file")
+        if has_gold and ann_file and Path(ann_file).is_file():
+            ann = read_json(Path(ann_file), default={}) or {}
+
+        sd_entry = step_decisions_all.get(sid) if isinstance(step_decisions_all.get(sid), dict) else {}
+        raw_mrep = (
+            gold_e.get("model_report")
+            or ann.get("model_report")
+            or sd_entry.get("model_report")
+            or {}
+        )
+        model_report = (
+            {
+                "verdict": raw_mrep.get("verdict"),
+                "confidence": raw_mrep.get("confidence"),
+                "reason": raw_mrep.get("reason") or "",
+            }
+            if isinstance(raw_mrep, dict) and raw_mrep
+            else None
+        )
+        effective = curation.resolve(ann, cfg)["state"] if has_gold else "raw_only"
+
+        if has_gold:
+            lineage = _session_lineage(sid, gold_e, session_funnels, dpo_written)
+        else:
+            lineage = {
+                "gold_steps": None,
+                "raw_steps": raw_stats["assistant_steps"],
+                "pruned": None,
+                "dpo_made": 0,
+                "split": "",
+                "sft_windows": None,
+                "sft_full": False,
+                "train_written": False,
+                "dpo_train": None,
+                "dpo_parts": None,
+                "dpo_candidates": None,
+            }
+
+        split = dataset_draft.effective_split(project_group, sid, split_plan)
+        lineage["split"] = split
+
+        if output == "sft" and not (lineage["train_written"] and (lineage["sft_windows"] or 0) > 0):
+            continue
+        if output == "dpo" and not (lineage["train_written"] and (lineage["dpo_train"] or 0) > 0):
+            continue
+        if output == "unwritten" and lineage["train_written"]:
+            continue
+
+        if q:
+            blob = json.dumps(
+                [sid, project_group, origin, dominant_model, raw_stats["root_prompt"], model_report],
+                ensure_ascii=False,
+            )
+            if q.lower() not in blob.lower():
+                continue
+
+        layer = dataset_draft.layer_exclusion(draft, "session", sid, project_group)
+        usage = dataset_draft.session_kind_exclusions(draft, sid, project_group)
+        dataset_excluded = layer["action"] == "exclude"
+        usage_cat = _gold_usage_category(
+            dataset_excluded=dataset_excluded,
+            sft_excluded=bool(usage["sft_excluded"]),
+            dpo_excluded=bool(usage["dpo_excluded"]),
+            split=split,
+        )
+        category_counts[usage_cat] = category_counts.get(usage_cat, 0) + 1
+        if category and usage_cat != category:
+            continue
+
+        rows.append(
+            {
+                "session_id": sid,
+                "project_group": project_group,
+                "origin": origin,
+                "dominant_model": dominant_model,
+                "label": label,
+                "has_gold": has_gold,
+                "raw_stats": raw_stats,
+                "gold_stats": gold_stats,
+                "model_report": model_report,
+                "effective": effective,
+                "lineage": lineage,
+                "split": split,
+                "split_source": dataset_draft.split_source(project_group, sid, split_plan),
+                "usage_category": usage_cat,
+                "dataset_excluded": dataset_excluded,
+                "exclusion_scope": layer.get("scope", ""),
+                "exclusion_reason": layer.get("reason", ""),
+                "sft_excluded": usage["sft_excluded"],
+                "sft_exclusion_scope": usage["sft_exclusion_scope"],
+                "dpo_excluded": usage["dpo_excluded"],
+                "dpo_exclusion_scope": usage["dpo_exclusion_scope"],
+            }
+        )
+
+    rows.sort(
+        key=lambda r: (
+            {"train": 0, "eval": 1, "disabled": 2}.get(str(r.get("usage_category") or "train"), 3),
+            0 if r["has_gold"] else 1,
+            str(r.get("project_group") or ""),
+            str(r.get("session_id") or ""),
+        )
+    )
+    return {
+        "total": len(rows),
+        "projects": sorted(all_projects),
+        "source_models": sorted(all_models),
+        "category_counts": category_counts,
+        "sessions": rows,
+    }
+
+
+@app.get("/api/sessions/{sid}/lineage")
+def api_session_lineage(sid: str) -> Dict[str, Any]:
+    cfg = load_config()
+    dirs = stage_dirs(cfg)
+    raw_idx = load_index(dirs["raw"] / "index.json")
+    gold_idx = load_index(dirs["gold"] / "index.json")
+    raw_sessions = raw_idx.get("sessions") or {}
+    gold_sessions = gold_idx.get("sessions") or {}
+    pool = set(raw_sessions) | set(gold_sessions)
+    try:
+        full_sid = inspect_tools._resolve_session_id(sid, pool)  # noqa: SLF001
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    raw_e = raw_sessions.get(full_sid) or {}
+    gold_e = gold_sessions.get(full_sid) or {}
+    has_gold = bool(gold_e)
+
+    raw_meta = (
+        read_json(Path(raw_e["meta_file"]), default={})
+        if raw_e.get("meta_file") and Path(raw_e["meta_file"]).is_file()
+        else dict(raw_e)
+    ) or {}
+    gold_rec: Dict[str, Any] = {}
+    if gold_e.get("gold_file") and Path(gold_e["gold_file"]).is_file():
+        grows = read_jsonl(Path(gold_e["gold_file"]))
+        if grows:
+            gold_rec = grows[0]
+    ann: Dict[str, Any] = {}
+    if gold_e.get("annotation_file") and Path(gold_e["annotation_file"]).is_file():
+        ann = copy.deepcopy(read_json(Path(gold_e["annotation_file"]), default={}) or {})
+    if ann:
+        curation.ensure_rounds(ann)
+
+    pruned_rows = (
+        read_jsonl(Path(gold_e["reject_file"]))
+        if gold_e.get("reject_file") and Path(gold_e["reject_file"]).is_file()
+        else []
+    )
+    dpo_rows = (
+        read_jsonl(Path(gold_e["dpo_file"]))
+        if gold_e.get("dpo_file") and Path(gold_e["dpo_file"]).is_file()
+        else []
+    )
+
+    raw_file = (
+        raw_e.get("raw_file")
+        or (gold_e.get("source") or {}).get("raw_file")
+        or ""
+    )
+    raw_flow: List[Dict[str, Any]] = []
+    raw_marks: List[Dict[str, Any]] = []
+    if raw_file and Path(raw_file).is_file():
+        max_tool_chars = int((cfg.get("synth") or {}).get("max_tool_output_chars", 12000))
+        parsed = pilog.parse_session(Path(raw_file), max_tool_output_chars=max_tool_chars)
+        raw_flow, raw_marks, _flow_stats = pilog.build_flow(
+            parsed,
+            cfg,
+            raw_meta.get("turn_annotations"),
+            raw_meta.get("manual_turn_overrides"),
+        )
+    else:
+        raw_marks = list(raw_meta.get("turns") or [])
+
+    turns_out: List[Dict[str, Any]] = []
+    for t in raw_marks:
+        if not isinstance(t, dict):
+            continue
+        turns_out.append(
+            {
+                "turn_index": t.get("turn_index"),
+                "kind": t.get("kind") or "",
+                "action": t.get("action") or ("dropped" if t.get("dropped") else ("folded" if t.get("folded") else "kept")),
+                "dropped": bool(t.get("dropped")),
+                "folded": bool(t.get("folded")),
+                "popped_await_msg": bool(t.get("popped_await_msg")),
+                "assistant_steps": int(t.get("assistant_steps") or 0),
+                "source": t.get("source") or "rule",
+                "reason": t.get("reason") or "",
+                "text": str(t.get("text") or t.get("text_preview") or ""),
+            }
+        )
+
+    step_decisions_all = stage2_gold.load_step_decisions(cfg)
+    sd_entry = step_decisions_all.get(full_sid) if isinstance(step_decisions_all.get(full_sid), dict) else {}
+    sd_steps = sd_entry.get("steps") if isinstance(sd_entry.get("steps"), dict) else {}
+    eff = curation.resolve(ann, cfg) if ann else {"state": "raw_only", "excluded": [], "rewrites": {}}
+    eff_excluded = set(eff.get("excluded") or [])
+    eff_rewrites = eff.get("rewrites") or {}
+    hr_items = ((ann.get("human_review") or {}).get("items") or {}) if ann else {}
+
+    mrep = (
+        ann.get("model_report")
+        or gold_rec.get("model_report")
+        or gold_e.get("model_report")
+        or sd_entry.get("model_report")
+        or None
+    )
+    hl_weights: Dict[str, Any] = {}
+    if isinstance(mrep, dict):
+        for h in mrep.get("highlights") or []:
+            if isinstance(h, dict) and h.get("msg_id"):
+                hl_weights[str(h["msg_id"])] = h.get("weight")
+
+    raw_asst = [m for m in raw_flow if m.get("role") == "assistant"]
+    gold_asst = [m for m in (gold_rec.get("messages") or []) if m.get("role") == "assistant"]
+    if not raw_asst:
+        raw_asst = gold_asst
+
+    gold_by_id: Dict[str, Dict[str, Any]] = {
+        str(m.get("id") or ""): m for m in gold_asst if m.get("id")
+    }
+    folded_into: Dict[str, str] = {}
+    for gm in gold_asst:
+        if gm.get("folded_from"):
+            folded_into[str(gm["folded_from"])] = str(gm.get("id") or "")
+        fd = gm.get("fold_details")
+        if isinstance(fd, dict) and fd.get("folded_msg_id"):
+            folded_into[str(fd["folded_msg_id"])] = str(gm.get("id") or "")
+
+    pruned_by_id: Dict[str, Dict[str, Any]] = {}
+    for pr in pruned_rows:
+        if isinstance(pr, dict) and pr.get("dropped_msg_id"):
+            pruned_by_id[str(pr["dropped_msg_id"])] = pr
+
+    steps_out: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for idx, rm in enumerate(raw_asst):
+        mid = str(rm.get("id") or f"step_{idx}")
+        seen_ids.add(mid)
+        gm = gold_by_id.get(mid)
+        pr = pruned_by_id.get(mid)
+        sd_step = sd_steps.get(mid) if isinstance(sd_steps.get(mid), dict) else {}
+
+        raw_thinking = str(
+            rm.get("raw_thinking") if "raw_thinking" in rm else (rm.get("thinking") or "")
+        )
+        if gm and not raw_thinking and gm.get("raw_thinking"):
+            raw_thinking = str(gm.get("raw_thinking") or "")
+
+        if gm:
+            gold_thinking = str(eff_rewrites.get(mid) or gm.get("thinking") or "")
+            flags = list(gm.get("flags") or [])
+            is_excluded = (
+                bool(gm.get("excluded"))
+                or (mid in eff_excluded)
+                or (sd_step.get("action") == "exclude")
+                or ((hr_items.get(mid) or {}).get("step") == "exclude")
+            )
+            changed = bool(raw_thinking.strip() != gold_thinking.strip())
+            if is_excluded:
+                state = "excluded"
+            elif (
+                changed
+                or any(
+                    f in flags
+                    for f in (
+                        "thinking_compressed",
+                        "thinking_backfilled",
+                        "thinking_synthesized",
+                        "seam_repaired",
+                    )
+                )
+                or sd_step.get("action") == "rewrite"
+            ):
+                state = "rewritten"
+            elif sd_step.get("action") == "fold":
+                state = "folded"
+            else:
+                state = "kept"
+            text_val = str(gm.get("text") or "")
+        else:
+            gold_thinking = ""
+            flags = []
+            is_excluded = sd_step.get("action") == "exclude"
+            changed = False
+            text_val = str(rm.get("text") or "")
+            if (
+                mid in folded_into
+                or (pr and "fold" in str(pr.get("reason") or ""))
+                or sd_step.get("action") == "fold"
+            ):
+                state = "folded"
+            elif pr or has_gold:
+                state = "pruned"
+            else:
+                state = "kept"
+
+        src_msg = gm or rm
+        tcs = [
+            {
+                "name": str(tc.get("name") or ""),
+                "args_preview": _compact_args_preview(tc.get("arguments")),
+            }
+            for tc in (src_msg.get("tool_calls") or [])
+            if isinstance(tc, dict)
+        ]
+        q_info = rm.get("raw_quality") or rm.get("quality") or (gm or {}).get("raw_quality") or (gm or {}).get("quality") or {}
+        pathologies = list(q_info.get("pathologies") or [])
+
+        reason_parts: List[str] = []
+        for cand in (
+            sd_step.get("reason"),
+            (gm or {}).get("exclude_reason"),
+            (gm or {}).get("judge_reason"),
+            (gm or {}).get("seam_reason"),
+            (pr or {}).get("reason"),
+        ):
+            if cand and str(cand) not in reason_parts:
+                reason_parts.append(str(cand))
+        if mid in folded_into:
+            reason_parts.append(f"folded_into:{folded_into[mid][:8]}")
+        for f in flags:
+            if f not in reason_parts:
+                reason_parts.append(str(f))
+
+        steps_out.append(
+            {
+                "state": state,
+                "msg_id": mid,
+                "turn_index": src_msg.get("turn_index"),
+                "step_index": idx,
+                "tool_calls": tcs,
+                "raw_thinking": raw_thinking,
+                "gold_thinking": gold_thinking,
+                "changed": changed,
+                "text": text_val,
+                "reason": " · ".join(reason_parts),
+                "flags": flags,
+                "pathologies": pathologies,
+                "excluded": is_excluded,
+                "highlight_weight": hl_weights.get(mid),
+                "in_gold": bool(gm),
+            }
+        )
+
+    for pr in pruned_rows:
+        if not isinstance(pr, dict):
+            continue
+        did = str(pr.get("dropped_msg_id") or "")
+        if not did or did in seen_ids:
+            continue
+        rej = pr.get("rejected_msg") if isinstance(pr.get("rejected_msg"), dict) else {}
+        steps_out.append(
+            {
+                "state": "pruned",
+                "msg_id": did,
+                "turn_index": rej.get("turn_index"),
+                "step_index": len(steps_out),
+                "tool_calls": [
+                    {
+                        "name": str(tc.get("name") or ""),
+                        "args_preview": _compact_args_preview(tc.get("arguments")),
+                    }
+                    for tc in (rej.get("tool_calls") or [])
+                    if isinstance(tc, dict)
+                ],
+                "raw_thinking": str(rej.get("raw_thinking") or rej.get("thinking") or pr.get("rejected_thinking") or ""),
+                "gold_thinking": "",
+                "changed": False,
+                "text": str(rej.get("text") or ""),
+                "reason": str(pr.get("reason") or "pruned"),
+                "flags": [],
+                "pathologies": [],
+                "excluded": False,
+                "highlight_weight": None,
+                "in_gold": False,
+            }
+        )
+
+    train_root = dirs["train"]
+    train_stats = read_json(train_root / "stats.json", default={}) or {}
+    funnels = train_stats.get("session_funnels") or {}
+    dpo_written = _dpo_written_by_session(train_root)
+    draft = dataset_draft.load_draft(cfg)
+    split_plan = draft.get("split_plan") or {}
+    project_group = str(
+        gold_e.get("project_group")
+        or raw_e.get("project_group")
+        or gold_rec.get("project_group")
+        or "unknown"
+    )
+    layer = dataset_draft.layer_exclusion(draft, "session", full_sid, project_group)
+    usage = dataset_draft.session_kind_exclusions(draft, full_sid, project_group)
+    lineage = _session_lineage(full_sid, gold_e, funnels, dpo_written) if has_gold else {
+        "gold_steps": None,
+        "raw_steps": len(raw_asst),
+        "pruned": None,
+        "dpo_made": 0,
+        "split": "",
+        "sft_windows": None,
+        "sft_full": False,
+        "train_written": False,
+        "dpo_train": None,
+        "dpo_parts": None,
+        "dpo_candidates": None,
+    }
+    split = dataset_draft.effective_split(project_group, full_sid, split_plan)
+    lineage["split"] = split
+
+    dpo_verdicts = read_json(dirs["state"] / "dpo_verdicts.json", default={}) or {}
+    dpo_out: List[Dict[str, Any]] = []
+    for idx, dr in enumerate(dpo_rows):
+        if not isinstance(dr, dict):
+            continue
+        sample_id = str(dr.get("sample_id") or f"dpo::{full_sid}::{idx}")
+        dmeta = dr.get("metadata") if isinstance(dr.get("metadata"), dict) else {}
+        v_rec = dpo_verdicts.get(sample_id) if isinstance(dpo_verdicts.get(sample_id), dict) else {}
+        dec = dataset_draft.decision_for(sample_id, draft)
+        dpo_out.append(
+            {
+                "sample_id": sample_id,
+                "source": dmeta.get("source") or dr.get("source") or "",
+                "reason": dmeta.get("reason") or dr.get("reason") or "",
+                "verdict": v_rec.get("verdict") or "pending",
+                "verdict_reason": v_rec.get("reason") or "",
+                "chosen": _pref_text(dr.get("chosen")),
+                "rejected": _pref_text(dr.get("rejected")),
+                "decision": dec.get("action") or "auto",
+                "included": dec.get("action") != "exclude",
+            }
+        )
+
+    meta_out = {
+        "session_id": full_sid,
+        "project_group": project_group,
+        "cwd": gold_rec.get("cwd") or gold_e.get("cwd") or raw_meta.get("cwd") or raw_e.get("cwd") or "",
+        "models": raw_meta.get("models") or raw_e.get("models") or {},
+        "dominant_model": _dominant_model(gold_e) or _dominant_model(raw_e) or "unknown",
+        "origin": raw_e.get("origin") or (gold_e.get("source") or {}).get("origin") or "pi",
+        "stats": gold_rec.get("stats") or gold_e.get("stats") or raw_meta.get("stats") or raw_e.get("stats") or {},
+        "split": split,
+        "split_source": dataset_draft.split_source(project_group, full_sid, split_plan),
+        "dataset_excluded": layer["action"] == "exclude",
+        "exclusion_scope": layer.get("scope", ""),
+        "exclusion_reason": layer.get("reason", ""),
+        "sft_excluded": usage["sft_excluded"],
+        "sft_exclusion_scope": usage["sft_exclusion_scope"],
+        "dpo_excluded": usage["dpo_excluded"],
+        "dpo_exclusion_scope": usage["dpo_exclusion_scope"],
+        "has_gold": has_gold,
+        "effective": eff.get("state") or "raw_only",
+        "lineage": lineage,
+        "model_report": mrep,
+    }
+
+    ledger_events = ledger.read_ledger(cfg=cfg, sid=full_sid, limit=20)
+    return {
+        "session_id": full_sid,
+        "meta": meta_out,
+        "lineage": lineage,
+        "effective": eff.get("state") or "raw_only",
+        "model_report": mrep,
+        "annotation": ann,
+        "turns": turns_out,
+        "steps": steps_out,
+        "dpo": dpo_out,
+        "pruned": pruned_rows,
+        "ledger_events": ledger_events,
+    }
+
+
+class StepGateBody(BaseModel):
+    msg_id: str
+    action: str
+    reason: str = ""
+
+
+@app.put("/api/gold/session/{sid}/step-gate")
+def put_gold_step_gate(sid: str, body: StepGateBody) -> Dict[str, Any]:
+    if body.action not in ("exclude", "keep"):
+        raise HTTPException(400, "action 必须是 exclude|keep")
+    _assert_no_gold_write_running()
+    cfg = load_config()
+    msg_reason = body.reason.strip() or (
+        "Web 应急排除步骤" if body.action == "exclude" else "Web 恢复步骤"
+    )
+    try:
+        res = curate_tools.curate_steps(
+            {
+                "session_id": sid,
+                "steps": {body.msg_id: {"action": body.action, "reason": msg_reason}},
+            },
+            apply=True,
+            reason=body.reason.strip() or f"Web 步级开关: {body.msg_id} -> {body.action}",
+            actor="human",
+            cfg=cfg,
+        )
+        return {"ok": True, **res}
+    except (KeyError, FileNotFoundError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
