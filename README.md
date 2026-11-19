@@ -31,7 +31,7 @@ pi / Cursor 会话
 
 分工原则（详见 `DATASET_BEST_PRACTICES.md` 三·五节）：**判断权归模型**（删什么、接缝顺不顺、
 值不值得训、偏好对成不成立），**程序只做执行器与校验器**（执行决定、留血缘、守不变量、
-机械提取接缝）。模型调用失败时程序保持原样并降级，不因漏审而静默放行。
+机械提取接缝）。自动提纯和硬门禁不替代对原始回执、黄金接缝及 DPO 方向的复核。
 
 ## 快速开始
 
@@ -51,13 +51,13 @@ python gt.py eval pack latest --json                                     # 训�
 python gt.py eval diff d9dbbbd1 308e6497                                 # 两版交付包指标对比
 python gt.py curate adopt --from "..." --select <sids> --reason "..."    # 采纳会话并记账本
 python gt.py curate steps --file decisions.json --reason "..."           # 写入步级决策并重算黄金层
-python gt.py build --reason "构建新版训练集"                              # 纯确定性构建 + CAS 快照 + 硬门禁
-python gt.py gate check latest                                           # 单独校验 8 项硬性门禁
-python gt.py pack --profile qwen-xml --reason "打包交付 zip"              # 自动记录 parent_pack + 软压缩出包
+python gt.py build --require-reviewed-dpo --reason "构建新版训练集"       # 候选已复核后再构建
+python gt.py pack --build <build_id> --profile qwen-xml --reason "打包交付 zip"
+python gt.py gate check <实际下发的zip路径> --json                          # latest 是 Build，不是交付 ZIP
 python gt.py report publish --title "..." --md report.md --after <hash> --reason "归档评估报告"
 python gt.py ledger list --limit 50                                      # 查看全链路操作审计账本
 
-# 3. 兼容底层管线入口（纯确定性运行；可选小模型初筛走 gt assist turns|judge|dpo）
+# 3. 兼容底层管线入口（遵循配置；离线提纯见下方 SOP，不是严格交付流程）
 python -m pipeline.run stage1
 python -m pipeline.run stage2 --force
 python -m pipeline.run stage3
@@ -65,6 +65,13 @@ python -m pipeline.run stage3
 
 模型调用走 pi 自己的 `~/.pi/agent/models.json`（provider / baseUrl / apiKey），
 默认模型见 `config/pipeline.yaml` 的 `llm.model`（通过 pi `models.json` 调用）。
+
+## 两条使用路径
+
+- **首版只有教师 raw**：选择性采纳、按项目切分，用严格构建先离线提纯；若本轮有未审 DPO，会在固化 Build 前停止。此时从草稿列出并逐对复核（包括 Stage 3 合成的对），再重试，无需先做非严格 Build 或训练学生。黄金层未就绪时，dry-run 返回 `undetermined` 而不是零待审。严格构建后对照已审正文验收冻结 Build，再对实际下发的 ZIP 路径跑门禁。见 [GoldThread SOP](skills/goldthread/SKILL.md)。
+- **已有学生反馈**：用 `gt eval student` 对账，把有证据的问题转成策展决策，保留旧包；按同样的复核、构建和出包流程产出新版。`gt eval diff` 只比较数据包；是否改善必须在不参与策展的独立留出任务上，用重训的学生与旧版实测对照，分别归档版本交付和效果结果。见 [GoldThread SOP](skills/goldthread/SKILL.md)。
+
+源日志与 raw `.jsonl` 不就地修改。证据不足时保留真实失败或停用样本，不把失败编辑改写成成功，也不把只应用部分替换的产物当正例。策展、正式构建、出包和报告按 SOP 写明 `--reason`；并非所有 CLI 子命令都强制这个参数。
 
 ## 2.0 数据事实链
 

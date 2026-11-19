@@ -4,15 +4,13 @@ from __future__ import annotations
 import copy
 import json
 import shutil
+import tempfile
 import time
-import uuid
-import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from pipeline import package, stage1_extract, stage2_gold, stage3_synth
 from pipeline.common.config import load_config, stage_dirs
-from pipeline.common.store import replace_atomic
 
 from . import eval_tools, ledger
 
@@ -157,60 +155,62 @@ def build_pipeline(
     t0 = time.monotonic()
     offline_cfg = _offline_cfg(cfg)
 
-    preview_for_dpo = stage3_synth.draft_preview(offline_cfg, persist_split=False)
-    p_rows = preview_for_dpo.get("rows") or []
-    dpo_rows_all = [r for r in p_rows if r.get("kind") == "dpo"]
-    vstore = stage3_synth.read_json(stage_dirs(offline_cfg)["state"] / "dpo_verdicts.json", default={}) or {}
-    dpo_audit = {
-        "total_candidates": len(dpo_rows_all),
-        "explicit_verdicts": sum(1 for r in dpo_rows_all if r.get("sample_id") in vstore),
-        "cached_reviews": sum(
-            1 for r in dpo_rows_all
-            if r.get("sample_id") not in vstore and r.get("gate_status") in ("good", "swap", "drop", "passed")
-        ),
-        "bypassed_unreviewed": sum(1 for r in dpo_rows_all if r.get("gate_status") == "bypassed"),
-        "pending_evaluations": int((preview_for_dpo.get("summary") or {}).get("pending_evaluations") or 0),
-    }
-
     if dry_run:
-        sft_train_n = sum(1 for r in p_rows if r.get("kind") == "sft" and r.get("included") and r.get("split") == "train")
-        sft_eval_n = sum(1 for r in p_rows if r.get("kind") == "sft" and r.get("included") and r.get("split") == "eval")
-        dpo_train_n = sum(1 for r in p_rows if r.get("kind") == "dpo" and r.get("included") and r.get("split") == "train")
-        dpo_eval_n = sum(1 for r in p_rows if r.get("kind") == "dpo" and r.get("included") and r.get("split") == "eval")
-        strict_ok = (not require_reviewed_dpo) or (dpo_audit["bypassed_unreviewed"] == 0 and dpo_audit["pending_evaluations"] == 0)
+        if scan_raw:
+            blocker = "raw_scan_requested"
+        elif force:
+            blocker = "forced_rebuild"
+        else:
+            blocker = stage2_gold.reuse_blocker(offline_cfg)
+        preview = {} if blocker else stage3_synth.draft_preview(offline_cfg, persist_split=False)
+        if blocker:
+            dpo_audit = dict.fromkeys(stage3_synth.dpo_review_audit(0, []))
+            dpo_audit.update(readiness="undetermined", reason=blocker)
+        else:
+            dpo_audit = preview["dpo_audit"]
+        row_counts = {
+            f"{kind}_{split}_rows": None if blocker else sum(
+                row["kind"] == kind and row["included"] and row["split"] == split
+                for row in preview["rows"]
+            )
+            for kind in ("sft", "dpo") for split in ("train", "eval")
+        }
         return {
-            "ok": strict_ok,
+            "ok": not require_reviewed_dpo or dpo_audit["readiness"] == "ready",
             "dry_run": True,
-            "plan_hash": preview_for_dpo.get("plan_hash"),
-            "dirty": preview_for_dpo.get("dirty"),
-            "last_build": preview_for_dpo.get("last_build"),
-            "split": preview_for_dpo.get("split"),
-            "summary": preview_for_dpo.get("summary"),
+            **{key: preview.get(key) for key in ("plan_hash", "dirty", "last_build", "split", "summary")},
             "dpo_audit": dpo_audit,
             "gate_preview": {
-                "sft_train_rows": sft_train_n,
-                "sft_eval_rows": sft_eval_n,
-                "dpo_train_rows": dpo_train_n,
-                "dpo_eval_rows": dpo_eval_n,
-                "sft_non_empty": bool(sft_train_n > 0 and sft_eval_n > 0),
+                **row_counts,
+                "sft_non_empty": None if blocker else bool(row_counts["sft_train_rows"] and row_counts["sft_eval_rows"]),
+                "readiness": dpo_audit["readiness"],
                 "pending_evaluations": dpo_audit["pending_evaluations"],
                 "bypassed_unreviewed": dpo_audit["bypassed_unreviewed"],
                 "dpo_audit": dpo_audit,
             },
         }
 
-    if require_reviewed_dpo and (dpo_audit["bypassed_unreviewed"] > 0 or dpo_audit["pending_evaluations"] > 0):
-        raise ValueError(
-            f"严格 DPO 审核模式下仍有未显式复核项: bypassed={dpo_audit['bypassed_unreviewed']}, "
-            f"pending={dpo_audit['pending_evaluations']}"
-        )
-
     before_summary = ledger.corpus_snapshot_summary(offline_cfg)
     r1: Optional[Dict[str, Any]] = None
     if scan_raw:
         r1 = stage1_extract.run(force=force, log=lambda *_: None, cfg=offline_cfg)
     r2 = stage2_gold.run(force=force, log=lambda *_: None, cfg=offline_cfg)
-    r3 = stage3_synth.run(force=True, log=lambda *_: None, cfg=offline_cfg)
+    params = {
+        "force": bool(force), "scan_raw": bool(scan_raw), "run_gate": bool(run_gate),
+        "require_reviewed_dpo": bool(require_reviewed_dpo),
+    }
+    try:
+        r3 = stage3_synth.run(
+            force=True, log=lambda *_: None, cfg=offline_cfg, require_reviewed_dpo=require_reviewed_dpo,
+        )
+    except stage3_synth.DPOReviewRequired:
+        # Stage 2 refreshed the reviewable pool even though no Build was written.
+        ledger.record_operation(
+            "build.run", reason=reason, actor=actor, params=params,
+            before_summary=before_summary, after_summary=ledger.corpus_snapshot_summary(offline_cfg),
+            status="dpo_review_required", duration_ms=int((time.monotonic() - t0) * 1000), cfg=offline_cfg,
+        )
+        raise
     build_id = str(r3.get("build_id") or "")
 
     gate_res = gate_check(build_id, cfg=offline_cfg) if run_gate else None
@@ -221,11 +221,7 @@ def build_pipeline(
         "build.run",
         reason=reason,
         actor=actor,
-        params={
-            "force": bool(force),
-            "scan_raw": bool(scan_raw),
-            "run_gate": bool(run_gate),
-        },
+        params=params,
         affected={
             "build_id": build_id,
             "projects": after_summary.get("projects") or [],
@@ -243,6 +239,7 @@ def build_pipeline(
         "build_dir": r3.get("build_dir"),
         "stage1": r1,
         "stage2": r2,
+        "dpo_audit": r3.get("dpo_audit"),
         "stage3": {
             "build_id": build_id,
             "sft_windows": r3.get("sft_step_windows_sharegpt.jsonl", 0),
@@ -273,14 +270,43 @@ def pack_delivery(
     t0 = time.monotonic()
     cfg = cfg or load_config()
     before_summary = ledger.corpus_snapshot_summary(cfg)
+    # Packing does not modify the corpus or the latest Build. Use this as a
+    # fallback if the final snapshot cannot be read.
+    after_summary = before_summary
     emit = log or (lambda *_: None)
 
     delivery_root = stage_dirs(cfg)["root"] / "04_release" / "delivery"
-    delivery_root.mkdir(parents=True, exist_ok=True)
-    staging_dir = delivery_root / f".staging-{uuid.uuid4().hex[:10]}"
-    staging_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir: Optional[Path] = None
+    res: Dict[str, Any] = {}
+    copied_to: Optional[str] = None
+    published = False
+    failure_status = "refused"
+
+    def record(status: str, *, pack: Optional[str] = None, error: Optional[Exception] = None) -> Dict[str, Any]:
+        resolved_build = res.get("build_id") or build_id
+        params = {
+            "build_id": resolved_build,
+            "profile": (res.get("format") or {}).get("profile") or profile,
+            "copy_to": copied_to,
+            "run_gate": bool(run_gate),
+        }
+        if error is not None:
+            params.update(
+                parent_pack=parent_pack,
+                requested_copy_to=str(copy_to) if copy_to is not None else None,
+                candidate_pack=res.get("package_hash"),
+                error=str(error),
+            )
+        return ledger.record_operation(
+            "pack.delivery", reason=reason, actor=actor, params=params,
+            affected={"build_id": resolved_build, "pack": pack},
+            before_summary=before_summary, after_summary=after_summary,
+            status=status, duration_ms=int((time.monotonic() - t0) * 1000), cfg=cfg,
+        )
 
     try:
+        delivery_root.mkdir(parents=True, exist_ok=True)
+        staging_dir = Path(tempfile.mkdtemp(prefix=".staging-", dir=delivery_root))
         res = package.build_delivery_zip_from_build(
             cfg,
             build_id=build_id,
@@ -291,31 +317,33 @@ def pack_delivery(
             reference_delivery_dir=delivery_root,
         )
         staged_zip = Path(res["zip_path"])
-        gate_res = gate_check(str(staged_zip), cfg=cfg) if run_gate else None
+        final_zip = delivery_root / staged_zip.name
+        reuse = final_zip.exists() or final_zip.is_symlink()
+        gate_target = final_zip if reuse else staged_zip
+        gate_res = gate_check(str(gate_target), cfg=cfg) if run_gate else None
         ok = gate_res is None or bool(gate_res["passed"])
 
-        final_zip = delivery_root / staged_zip.name
-        copied_to: Optional[str] = None
-
         if ok:
-            if final_zip.is_file() and parent_pack is None:
-                try:
-                    with zipfile.ZipFile(final_zip, "r") as zf:
-                        has_valid_existing = len(zf.namelist()) > 0
-                except zipfile.BadZipFile:
-                    has_valid_existing = False
+            if reuse:
+                package.require_matching_delivery_zip(staged_zip, final_zip)
+                res["reused_existing"] = True
             else:
-                has_valid_existing = False
-
-            if not has_valid_existing:
-                replace_atomic(staged_zip, final_zip)
+                package.publish_new_delivery_zip(staged_zip, final_zip)
+                published = True
+            outcome = "published" if published else "reused"
+            failure_status = f"{outcome}_metadata_failed"
             staged_profile = staging_dir / "export_profile.json"
             if staged_profile.is_file():
-                replace_atomic(staged_profile, delivery_root / "export_profile.json")
+                staged_profile.replace(delivery_root / "export_profile.json")
             res["zip_path"] = str(final_zip)
             res["size_bytes"] = final_zip.stat().st_size
+            if gate_res is not None:
+                # A fresh publication is the same file as the one checked in staging.
+                gate_res["target"] = str(final_zip)
+                gate_res["resolved_path"] = str(final_zip.resolve())
 
             if copy_to:
+                failure_status = f"{outcome}_copy_failed"
                 dest = Path(copy_to)
                 if dest.is_dir() or str(copy_to).endswith(("/", "\\")) or dest.suffix.lower() != ".zip":
                     dest.mkdir(parents=True, exist_ok=True)
@@ -323,34 +351,38 @@ def pack_delivery(
                 else:
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     target_file = dest
-                shutil.copy2(final_zip, target_file)
+                if not (target_file.exists() and target_file.samefile(final_zip)):
+                    if target_file.parent.resolve() == delivery_root.resolve() and target_file.name.lower().startswith("goldthread-train-"):
+                        raise ValueError(f"copy_to cannot replace another delivery ZIP: {target_file}")
+                    with tempfile.NamedTemporaryFile(dir=target_file.parent, suffix=".tmp", delete=False) as tmp:
+                        copy_tmp = Path(tmp.name)
+                    try:
+                        shutil.copy2(final_zip, copy_tmp)
+                        copy_tmp.replace(target_file)
+                    except BaseException as exc:
+                        try:
+                            copy_tmp.unlink(missing_ok=True)
+                        except OSError as cleanup_error:
+                            exc.add_note(f"Could not remove temporary delivery copy: {cleanup_error}")
+                        raise
                 copied_to = str(target_file.resolve())
+                failure_status = f"{outcome}_metadata_failed"
         else:
             res["zip_path"] = None
+        after_summary = ledger.corpus_snapshot_summary(cfg)
+    except Exception as exc:
+        try:
+            # Lineage treats affected.pack as a publication. An occupied path
+            # alone (including a refused conflict) does not establish one.
+            record(failure_status, pack=res.get("package_hash") if published else None, error=exc)
+        except Exception as ledger_error:
+            exc.add_note(f"Could not record delivery failure in ledger: {ledger_error}")
+        raise
     finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)
+        if staging_dir is not None:
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
-    after_summary = ledger.corpus_snapshot_summary(cfg)
-    ev = ledger.record_operation(
-        "pack.delivery",
-        reason=reason,
-        actor=actor,
-        params={
-            "build_id": res.get("build_id"),
-            "profile": (res.get("format") or {}).get("profile"),
-            "copy_to": copied_to,
-            "run_gate": bool(run_gate),
-        },
-        affected={
-            "build_id": res.get("build_id"),
-            "pack": res.get("package_hash") if ok else None,
-        },
-        before_summary=before_summary,
-        after_summary=after_summary,
-        status="ok" if ok else "gate_failed",
-        duration_ms=int((time.monotonic() - t0) * 1000),
-        cfg=cfg,
-    )
+    ev = record("ok" if ok else "gate_failed", pack=res.get("package_hash") if ok else None)
     return {
         **res,
         "ok": ok,

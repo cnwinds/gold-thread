@@ -124,6 +124,10 @@ def describe_task(stage: str, force: bool, extra: Optional[Dict[str, Any]] = Non
         title = "评估并合成训练集" + ("（全量）" if force else "（增量）")
         affects = ["overview", "gold", "train"]
         links = {"open_tab": "train"}
+    elif stage == "build":
+        title = "工作区构建" + ("（全量）" if force else "")
+        affects = ["overview", "gold", "train"]
+        links = {"open_tab": "train"}
     elif stage == "all":
         title = "全流程" + ("（全量重建）" if force else "")
         affects = ["overview", "raw", "gold", "train"]

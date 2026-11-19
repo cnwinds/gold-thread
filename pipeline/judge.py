@@ -24,6 +24,7 @@ import json
 import re
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -676,68 +677,92 @@ def _dpo_pair_payload(p: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
-def _vkey(model: str, tag: str, p: Dict[str, Any]) -> str:
+def _dpo_hash(payload: Dict[str, Any]) -> str:
     from .common.store import sha256_text  # noqa: PLC0415
 
-    chosen_raw = str((p.get("chosen") or {}).get("value") or "")
-    rejected_raw = str((p.get("rejected") or {}).get("value") or "")
-    return sha256_text(json.dumps({
+    return sha256_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def dpo_content_fingerprint(pair: Dict[str, Any]) -> str:
+    """Bind a review to the full training content, not its ID or a prompt excerpt."""
+    tools = pair.get("tools")
+    if isinstance(tools, str):
+        try:
+            tools = json.loads(tools)
+        except ValueError:
+            pass  # Even a malformed schema must remain part of the identity.
+    return _dpo_hash({
+        "version": 1,
+        "conversations": pair.get("conversations"),
+        "chosen": pair.get("chosen"),
+        "rejected": pair.get("rejected"),
+        "tools": tools,
+    })
+
+
+def _vkey(model: str, tag: str, p: Dict[str, Any], *, content_fingerprint: Optional[str] = None) -> str:
+    return _dpo_hash({
         "m": model,
         "pv": f"{PROMPT_VERSION}.{tag}",
         "sid": p.get("sample_id"),
         "reason": (p.get("metadata") or {}).get("reason"),
-        "context_tail": [
-            {"from": c.get("from"), "value": _clip(c.get("value"), 260)}
-            for c in (p.get("conversations") or [])[-3:]
-        ],
-        "chosen_sha": sha256_text(chosen_raw),
-        "rejected_sha": sha256_text(rejected_raw),
-    }, ensure_ascii=False, sort_keys=True))[:20]
+        "content_fingerprint": content_fingerprint or dpo_content_fingerprint(p),
+    })
 
 
-def cached_dpo_verdicts(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
-    """只读 DPO 评估状态，不调用模型。
-
-    优先级：
-    1. 00_state/dpo_verdicts.json（Agent/人工显式裁决，无论 judge.enabled 是否开启都生效）
-    2. 00_state/dpo_review_cache.json（good/swap/drop 命中即生效；未命中/review_failed 时按 judge.enabled 决定 pending 或 bypassed）
-    """
+def resolve_dpo_reviews(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Read reviews in pair order: even duplicate IDs must match their own content."""
     cfg = cfg or load_config()
     j = _jcfg(cfg)
     model_id = _model(cfg, j, "dpo") or ""
     agent_verdicts = read_json(dpo_verdicts_path(cfg), default={}) or {}
     cache = read_json(_verdict_cache_path(cfg), default={}) or {}
+    if not isinstance(cache, dict):
+        cache = {}
     is_enabled = enabled(cfg)
-    out: Dict[str, Dict[str, Any]] = {}
-    for pair in pairs:
+    versions = [dpo_content_fingerprint(pair) for pair in pairs]
+    keys = [_vkey(model_id, "dpo", pair, content_fingerprint=fp) for pair, fp in zip(pairs, versions)]
+    historical_ids = set()
+    anonymous_history = False
+    for record in cache.values():
+        if not isinstance(record, dict) or record.get("verdict") not in ("good", "swap", "drop", "review_failed"):
+            continue
+        if record.get("sample_id"):
+            historical_ids.add(str(record["sample_id"]))
+        else:
+            # Old cache keys hide the ID. A miss cannot prove a candidate was never rejected.
+            anonymous_history = True
+    out: List[Dict[str, Any]] = []
+    for pair, content_fingerprint, key in zip(pairs, versions, keys):
         sample_id = str(pair.get("sample_id"))
         av = agent_verdicts.get(sample_id) if isinstance(agent_verdicts, dict) else None
-        if isinstance(av, dict) and av.get("verdict") in ("good", "swap", "drop"):
-            verdict = str(av["verdict"])
-            out[sample_id] = {
-                "verdict": verdict,
-                "reason": str(av.get("reason") or "").strip() or _dpo_default_reason(verdict),
-            }
-            continue
-        hit = cache.get(_vkey(model_id, "dpo", pair))
-        if isinstance(hit, dict) and hit.get("verdict") in ("good", "swap", "drop"):
-            verdict = str(hit["verdict"])
-            out[sample_id] = {
-                "verdict": verdict,
-                "reason": str(hit.get("reason") or "").strip() or _dpo_default_reason(verdict),
-            }
-            continue
-        if is_enabled:
-            if isinstance(hit, dict) and hit.get("verdict") == "review_failed":
-                out[sample_id] = {
-                    "verdict": "review_failed",
-                    "reason": str(hit.get("reason") or "").strip() or _dpo_default_reason("review_failed"),
-                }
-            else:
-                out[sample_id] = {"verdict": "pending", "reason": _dpo_default_reason("pending")}
+        if (isinstance(av, dict) and av.get("verdict") in ("good", "swap", "drop")
+                and av.get("content_fingerprint") == content_fingerprint):
+            verdict = av["verdict"]
+            reason = av.get("reason")
+            source = "explicit"
         else:
-            out[sample_id] = {"verdict": "bypassed", "reason": _dpo_default_reason("bypassed")}
+            hit = cache.get(key)
+            is_hit = isinstance(hit, dict)
+            if is_hit and hit.get("verdict") in ("good", "swap", "drop"):
+                verdict, reason, source = hit["verdict"], hit.get("reason"), "cached"
+            elif is_hit and hit.get("verdict") == "review_failed":
+                verdict, reason, source = "review_failed", hit.get("reason"), None
+            elif av is not None or sample_id in historical_ids or anonymous_history:
+                verdict, reason, source = "pending", "既有 DPO 裁决无法绑定当前内容，请重新复核", None
+            else:
+                verdict, reason, source = ("pending" if is_enabled else "bypassed"), None, None
+        out.append({
+            "verdict": verdict,
+            "reason": str(reason or "").strip() or _dpo_default_reason(verdict),
+            "review_source": source,
+            "content_fingerprint": content_fingerprint,
+        })
     return out
+
+
+def cached_dpo_verdicts(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+    return {str(pair.get("sample_id")): review for pair, review in zip(pairs, resolve_dpo_reviews(pairs, cfg))}
 
 
 def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None,
@@ -796,7 +821,7 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
                     continue
                 verdict = str(it["verdict"])
                 reason = _clip(it.get("reason"), 60) or _dpo_default_reason(verdict)
-                cache[_vkey(model_id, "dpo", p)] = {"verdict": verdict, "reason": reason}
+                cache[_vkey(model_id, "dpo", p)] = {"sample_id": sid, "verdict": verdict, "reason": reason}
             try:
                 _wj(cpath, cache)
             except Exception:  # noqa: BLE001
@@ -810,7 +835,10 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
 
     from . import steps as stepcat  # noqa: PLC0415
 
-    batches = _batched(pairs, j["dpo_batch"])
+    # Judge responses are keyed by sample ID, so duplicate IDs require separate requests.
+    id_counts = Counter(str(p.get("sample_id")) for p in pairs)
+    batches = _batched([p for p in pairs if id_counts[str(p.get("sample_id"))] == 1], j["dpo_batch"])
+    batches.extend([p] for p in pairs if id_counts[str(p.get("sample_id"))] > 1)
     total_pairs = len(pairs)
     done_pairs = 0
     progress_lock = threading.Lock()
@@ -844,7 +872,7 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
     stepcat.emit(log, "s3.dpo_review", 0, total_pairs, f"待评估 {total_pairs} 对")
 
     resolved: List[Dict[str, Any]] = []
-    failed_ids: List[str] = []
+    failed_pairs: List[Dict[str, Any]] = []
 
     def _resolve_batch(batch: List[Dict[str, Any]], out: Any) -> None:
         got = _valid_verdicts(out)
@@ -862,9 +890,9 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
                 if sid in _valid_verdicts(o):
                     resolved.append(o)
                 else:
-                    failed_ids.append(sid)
+                    failed_pairs.append(p)
             return
-        failed_ids.append(str(missing[0].get("sample_id")))
+        failed_pairs.append(missing[0])
 
     workers = max(1, int(j["concurrency"]))
     if workers == 1 or len(batches) <= 1:
@@ -889,8 +917,8 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
                 _resolve_batch(batch, out)
                 _bump(len(batch))
 
-    if failed_ids:
-        log(f"[judge] dpo 复核失败 {len(failed_ids)} 对（已标记 review_failed，不静默放过）")
+    if failed_pairs:
+        log(f"[judge] dpo 复核失败 {len(failed_pairs)} 对（已标记 review_failed，不静默放过）")
     for out in resolved:
         for it in out.get("pairs", []) or []:
             if not isinstance(it, dict):
@@ -902,14 +930,16 @@ def review_dpo(pairs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None
                 "verdict": v,
                 "reason": _clip(it.get("reason"), 60) or _dpo_default_reason(v),
             }
-    for fid in failed_ids:
-        out_map[fid] = {"verdict": "review_failed", "reason": _dpo_default_reason("review_failed")}
-    if failed_ids and _wj is not None:
-        by_id = {str(p.get("sample_id")): p for p in pairs}
+    for p in failed_pairs:
+        out_map[str(p.get("sample_id"))] = {"verdict": "review_failed", "reason": _dpo_default_reason("review_failed")}
+    if failed_pairs and _wj is not None:
         with _clock:
-            for fid in failed_ids:
-                if fid in by_id:
-                    cache[_vkey(model_id, "dpo", by_id[fid])] = {
+            for p in failed_pairs:
+                key = _vkey(model_id, "dpo", p)
+                hit = cache.get(key)
+                if not isinstance(hit, dict) or hit.get("verdict") not in ("good", "swap", "drop"):
+                    cache[key] = {
+                        "sample_id": str(p.get("sample_id")),
                         "verdict": "review_failed",
                         "reason": _dpo_default_reason("review_failed"),
                     }

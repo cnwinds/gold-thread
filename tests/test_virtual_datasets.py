@@ -840,8 +840,9 @@ def test_repack_idempotency_acyclic_dag_frozen_config_and_web_wiring(
     assert m_build_fn is not None
     m_url = re.search(r'api\("([^"]+)"', m_build_fn.group(1))
     assert m_url is not None and m_url.group(1) == "/api/run"
+    assert re.search(r'JSON\.stringify\(\{\s*stage:\s*"build",\s*force:\s*false\s*\}\)', m_build_fn.group(1))
     client = TestClient(app_mod.app)
-    r_build_btn = client.post("/api/run", json={"stage": "stage3", "force": False})
+    r_build_btn = client.post(m_url.group(1), json={"stage": "build", "force": False})
     assert r_build_btn.status_code == 200
     assert r_build_btn.json().get("job_id")
 

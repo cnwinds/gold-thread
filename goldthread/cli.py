@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from pipeline.common.config import load_config
 from pipeline.common.config_info import describe_config, load_explicit_config
+from pipeline.stage3_synth import DPOReviewRequired
 
 from . import (
     assist_tools,
@@ -220,11 +221,16 @@ def _format_gate_check(res: Dict[str, Any]) -> None:
 def _format_build_res(res: Dict[str, Any]) -> None:
     if res.get("dry_run"):
         gp = res.get("gate_preview") or {}
+        audit = res.get("dpo_audit") or {}
+        if audit.get("readiness") == "undetermined":
+            print(f"[build.dry-run] DPO readiness=undetermined ({audit['reason']})；请先刷新黄金层再预览")
+            return
         print(
             f"[build.dry-run] plan_hash={res.get('plan_hash')} dirty={res.get('dirty')} | "
             f"SFT(train={gp.get('sft_train_rows', 0)}, eval={gp.get('sft_eval_rows', 0)}) | "
             f"DPO(train={gp.get('dpo_train_rows', 0)}, eval={gp.get('dpo_eval_rows', 0)}) | "
-            f"pending_dpo={gp.get('pending_evaluations', 0)}"
+            f"pending_dpo={gp.get('pending_evaluations', 0)} | "
+            f"bypassed_dpo={gp.get('bypassed_unreviewed', 0)} | readiness={gp.get('readiness')}"
         )
         return
     s3 = res.get("stage3") or {}
@@ -392,7 +398,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("--scan-raw", action="store_true", help="构建前先扫描 raw 源目录 (stage1)")
     p_build.add_argument("--dry-run", action="store_true", help="仅预览 Stage 3 规模与门禁预期，不落盘")
     p_build.add_argument("--no-gate", action="store_true", help="构建后跳过 gate check")
-    p_build.add_argument("--require-reviewed-dpo", action="store_true", help="严格要求全部 DPO 候选均已显式裁决（拒绝未审 bypass）")
+    p_build.add_argument("--require-reviewed-dpo", action="store_true", help="严格要求所有符合准入条件的 DPO 对均有与当前内容绑定的裁决")
     p_build.add_argument("--reason", default="", help="操作原因说明")
     p_build.add_argument("--actor", default="agent", help="操作者")
 
@@ -753,7 +759,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     except Exception as exc:  # noqa: BLE001
         if json_mode:
-            _print_json({"ok": False, "error": str(exc), "error_type": type(exc).__name__})
+            error = {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+            if isinstance(exc, DPOReviewRequired):
+                error["dpo_audit"] = exc.audit
+            _print_json(error)
         else:
             print(f"[ERROR] {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

@@ -135,7 +135,9 @@ def resolve(ann: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
             manual_ex = sorted(mid for mid, it in items.items() if it.get("step") == "exclude")
             return {"state": state, "rewrites": manual_only_rw, "excluded": manual_ex, "kept": _kept()}
         return {"state": state, "rewrites": _rewrites(True), "excluded": _excluded(), "kept": _kept()}
-    if decision:
+    if decision == "rejected":
+        return {"state": "rejected", "rewrites": {}, "excluded": _excluded(), "kept": []}
+    if decision and not ann.get("model_report") and not rnd:
         return {"state": "stale", "rewrites": {}, "excluded": [], "kept": []}
     if not rnd:
         # 尚未跑 review.py 时，优先使用 stage2 judge 产出的 model_report 作为模型结论

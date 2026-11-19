@@ -114,6 +114,20 @@ class EvalAdjustmentsTests(unittest.TestCase):
         self.assertEqual({}, eff["rewrites"], "过期 review_rounds 的改写不应混入")
         self.assertEqual([], eff["excluded"], "过期 review_rounds 的 bad_step_ids 不应混入")
 
+        # 早期人工 approved 在 review_key 刷新后，若有 model_report 不应死锁于 stale；历史 rejected 仍保持阻断
+        ann_stale_approved = {
+            "review_key": "1:new:flow_v2:6",
+            "model_report": {"verdict": "needs_human", "confidence": 0.86},
+            "human_review": {"items": {}, "decision": "approved", "review_key": "1:old:flow_v1:6", "history": []},
+        }
+        self.assertEqual("auto_gold", curation.resolve(ann_stale_approved, cfg)["state"])
+        ann_stale_rejected = {
+            "review_key": "1:new:flow_v2:6",
+            "model_report": {"verdict": "trainable", "confidence": 0.9},
+            "human_review": {"items": {}, "decision": "rejected", "review_key": "1:old:flow_v1:6", "history": []},
+        }
+        self.assertEqual("rejected", curation.resolve(ann_stale_rejected, cfg)["state"])
+
     def test_continuation_folds_over_model_task_and_emits_premature_stop_dpo(self) -> None:
         cfg = load_config()
         session = {
@@ -254,6 +268,31 @@ class EvalAdjustmentsTests(unittest.TestCase):
             self.assertEqual("review_rewrite", pairs[0]["metadata"]["source"])
             self.assertIn(clean_think, pairs[0]["chosen"]["value"])
             self.assertIn("Wait, is that right?", pairs[0]["rejected"]["value"])
+
+    def test_curation_stale_human_approved_falls_back_to_model_report_while_rejected_stays_rejected(self) -> None:
+        from pipeline import curation
+
+        cfg = copy.deepcopy(DEFAULTS)
+        stale_approved_with_report = {
+            "review_key": "new-key-v2",
+            "human_review": {"decision": "approved", "review_key": "old-key-v1"},
+            "model_report": {"verdict": "trainable", "confidence": 0.9},
+        }
+        resolved_ok = curation.resolve(stale_approved_with_report, cfg)
+        self.assertEqual("auto_gold", resolved_ok["state"])
+
+        stale_approved_without_report = {
+            "review_key": "new-key-v2",
+            "human_review": {"decision": "approved", "review_key": "old-key-v1"},
+        }
+        self.assertEqual("stale", curation.resolve(stale_approved_without_report, cfg)["state"])
+
+        stale_rejected_with_report = {
+            "review_key": "new-key-v2",
+            "human_review": {"decision": "rejected", "review_key": "old-key-v1"},
+            "model_report": {"verdict": "trainable", "confidence": 0.95},
+        }
+        self.assertEqual("rejected", curation.resolve(stale_rejected_with_report, cfg)["state"])
 
 
 if __name__ == "__main__":

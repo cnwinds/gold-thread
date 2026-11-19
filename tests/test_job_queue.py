@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from server.app import JOBS, JOBS_LOCK, Job, _pump_queue, _start, app
+from server.app import JOBS, JOBS_LOCK, Job, _jobs_clash, _pump_queue, _start, app
 
 
 class JobQueueTests(unittest.TestCase):
@@ -80,6 +80,19 @@ class JobQueueTests(unittest.TestCase):
             queued = JOBS.get(body["job_id"])
         self.assertIsNotNone(queued)
         self.assertEqual("queued", queued.status)
+
+    def test_all_and_delete_are_exclusive_in_both_orders(self) -> None:
+        stages = (
+            "stage1", "stage2", "stage3", "build", "dataset_evaluate",
+            "analyze", "classify", "collect", "package", "all", "delete",
+        )
+        for exclusive in ("all", "delete"):
+            for stage in stages:
+                with self.subTest(exclusive=exclusive, stage=stage):
+                    self.assertTrue(_jobs_clash(exclusive, stage))
+                    self.assertTrue(_jobs_clash(stage, exclusive))
+        self.assertTrue(_jobs_clash("package", "stage3"))
+        self.assertFalse(_jobs_clash("package", "stage1"))
 
     def test_delete_while_writer_running_is_queued(self) -> None:
         running = Job("stage1", False)

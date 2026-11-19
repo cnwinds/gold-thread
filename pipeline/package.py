@@ -14,8 +14,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
+import tempfile
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -33,6 +37,7 @@ from pipeline import length_gate as length_gate_mod
 _TEMPLATE_ROOT = Path(__file__).resolve().parent / "train_template"
 _PACK_ROOT = "goldthread-train"
 _ZIP_PREFIX = "goldthread-train-"
+_MANIFEST_ARC = f"{_PACK_ROOT}/data/MANIFEST.json"
 
 
 # 记在 delivery/ 旁边，不进 zip。stage3 再次打包时沿用上次在界面上选的格式。
@@ -234,19 +239,61 @@ def _normalize_pack_hash_ref(ref: Optional[str]) -> Optional[str]:
 def _read_existing_manifest(zip_path: Path) -> Dict[str, Any]:
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            for arc in (f"{_PACK_ROOT}/data/MANIFEST.json", "data/MANIFEST.json", "MANIFEST.json"):
+            for arc in (_MANIFEST_ARC, "data/MANIFEST.json", "MANIFEST.json"):
                 if arc in zf.namelist():
-                    return json.loads(zf.read(arc).decode("utf-8"))
-    except (OSError, zipfile.BadZipFile, json.JSONDecodeError, KeyError):
+                    manifest = json.loads(zf.read(arc))
+                    return manifest if isinstance(manifest, dict) else {}
+    except (OSError, zipfile.BadZipFile, ValueError, RuntimeError, zlib.error, KeyError):
         pass
     return {}
 
 
-def _infer_default_parent_pack(delivery_dir: Path, current_zip_name: str, current_zip_path: Path) -> Optional[str]:
-    if current_zip_path.is_file():
-        old_man = _read_existing_manifest(current_zip_path)
-        if "parent_pack" in old_man:
-            return _normalize_pack_hash_ref(old_man.get("parent_pack"))
+def _archive_contents(path: Path) -> Dict[str, str]:
+    """Fingerprint every member, without depending on ZIP packing metadata."""
+    contents: Dict[str, str] = {}
+    with zipfile.ZipFile(path) as zf:
+        for info in zf.infolist():
+            name = info.filename
+            kind = stat.S_IFMT(info.external_attr >> 16) if info.create_system == 3 else 0
+            if name in contents or info.is_dir() or kind not in (0, stat.S_IFREG):
+                raise ValueError(f"unexpected or duplicate ZIP member: {name}")
+            if name == _MANIFEST_ARC:
+                manifest = json.loads(zf.read(info))
+                if not isinstance(manifest, dict):
+                    raise ValueError("invalid package manifest")
+                manifest.pop("generated_at", None)
+                payload = json.dumps(manifest, sort_keys=True, ensure_ascii=True).encode("ascii")
+                contents[name] = hashlib.sha256(payload).hexdigest()
+            else:
+                digest = hashlib.sha256()
+                with zf.open(info) as member:
+                    for chunk in iter(lambda: member.read(1 << 20), b""):
+                        digest.update(chunk)
+                contents[name] = digest.hexdigest()
+    return contents
+
+
+def require_matching_delivery_zip(expected: Path, published: Path) -> None:
+    """Reject an occupied package identity unless every member matches."""
+    try:
+        if published.is_symlink() or not published.is_file():
+            raise ValueError("published path is not a regular file")
+        actual = _archive_contents(published)
+    except (OSError, zipfile.BadZipFile, ValueError, RuntimeError, zlib.error, EOFError) as exc:
+        raise ValueError(f"Invalid existing delivery ZIP: {published}: {exc}") from exc
+    wanted = _archive_contents(expected)
+    if actual != wanted:
+        changed = sorted(name for name in actual.keys() | wanted.keys() if actual.get(name) != wanted.get(name))
+        raise ValueError(f"Existing delivery ZIP content mismatch: {published}: {', '.join(changed)}")
+
+
+def publish_new_delivery_zip(staged: Path, final: Path) -> None:
+    # Both paths are in the same filesystem. Unlike replace(), link() cannot
+    # overwrite an immutable publication, including when two packers race.
+    os.link(staged, final)
+
+
+def _infer_default_parent_pack(delivery_dir: Path, current_zip_name: str) -> Optional[str]:
     candidates = [
         p for p in delivery_dir.glob(f"{_ZIP_PREFIX}*.zip")
         if p.is_file() and p.name != current_zip_name
@@ -369,14 +416,17 @@ def build_delivery_zip(
     )
     manifest["package"] = zip_name
     manifest["layout"] = _PACK_ROOT
+    existing_parent = _normalize_pack_hash_ref(existing_man.get("parent_pack"))
     if parent_pack is not None:
         resolved_parent = _normalize_pack_hash_ref(parent_pack)
-    elif existing_man and "parent_pack" in existing_man:
-        resolved_parent = _normalize_pack_hash_ref(existing_man.get("parent_pack"))
+        if existing_man and existing_parent != resolved_parent:
+            raise ValueError(f"Conflicting parent_pack for immutable delivery ZIP: {ref_zip_path}")
+        if resolved_parent == pkg_h:
+            raise ValueError(f"A delivery ZIP cannot be its own parent_pack: {pkg_h}")
+    elif existing_man:
+        resolved_parent = existing_parent
     else:
-        resolved_parent = _infer_default_parent_pack(ref_dir, zip_name, ref_zip_path)
-    if resolved_parent == pkg_h:
-        resolved_parent = None
+        resolved_parent = _infer_default_parent_pack(ref_dir, zip_name)
     manifest["parent_pack"] = resolved_parent
     if prepared.weighted_expansion:
         manifest["weighted_expansion"] = prepared.weighted_expansion
@@ -395,34 +445,10 @@ def build_delivery_zip(
         zf.writestr(f"{_PACK_ROOT}/{rel}", data)
         manifest_files.append({"path": f"{_PACK_ROOT}/{rel}", "size": len(data)})
 
-    if zip_path == ref_zip_path and zip_path.is_file() and existing_man.get("package_hash") == pkg_h and parent_pack is None:
-        # 目标同目录已存在完全相同哈希的已发布包：完全幂等复用，不改写原字节与 mtime
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                file_count_actual = len(zf.namelist())
-        except zipfile.BadZipFile:
-            file_count_actual = 0
-        if file_count_actual > 0:
-            return {
-                "zip_path": str(zip_path),
-                "zip_name": zip_name,
-                "size_bytes": zip_path.stat().st_size,
-                "file_count": file_count_actual,
-                "generated_at": generated_at,
-                "config_hash": cfg_h,
-                "package_hash": pkg_h,
-                "parent_pack": resolved_parent,
-                "build_id": build_id or None,
-                "counts": prepared.counts,
-                "sources": prepared.sources,
-                "datasets": manifest["datasets"],
-                "length_gate": prepared.length_gate,
-                "format": format_contract,
-                "reused_existing": True,
-            }
-
     _emit(f"[package] 正在写入 zip：{zip_name}…")
-    partial = delivery_dir / f".{zip_name}.partial"
+    reused_existing = False
+    with tempfile.NamedTemporaryFile(dir=delivery_dir, prefix=f".{zip_name}.", suffix=".partial", delete=False) as tmp:
+        partial = Path(tmp.name)
     try:
         with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             for rel, blob in sorted(static_files.items()):
@@ -434,24 +460,29 @@ def build_delivery_zip(
             _add(zf, "data/dataset_info.json", info_json)
             _add(zf, "data/MANIFEST.json", manifest_json)
             _add(zf, LENGTH_STATS_REL, length_stats_json)
-        partial.replace(zip_path)
-    except Exception:
+        try:
+            publish_new_delivery_zip(partial, zip_path)
+        except FileExistsError:
+            require_matching_delivery_zip(partial, zip_path)
+            manifest["generated_at"] = _read_existing_manifest(zip_path).get("generated_at")
+            reused_existing = True
+    finally:
         partial.unlink(missing_ok=True)
-        raise
 
-    (delivery_dir / _PROFILE_CHOICE).write_text(
-        json.dumps(
-            {
-                "profile": spec["id"],
-                "label": spec["label"],
-                "updated_at": manifest["generated_at"],
-            },
-            ensure_ascii=False,
-            indent=2,
+    if not reused_existing:
+        (delivery_dir / _PROFILE_CHOICE).write_text(
+            json.dumps(
+                {
+                    "profile": spec["id"],
+                    "label": spec["label"],
+                    "updated_at": manifest["generated_at"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        + "\n",
-        encoding="utf-8",
-    )
 
     result = {
         "zip_path": str(zip_path),
@@ -469,6 +500,8 @@ def build_delivery_zip(
         "length_gate": prepared.length_gate,
         "format": format_contract,
     }
+    if reused_existing:
+        result["reused_existing"] = True
     if log:
         size_mb = result["size_bytes"] / (1024 * 1024)
         sft_n = prepared.counts.get("sft.train.lf.jsonl", 0)

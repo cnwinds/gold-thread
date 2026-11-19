@@ -28,7 +28,7 @@ import server.app as web
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_CONFIG = PROJECT_ROOT / "config" / "pipeline.yaml"
-PRODUCTION_CONFIG_SHA256 = "48d3e92c9eda493b1e89530a337abd538bcb6aea5f4827d84bde48c668ddd67e"
+PRODUCTION_CONFIG_SHA256 = "b6fc7dbf5f4b51cc3a62aad7b528ea3b6d8c69a966b1eac43ed2a8a1bee90d82"
 
 
 @pytest.fixture(autouse=True)

@@ -13,6 +13,7 @@ import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from unicodedata import normalize
 
 from . import judge
 from . import steps as stepcat
@@ -42,6 +43,7 @@ from .common.store import (
 )
 
 STAGE = "stage2"
+PURIFY_VERSION = 1  # Per session: targeted runs must not revalidate untouched gold.
 
 _POLLING_RE = re.compile(
     r"(nohup\s+[^\n&]+>\s*(/tmp/[^\s;&]+)\s+2>&1\s*&)\s*\n?\s*echo\s+started;\s*sleep\s+(\d+);\s*tail\s+(-\d+)\s+\2"
@@ -106,7 +108,7 @@ def purify(
         msg.setdefault("raw_text", msg.get("text") or "")
         tcs = msg.get("tool_calls", [])
         trs = cur["tools"]
-        if isinstance(popped_await, dict) and tcs:
+        if isinstance(popped_await, dict) and tcs and not _unverified_edit(cur):
             pruned.append(
                 {
                     "reason": "premature_stop_folded",
@@ -126,68 +128,23 @@ def purify(
             nxt_tcs = nxt_msg.get("tool_calls", [])
 
             # A. 状态折叠：write(path) + edit(path) 精确合并
-            if (
-                gcfg.get("state_folding", True)
-                and len(tcs) == 1
-                and len(nxt_tcs) == 1
-                and tcs[0]["name"] == "write"
-                and nxt_tcs[0]["name"] == "edit"
-                and tcs[0].get("arguments", {}).get("path") == nxt_tcs[0].get("arguments", {}).get("path")
-            ):
-                orig_content = tcs[0]["arguments"].get("content", "")
-                content = orig_content
-                edits = nxt_tcs[0]["arguments"].get("edits", [])
-                if not edits and "oldText" in nxt_tcs[0]["arguments"]:
-                    edits = [nxt_tcs[0]["arguments"]]
-                edits = edits[: int(gcfg.get("max_fold_edits", 8))]
-                ok = bool(edits)
-                for ed in edits:
-                    old_t = ed.get("oldText", "")
-                    new_t = ed.get("newText", "")
-                    if old_t and old_t in content:
-                        content = content.replace(old_t, new_t, 1)
-                    else:
-                        ok = False
-                        break
-                if ok:
-                    original = copy.deepcopy(msg)
-                    tcs[0]["arguments"]["content"] = content
-                    msg["folded_from"] = nxt_msg["id"]
-                    msg["fold_details"] = {
-                        "path": tcs[0]["arguments"].get("path", ""),
-                        "folded_msg_id": nxt_msg["id"],
-                        "edits_count": len(edits),
-                        "before_content": orig_content[:4000],
-                        "after_content": content[:4000],
-                        "edit_thinking": (nxt_msg.get("thinking") or "")[:800],
-                    }
-                    msg["flags"] = sorted(set(msg.get("flags", []) + ["state_folded"]))
-                    pruned.append(
-                        {
-                            "reason": "state_folding_bug_fix",
-                            "has_dpo": True,
-                            "context_units": copy.deepcopy(kept),
-                            "chosen_msg": copy.deepcopy(msg),
-                            "rejected_msg": original,
-                            "dropped_msg_id": nxt_msg["id"],
-                            "file_path": tcs[0]["arguments"].get("path", ""),
-                            "before_snippet": orig_content[:2000],
-                            "after_snippet": content[:2000],
-                        }
-                    )
+            if gcfg.get("state_folding", True):
+                record = _rule_fold(cur, nxt, gcfg, kept)
+                if record is not None:
+                    pruned.append(record)
                     kept.append(cur)
                     folded += 1
                     i += 2
                     continue
 
             # B. 弯路剪枝：低级命令错误 / 下一步自认手滑
-            if gcfg.get("detour_pruning", True):
+            if gcfg.get("detour_pruning", True) and not _fold_participant(units, i):
                 out_text = "\n".join(t.get("content", "") for t in trs)
                 has_error = any(t.get("isError") for t in trs) or bool(
                     LOW_LEVEL_MISTAKE_OUTPUT_REGEX.search(out_text)
                 )
                 next_admits = bool(NEXT_STEP_OOPS_REGEX.search((nxt_msg.get("thinking") or "").strip()))
-                if (has_error or next_admits) and nxt_tcs:
+                if (has_error or next_admits) and nxt_tcs and not _unverified_edit(nxt):
                     cleaned = copy.deepcopy(nxt)
                     raw_nxt_think = (cleaned["msg"].get("thinking") or "").strip()
                     cleaned_think = re.sub(
@@ -233,7 +190,7 @@ def purify(
 
         # C. 空 thinking：报错剪除并记录审计；成功则用对外播报文本内化为 thinking 或合成意图
         if not msg.get("thinking") and tcs:
-            if any(t.get("isError") for t in trs):
+            if any(t.get("isError") for t in trs) and not _fold_participant(units, i):
                 out_text = "\n".join(t.get("content", "") for t in trs)
                 pruned.append(
                     {
@@ -323,44 +280,171 @@ def purify(
     return gold_messages, pruned, stats
 
 
-# ---------------------------------------------------------------------------
-# judge 执行器：模型给决定，程序确定性执行并留血缘
-# ---------------------------------------------------------------------------
+# Shared state folding for automatic rules and explicit/model decisions.
 
-def _can_fold(prev_msg: Dict[str, Any], msg: Dict[str, Any]) -> bool:
-    ptcs = prev_msg.get("tool_calls") or []
-    tcs = msg.get("tool_calls") or []
-    if len(ptcs) != 1 or len(tcs) != 1:
-        return False
-    a, b = ptcs[0], tcs[0]
-    if a.get("name") != "write" or b.get("name") != "edit":
-        return False
-    pa = (a.get("arguments") or {}).get("path")
-    pb = (b.get("arguments") or {}).get("path")
-    return bool(pa and pa == pb)
+def _file_path(call: Dict[str, Any]) -> str:
+    args = call.get("arguments")
+    path = args.get("path") if isinstance(args, dict) else None
+    return path if isinstance(path, str) and path.strip() else ""
 
 
-def _do_fold(prev_msg: Dict[str, Any], msg: Dict[str, Any], max_edits: int = 8) -> bool:
-    tcs = prev_msg.get("tool_calls") or []
-    if not tcs:
+def _fold_pair(write: Dict[str, Any], edit: Dict[str, Any]) -> bool:
+    if write["type"] != "assistant_turn" or edit["type"] != "assistant_turn":
         return False
-    args = tcs[0].setdefault("arguments", {})
-    content = args.get("content", "")
-    eargs = (msg.get("tool_calls") or [{}])[0].get("arguments") or {}
-    edits = eargs.get("edits") or ([eargs] if eargs.get("oldText") else [])
-    edits = edits[:max_edits]
-    if not edits:
+    paths = {_file_path(c) for c in (write["msg"].get("tool_calls") or []) if c.get("name") == "write"}
+    paths.discard("")
+    return any(c.get("name") == "edit" and _file_path(c) in paths
+               for c in (edit["msg"].get("tool_calls") or []))
+
+
+def _fold_participant(units: List[Dict[str, Any]], i: int) -> bool:
+    # Error/Oops rules must not become a second way to drop either half of a
+    # same-path pair that could not be folded (or call a failed edit a correction).
+    return ((i > 0 and _fold_pair(units[i - 1], units[i]))
+            or (i + 1 < len(units) and _fold_pair(units[i], units[i + 1])))
+
+
+def _edit_blocks(args: Dict[str, Any]) -> Optional[List[Dict[str, str]]]:
+    def is_block(value: Any) -> bool:
+        return (isinstance(value, dict) and isinstance(value.get("oldText"), str)
+                and bool(value["oldText"]) and isinstance(value.get("newText"), str))
+
+    raw = args.get("edits", [])
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, RecursionError):
+            return None
+    if is_block(raw):
+        raw = [raw]
+    if not isinstance(raw, list) or not all(is_block(block) for block in raw):
+        return None
+    # pi accepts legacy top-level oldText/newText and appends it if both forms are used.
+    if "oldText" in args or "newText" in args:
+        if not is_block(args):
+            return None
+        raw = [*raw, args]
+    return raw or None
+
+
+def _success_receipt(unit: Dict[str, Any], call: Dict[str, Any], edit_count: int = 0) -> bool:
+    cid, name, path = call.get("id"), call.get("name"), _file_path(call)
+    if not isinstance(cid, str) or not cid.strip() or not path:
         return False
-    new_content = content
-    for ed in edits:
-        old_t, new_t = ed.get("oldText", ""), ed.get("newText", "")
-        if not old_t or old_t not in new_content:
+    if sum(c.get("id") == cid for c in unit["msg"].get("tool_calls", [])) != 1:
+        return False
+    matches = [t for t in unit["tools"] if t.get("tool_call_id") == cid]
+    if len(matches) != 1:
+        return False
+    receipt = matches[0]
+    if receipt.get("name") != name or receipt.get("isError") is not False:
+        return False
+    text = receipt.get("content")
+    if not isinstance(text, str) or receipt.get("raw_len", len(text)) != len(text):
+        return False
+    # The inline parser mirror must not contradict the actual observation.
+    inline = unit["msg"].get("tool_results") or []
+    if inline:
+        mirror = [t for t in inline if t.get("tool_call_id") == cid]
+        if len(mirror) != 1 or any(mirror[0].get(k) != receipt.get(k) for k in ("name", "isError", "content")):
             return False
-        new_content = new_content.replace(old_t, new_t, 1)
+    # Current and legacy pi success receipts. A generic/non-error observation
+    # alone does not establish that the tool finished the requested changes.
+    if name == "edit":
+        return text == f"Successfully replaced {edit_count} block(s) in {path}." or (
+            edit_count == 1 and text == f"Successfully replaced text in {path}."
+        )
+    if text == f"Successfully wrote to {path}":
+        return True
+    content = call["arguments"].get("content")
+    if not isinstance(content, str):
+        return False
+    try:
+        lengths = {len(content.encode("utf-8")), len(content.encode("utf-16-le")) // 2}
+    except UnicodeEncodeError:
+        return False
+    return any(text == f"Successfully wrote {size} bytes to {path}" for size in lengths)
+
+
+def _unverified_edit(unit: Dict[str, Any]) -> bool:
+    for call in unit["msg"].get("tool_calls") or []:
+        if call.get("name") == "edit":
+            args = call.get("arguments")
+            edits = _edit_blocks(args) if isinstance(args, dict) else None
+            if not edits or not _success_receipt(unit, call, len(edits)):
+                return True
+    return False
+
+
+_PI_FUZZY_CHARS = {
+    **dict.fromkeys(map(ord, "‘’‚‛"), "'"),
+    **dict.fromkeys(map(ord, "“”„‟"), '"'),
+    **dict.fromkeys(map(ord, "‐‑‒–—―−"), "-"),
+}
+
+
+def _fuzzy_compare(text: str) -> str:
+    # Use pi's fuzzy view only to veto ambiguous exact matches, not to replay them.
+    return "\n".join(line.rstrip() for line in normalize("NFKC", text).split("\n")).translate(_PI_FUZZY_CHARS)
+
+
+def _do_fold(write: Dict[str, Any], edit: Dict[str, Any], gcfg: Dict[str, Any]) -> bool:
+    """Fold a source-adjacent pair only when we can reconstruct its entire final state."""
+    if not _fold_pair(write, edit):
+        return False
+    prev_msg, msg = write["msg"], edit["msg"]
+    # Stage 1 can remove a user turn or a trailing assistant await message.
+    if prev_msg.get("turn_index") != msg.get("turn_index"):
+        return False
+    write_calls, edit_calls = prev_msg["tool_calls"], msg["tool_calls"]
+    if (len(write_calls) != 1 or len(edit_calls) != 1 or len(write["tools"]) != 1 or len(edit["tools"]) != 1
+            or write_calls[0].get("id") == edit_calls[0].get("id") or prev_msg.get("folded_from")):
+        return False
+    args = write_calls[0]["arguments"]
+    content = args.get("content")
+    edits = _edit_blocks(edit_calls[0]["arguments"])
+    if not isinstance(content, str) or not edits or len(edits) > int(gcfg.get("max_fold_edits", 8)):
+        return False
+    if not _success_receipt(write, write_calls[0]) or not _success_receipt(edit, edit_calls[0], len(edits)):
+        return False
+
+    # pi matches against the LF-normalized original, strips/restores the BOM
+    # and restores the original line-ending style. No fuzzy replay here.
+    def lf(text: str) -> str:
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+
+    bom = "\ufeff" if content.startswith("\ufeff") else ""
+    body = content[len(bom):]
+    first_lf = body.find("\n")
+    crlf = first_lf > 0 and body[first_lf - 1] == "\r"
+    original = lf(body)
+    fuzzy_original = _fuzzy_compare(original)
+    spans = []
+    for block in edits:
+        old, new = lf(block["oldText"]), lf(block["newText"])
+        start = original.find(old)
+        if not old or start < 0 or original.find(old, start + 1) >= 0:
+            return False
+        fuzzy_old = _fuzzy_compare(old)
+        if not fuzzy_old or fuzzy_original.count(fuzzy_old) > 1:
+            return False
+        spans.append((start, start + len(old), new))
+    spans.sort()
+    if any(left[1] > right[0] for left, right in zip(spans, spans[1:])):
+        return False
+    parts = []
+    cursor = 0
+    for start, end, replacement in spans:
+        parts.extend((original[cursor:start], replacement))
+        cursor = end
+    new_content = "".join([*parts, original[cursor:]])
+    if new_content == original:
+        return False
+    new_content = bom + (new_content.replace("\n", "\r\n") if crlf else new_content)
     args["content"] = new_content
     prev_msg["folded_from"] = msg.get("id")
     prev_msg["fold_details"] = {
-        "path": args.get("path", ""),
+        "path": args["path"],
         "folded_msg_id": msg.get("id"),
         "edits_count": len(edits),
         "before_content": content[:4000],
@@ -370,6 +454,33 @@ def _do_fold(prev_msg: Dict[str, Any], msg: Dict[str, Any], max_edits: int = 8) 
     prev_msg["flags"] = sorted(set(prev_msg.get("flags", []) + ["state_folded"]))
     return True
 
+
+def _rule_fold(
+    write: Dict[str, Any], edit: Dict[str, Any], gcfg: Dict[str, Any], kept: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if not _fold_pair(write, edit):
+        return None
+    original = copy.deepcopy(write["msg"])
+    if not _do_fold(write, edit, gcfg):
+        return None
+    msg = write["msg"]
+    details = msg["fold_details"]
+    return {
+        "reason": "state_folding_bug_fix",
+        "has_dpo": True,
+        "context_units": copy.deepcopy(kept),
+        "chosen_msg": copy.deepcopy(msg),
+        "rejected_msg": original,
+        "dropped_msg_id": msg["folded_from"],
+        "file_path": details["path"],
+        "before_snippet": details["before_content"][:2000],
+        "after_snippet": details["after_content"][:2000],
+    }
+
+
+# ---------------------------------------------------------------------------
+# judge 执行器：模型给决定，程序确定性执行并留血缘
+# ---------------------------------------------------------------------------
 
 def _rewrite_ok(new: str, msg: Dict[str, Any]) -> bool:
     old = (msg.get("raw_thinking") or msg.get("thinking") or "").strip()
@@ -482,9 +593,7 @@ def purify_by_judge(
             continue
 
         if act == "fold":
-            prev = kept[-1] if kept else None
-            prev_msg = prev[0]["msg"] if prev and prev[0]["type"] == "assistant_turn" else None
-            if prev_msg is not None and _can_fold(prev_msg, msg) and _do_fold(prev_msg, msg):
+            if kept and kept[-1][1] == idx - 1 and _do_fold(kept[-1][0], u, gcfg):
                 pruned.append({
                     "reason": f"judge::{d.get('reason') or 'fold'}",
                     "has_dpo": False,
@@ -519,7 +628,8 @@ def purify_by_judge(
             msg["exclude_reason"] = d.get("reason") or "judge_exclude"
             excluded += 1
 
-        if isinstance(popped_await, dict) and msg.get("tool_calls") and not msg.get("excluded"):
+        if (isinstance(popped_await, dict) and msg.get("tool_calls") and not msg.get("excluded")
+                and not _unverified_edit(u)):
             pruned.append({
                 "reason": "premature_stop_folded",
                 "has_dpo": True,
@@ -542,7 +652,11 @@ def purify_by_judge(
         if nxt is None:
             pd["has_dpo"] = False
             continue
-        chosen = next(u["msg"] for (u, i) in kept if i == nxt)
+        chosen_unit = next(u for (u, i) in kept if i == nxt)
+        if _unverified_edit(chosen_unit):
+            pd["has_dpo"] = False
+            continue
+        chosen = chosen_unit["msg"]
         if pd.get("dropped_msg_id"):
             chosen["pruned_detour"] = pd["dropped_msg_id"]
             detours = list(chosen.get("pruned_detours") or [])
@@ -790,7 +904,7 @@ def apply_step_decisions(
 
             if act == "prune":
                 if i <= 1 or i == first_asst_idx or pruned_n >= prune_budget:
-                    if isinstance(popped_await, dict) and tcs:
+                    if isinstance(popped_await, dict) and tcs and not _unverified_edit(cur):
                         pruned.append({
                             "reason": "premature_stop_folded",
                             "has_dpo": True,
@@ -819,11 +933,7 @@ def apply_step_decisions(
                 continue
 
             if act == "fold":
-                prev_u = kept[-1][0] if kept else None
-                prev_msg = prev_u["msg"] if prev_u and prev_u["type"] == "assistant_turn" else None
-                if prev_msg is not None and _can_fold(prev_msg, msg) and _do_fold(
-                    prev_msg, msg, max_edits=int(gcfg.get("max_fold_edits", 8))
-                ):
+                if kept and kept[-1][1] == i - 1 and _do_fold(kept[-1][0], cur, gcfg):
                     pruned.append({
                         "reason": f"agent::{d.get('reason') or 'fold'}",
                         "has_dpo": False,
@@ -875,7 +985,8 @@ def apply_step_decisions(
                     msg["flags"] = sorted(set(msg.get("flags", []) + ["silent_executed"]))
                     silent_cleared += 1
 
-            if isinstance(popped_await, dict) and tcs and not msg.get("excluded"):
+            if (isinstance(popped_await, dict) and tcs and not msg.get("excluded")
+                    and not _unverified_edit(cur)):
                 pruned.append({
                     "reason": "premature_stop_folded",
                     "has_dpo": True,
@@ -891,7 +1002,7 @@ def apply_step_decisions(
             continue
 
         # 未被 step_decisions 提及的步：沿用确定性规则提纯（A/B/C/D/E）
-        if isinstance(popped_await, dict) and tcs:
+        if isinstance(popped_await, dict) and tcs and not _unverified_edit(cur):
             pruned.append({
                 "reason": "premature_stop_folded",
                 "has_dpo": True,
@@ -911,66 +1022,24 @@ def apply_step_decisions(
                 nxt_msg.setdefault("raw_thinking", nxt_msg.get("thinking") or "")
                 nxt_msg.setdefault("raw_text", nxt_msg.get("text") or "")
                 nxt_tcs = nxt_msg.get("tool_calls", [])
-                if (
-                    gcfg.get("state_folding", True)
-                    and len(tcs) == 1
-                    and len(nxt_tcs) == 1
-                    and tcs[0]["name"] == "write"
-                    and nxt_tcs[0]["name"] == "edit"
-                    and tcs[0].get("arguments", {}).get("path") == nxt_tcs[0].get("arguments", {}).get("path")
-                ):
-                    orig_content = tcs[0]["arguments"].get("content", "")
-                    content = orig_content
-                    edits = nxt_tcs[0]["arguments"].get("edits", [])
-                    if not edits and "oldText" in nxt_tcs[0]["arguments"]:
-                        edits = [nxt_tcs[0]["arguments"]]
-                    edits = edits[: int(gcfg.get("max_fold_edits", 8))]
-                    ok = bool(edits)
-                    for ed in edits:
-                        old_t = ed.get("oldText", "")
-                        new_t = ed.get("newText", "")
-                        if old_t and old_t in content:
-                            content = content.replace(old_t, new_t, 1)
-                        else:
-                            ok = False
-                            break
-                    if ok:
-                        original = copy.deepcopy(msg)
-                        tcs[0]["arguments"]["content"] = content
-                        msg["folded_from"] = nxt_msg["id"]
-                        msg["fold_details"] = {
-                            "path": tcs[0]["arguments"].get("path", ""),
-                            "folded_msg_id": nxt_msg["id"],
-                            "edits_count": len(edits),
-                            "before_content": orig_content[:4000],
-                            "after_content": content[:4000],
-                            "edit_thinking": (nxt_msg.get("thinking") or "")[:800],
-                        }
-                        msg["flags"] = sorted(set(msg.get("flags", []) + ["state_folded"]))
-                        pruned.append({
-                            "reason": "state_folding_bug_fix",
-                            "has_dpo": True,
-                            "unit_index": i,
-                            "context_units": copy.deepcopy([ku for ku, _ in kept]),
-                            "chosen_msg": copy.deepcopy(msg),
-                            "rejected_msg": original,
-                            "dropped_msg_id": nxt_msg["id"],
-                            "file_path": tcs[0]["arguments"].get("path", ""),
-                            "before_snippet": orig_content[:2000],
-                            "after_snippet": content[:2000],
-                        })
+                if gcfg.get("state_folding", True):
+                    record = _rule_fold(cur, nxt, gcfg, [ku for ku, _ in kept])
+                    if record is not None:
+                        record["unit_index"] = i
+                        pruned.append(record)
                         kept.append((cur, i))
                         folded += 1
                         i += 2
                         continue
 
-                if gcfg.get("detour_pruning", True) and i > 1 and i != first_asst_idx and pruned_n < prune_budget:
+                if (gcfg.get("detour_pruning", True) and i > 1 and i != first_asst_idx
+                        and pruned_n < prune_budget and not _fold_participant(units, i)):
                     out_text = "\n".join(t.get("content", "") for t in trs)
                     has_error = any(t.get("isError") for t in trs) or bool(
                         LOW_LEVEL_MISTAKE_OUTPUT_REGEX.search(out_text)
                     )
                     next_admits = bool(NEXT_STEP_OOPS_REGEX.search((nxt_msg.get("thinking") or "").strip()))
-                    if (has_error or next_admits) and nxt_tcs:
+                    if (has_error or next_admits) and nxt_tcs and not _unverified_edit(nxt):
                         cleaned = copy.deepcopy(nxt)
                         raw_nxt_think = (cleaned["msg"].get("thinking") or "").strip()
                         cleaned_think = re.sub(
@@ -1014,7 +1083,8 @@ def apply_step_decisions(
                         continue
 
         if not msg.get("thinking") and tcs:
-            if any(t.get("isError") for t in trs) and i > 1 and i != first_asst_idx and pruned_n < prune_budget:
+            if (any(t.get("isError") for t in trs) and i > 1 and i != first_asst_idx
+                    and pruned_n < prune_budget and not _fold_participant(units, i)):
                 out_text = "\n".join(t.get("content", "") for t in trs)
                 pruned.append({
                     "reason": "empty_thinking_error_dropped",
@@ -1077,7 +1147,11 @@ def apply_step_decisions(
         if nxt_idx is None:
             pd["has_dpo"] = False
             continue
-        chosen = next(u["msg"] for (u, idx) in kept if idx == nxt_idx)
+        chosen_unit = next(u for (u, idx) in kept if idx == nxt_idx)
+        if _unverified_edit(chosen_unit):
+            pd["has_dpo"] = False
+            continue
+        chosen = chosen_unit["msg"]
         if pd.get("dropped_msg_id"):
             chosen["pruned_detour"] = pd["dropped_msg_id"]
             detours = list(chosen.get("pruned_detours") or [])
@@ -1129,6 +1203,57 @@ def apply_step_decisions(
     return gold_messages, pruned, stats
 
 
+def _stage2_config_hash(cfg: Dict[str, Any]) -> str:
+    return section_hash(
+        cfg, ["gold", "review", "judge", "synth.window_turns", "synth.max_tool_output_chars", "labeling", "turns"]
+    )
+
+
+def _can_reuse_session(prev, gold_entry, label, fp, meta_fp, decisions_hash) -> bool:
+    return bool(
+        prev and gold_entry and gold_entry.get("label") == label
+        and fingerprint_equal(prev.get("fingerprint"), fp)
+        and (prev.get("meta_fingerprint") is None and meta_fp is None
+             or fingerprint_equal(prev.get("meta_fingerprint"), meta_fp))
+        and prev.get("flow_version") == pilog.FLOW_VERSION
+        and prev.get("purify_version") == PURIFY_VERSION
+        and prev.get("step_decisions_hash", "") == decisions_hash
+        and prev.get("outputs")
+        and all(Path(p).is_file() for p in prev["outputs"])
+    )
+
+
+def reuse_blocker(cfg: Dict[str, Any]) -> Optional[str]:
+    """Read-only check that Stage 2 can reuse gold and regenerate the same DPO pool."""
+    dirs = stage_dirs(cfg)
+    raw = load_index(dirs["raw"] / "index.json")["sessions"]
+    gold = load_index(dirs["gold"] / "index.json")["sessions"]
+    if not raw or raw.keys() != gold.keys():
+        return "stage2_sessions_out_of_date"
+    state = read_json(dirs["state"] / "stage2.json", default={}) or {}
+    if state.get("config_hash") != _stage2_config_hash(cfg):
+        return "stage2_config_out_of_date"
+    files = state.get("files") or {}
+    decisions = load_step_decisions(cfg)
+    expected_pairs = []
+    for sid, entry in sorted(raw.items()):
+        raw_file = Path(entry.get("raw_file") or "")
+        meta_file = Path(entry.get("meta_file") or "")
+        fp = fingerprint(raw_file) if raw_file.is_file() else None
+        meta_fp = fingerprint(meta_file) if meta_file.is_file() else None
+        if not _can_reuse_session(
+            files.get(sid), gold[sid], entry.get("label", "pending"), fp, meta_fp,
+            _step_decisions_hash(decisions.get(sid)),
+        ):
+            return "stage2_inputs_or_outputs_out_of_date"
+        if gold[sid].get("dpo_file"):
+            expected_pairs.extend(read_jsonl(Path(gold[sid]["dpo_file"])))
+    aggregate = dirs["gold"] / "dpo_pairs.jsonl"
+    if not aggregate.is_file() or expected_pairs != read_jsonl(aggregate):
+        return "stage2_dpo_pool_out_of_date"
+    return None
+
+
 def run(
     force: bool = False,
     log=print,
@@ -1158,9 +1283,7 @@ def run(
     for d in (sessions_out, rejects_out, annotations_out):
         d.mkdir(parents=True, exist_ok=True)
 
-    cfgh = section_hash(
-        cfg, ["gold", "review", "judge", "synth.window_turns", "synth.max_tool_output_chars", "labeling", "turns"]
-    )
+    cfgh = _stage2_config_hash(cfg)
     state_path = dirs["state"] / "stage2.json"
     state = read_json(state_path, default={}) or {}
     raw_prev_files = state.get("files", {}) if isinstance(state.get("files"), dict) else {}
@@ -1192,19 +1315,15 @@ def run(
             _raw = Path(_e["raw_file"])
             if not _raw.exists():
                 continue
-            _fp = _e.get("fingerprint") or fingerprint(_raw)
+            _fp = fingerprint(_raw)
             _mp = Path(_e.get("meta_file", "")) if _e.get("meta_file") else None
             _mfp = fingerprint(_mp) if _mp and _mp.exists() else None
             _prev = prev_files.get(_sid)
             _sd_hash = _step_decisions_hash(step_decisions_all.get(_sid))
             _skip = (
-                not force and not (only_set and _sid in only_set) and _prev
-                and fingerprint_equal(_prev.get("fingerprint"), _fp)
-                and fingerprint_equal(_prev.get("meta_fingerprint"), _mfp)
-                and _prev.get("flow_version") == pilog.FLOW_VERSION
-                and _prev.get("step_decisions_hash", "") == _sd_hash
-                and (prev_index.get("sessions") or {}).get(_sid, {}).get("label") == _label
-                and all(Path(p).exists() for p in _prev.get("outputs", []))
+                not force and not only_set and _can_reuse_session(
+                    _prev, prev_index["sessions"].get(_sid), _label, _fp, _mfp, _sd_hash,
+                )
             )
             if _skip:
                 continue
@@ -1243,7 +1362,7 @@ def run(
         if not raw_file.exists():
             log(f"[stage2] 缺失原始文件，跳过 {sid}")
             continue
-        fp = entry.get("fingerprint") or fingerprint(raw_file)
+        fp = fingerprint(raw_file)
         meta_path = Path(entry.get("meta_file", "")) if entry.get("meta_file") else None
         meta_fp = fingerprint(meta_path) if meta_path and meta_path.exists() else None
         judge_on = judge.enabled(cfg, label)
@@ -1253,16 +1372,8 @@ def run(
         sd_hash = _step_decisions_hash(sd_entry)
 
         unchanged = (
-            not force
-            and not (only_set and sid in only_set)
-            and prev
-            and fingerprint_equal(prev.get("fingerprint"), fp)
-            and fingerprint_equal(prev.get("meta_fingerprint"), meta_fp)
-            and prev.get("flow_version") == pilog.FLOW_VERSION
-            and prev.get("step_decisions_hash", "") == sd_hash
-            and prev_entry
-            and prev_entry.get("label") == label
-            and all(Path(p).exists() for p in prev.get("outputs", []))
+            not force and not only_set
+            and _can_reuse_session(prev, prev_entry, label, fp, meta_fp, sd_hash)
         )
         if unchanged:
             sessions_index[sid] = prev_entry
@@ -1568,6 +1679,7 @@ def run(
             "fingerprint": fp,
             "meta_fingerprint": meta_fp,
             "flow_version": pilog.FLOW_VERSION,
+            "purify_version": PURIFY_VERSION,
             "step_decisions_hash": sd_hash,
             "label": label,
             "outputs": [str(gold_path), str(dpo_path), str(reject_path), str(diag_path), str(ann_path)],

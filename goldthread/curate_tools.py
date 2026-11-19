@@ -556,43 +556,28 @@ def curate_dpo(
     draft = dataset_draft.load_draft(cfg)
     assignments = (draft.get("split_plan") or {}).get("assignments") or {}
     cands, _ = stage3_synth.synthesize_dpo_candidates(records, cfg, assignments)
-    known_cand_ids: set[str] = {
-        str(c.get("sample_id") or "").strip()
-        for c in cands
-        if isinstance(c, dict) and str(c.get("sample_id") or "").strip()
-    }
-    for row in read_jsonl(dirs["gold"] / "dpo_pairs.jsonl"):
-        if isinstance(row, dict) and str(row.get("sample_id") or "").strip():
-            known_cand_ids.add(str(row["sample_id"]).strip())
+    fingerprints: Dict[str, set[str]] = {}
+    reviews = judge.resolve_dpo_reviews(cands, cfg)
+    for candidate, review in zip(cands, reviews):
+        sample_id = str(candidate.get("sample_id") or "").strip()
+        if sample_id:
+            fingerprints.setdefault(sample_id, set()).add(review["content_fingerprint"])
 
     if isinstance(verdicts_input, str) and re.fullmatch(
         r"(all|pending)=(good|swap|drop)", verdicts_input.strip()
     ):
         scope_tok, target_verdict = verdicts_input.strip().split("=", 1)
-        rcache = read_json(dirs["state"] / "dpo_review_cache.json", default={}) or {}
         normalized = {}
-        for c in cands:
+        for c, review in zip(cands, reviews):
             sid_key = str(c.get("sample_id") or "").strip()
-            if not sid_key:
+            if not sid_key or (scope_tok == "pending" and review["review_source"]):
                 continue
-            if scope_tok == "pending":
-                existing_v = (store.get(sid_key) or {}).get("verdict")
-                if existing_v in VALID_DPO_VERDICTS:
-                    continue
-                cached_hit = any(
-                    isinstance(v, dict)
-                    and v.get("sample_id") == sid_key
-                    and v.get("verdict") in VALID_DPO_VERDICTS
-                    for v in rcache.values()
-                )
-                if cached_hit:
-                    continue
             normalized[sid_key] = {"verdict": target_verdict, "reason": reason}
     else:
         normalized = _normalize_dpo_verdicts(verdicts_input)
         if not normalized:
             raise ValueError("DPO 裁决不能为空")
-        unknown_ids = sorted(set(normalized.keys()) - known_cand_ids)
+        unknown_ids = sorted(set(normalized) - fingerprints.keys())
         if unknown_ids:
             raise ValueError(
                 f"未知 DPO sample_id（不在当前候选池中，共 {len(unknown_ids)} 条）: "
@@ -601,7 +586,11 @@ def curate_dpo(
     now = now_iso()
     sids: set[str] = set()
     for sample_id, item in normalized.items():
+        versions = fingerprints[sample_id]
+        if len(versions) != 1:
+            raise ValueError(f"DPO sample_id 对应多个不同内容版本: {sample_id}")
         store[sample_id] = {
+            "content_fingerprint": next(iter(versions)),
             "verdict": item["verdict"],
             "reason": item["reason"] or reason,
             "by": actor,

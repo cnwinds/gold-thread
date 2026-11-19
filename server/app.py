@@ -202,7 +202,9 @@ class Job:
             pass
 
     def as_dict(self, with_logs: bool = True, offset: int = 0) -> Dict[str, Any]:
+        title = task_registry.describe_task(self.stage, self.force, self.extra)["title"]
         d = {
+            "title": title,
             "id": self.id,
             "stage": self.stage,
             "force": self.force,
@@ -225,22 +227,25 @@ class Job:
 JOBS: Dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
 
+# 全流程与删除影响整个工作区，与任何作业互斥。
+_EXCLUSIVE_STAGES = frozenset({"all", "delete"})
 # 会改写原始 / 黄金 / 训练工作区的阶段：彼此互斥，冲突时入队串行。
 _GOLD_WRITE_STAGES = frozenset(
-    {"stage2", "stage3", "dataset_evaluate", "all", "analyze", "classify", "collect"}
+    {"all", "stage2", "stage3", "build", "dataset_evaluate", "analyze", "classify", "collect"}
 )
+# 确定性构建从已采纳 raw 读入、写出最新 Build；勿与扫描或打包并行。
+_BUILD_CONFLICTS = frozenset({"stage1", "package"})
 
 
 def _jobs_clash(a_stage: str, b_stage: str) -> bool:
     return (
         a_stage == b_stage
-        or a_stage == "all"
-        or b_stage == "all"
-        or a_stage == "delete"
-        or b_stage == "delete"
+        or a_stage in _EXCLUSIVE_STAGES
+        or b_stage in _EXCLUSIVE_STAGES
         or (a_stage in _GOLD_WRITE_STAGES and b_stage in _GOLD_WRITE_STAGES)
-        or (a_stage == "package" and b_stage in {"stage3", "all"})
-        or (b_stage == "package" and a_stage in {"stage3", "all"})
+        or (a_stage == "build" and b_stage in _BUILD_CONFLICTS)
+        or (b_stage == "build" and a_stage in _BUILD_CONFLICTS)
+        or {a_stage, b_stage} == {"package", "stage3"}
     )
 
 
@@ -366,6 +371,21 @@ def _run_job(job: Job) -> None:
                     )
                 except Exception:  # noqa: BLE001
                     pass
+        elif job.stage == "build":
+            job.log("[build] 对已采纳会话执行确定性黄金提纯、训练集合成和门禁校验")
+            result = build_tools.build_pipeline(
+                force=job.force,
+                scan_raw=False,
+                run_gate=True,
+                reason="Web 控制台构建工作区数据集",
+                actor="human",
+                cfg=cfg,
+            )
+            job.result = result
+            if not result["ok"]:
+                violations = (result.get("gate") or {}).get("violations") or []
+                details = "; ".join(str(v.get("message") or v.get("code")) for v in violations)
+                raise RuntimeError(f"构建门禁未通过: {details or 'gate_failed'}")
         elif job.stage == "stage3":
             # 与全流程一致：构建前先评估，用户不必先跳到训练页单独点「DPO 评估」。
             job.log("[stage3] 先评估待复核 DPO，再合成训练集")
@@ -1095,8 +1115,8 @@ class RunBody(BaseModel):
 
 @app.post("/api/run")
 def run_stage(body: RunBody) -> Dict[str, Any]:
-    if body.stage not in ("stage1", "stage2", "stage3", "dataset_evaluate", "all", "classify"):
-        raise HTTPException(400, "stage 必须是 stage1|stage2|stage3|dataset_evaluate|all|classify")
+    if body.stage not in ("stage1", "stage2", "stage3", "build", "dataset_evaluate", "all", "classify"):
+        raise HTTPException(400, "stage 必须是 stage1|stage2|stage3|build|dataset_evaluate|all|classify")
     job = _start(body.stage, body.force, {"sessions": body.sessions})
     return {"job_id": job.id, "status": job.status}
 

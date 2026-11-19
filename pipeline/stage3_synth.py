@@ -172,6 +172,33 @@ def _dpo_content_issue(pair: Dict[str, Any]) -> str:
     return ""
 
 
+def dpo_review_audit(total: int, reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Count effective reviews only after draft and content admission."""
+    counts = Counter(review["verdict"] for review in reviews)
+    sources = Counter(review["review_source"] for review in reviews)
+    pending = counts["pending"] + counts["review_failed"]
+    bypassed = counts["bypassed"]
+    return {
+        "readiness": "ready" if not (pending or bypassed) else "review_required",
+        "total_candidates": total,
+        "eligible_candidates": len(reviews),
+        "explicit_verdicts": sources["explicit"],
+        "cached_reviews": sources["cached"],
+        "bypassed_unreviewed": bypassed,
+        "pending_evaluations": pending,
+    }
+
+
+class DPOReviewRequired(ValueError):
+    def __init__(self, audit: Dict[str, Any]):
+        self.audit = audit
+        super().__init__(
+            f"严格 DPO 审核模式下仍有未复核项: bypassed={audit['bypassed_unreviewed']}, "
+            f"pending={audit['pending_evaluations']}；请查看当前 DPO 草稿，"
+            "用 gt curate dpo 提交本次内容的裁决，再用相同严格选项重试"
+        )
+
+
 def _dpo_row_preview(pair: Dict[str, Any]) -> Dict[str, Any]:
     chosen = _pref_value(pair.get("chosen"))
     rejected = _pref_value(pair.get("rejected"))
@@ -868,23 +895,23 @@ def evaluate_dpo_pending(cfg: Optional[Dict[str, Any]] = None, log=print) -> Dic
     legacy = _load_dpo_exclusions(dirs["state"])
     eligible = [
         pair for pair in pairs
-        if dataset_draft.exclusion_for(
+        if not _dpo_content_issue(pair) and dataset_draft.exclusion_for(
             str(pair.get("sample_id") or ""),
             str((pair.get("metadata") or {}).get("project_group") or "unknown"),
             str((pair.get("metadata") or {}).get("session_id") or ""),
             draft, legacy, is_dpo=True,
         )["action"] != "exclude"
     ]
-    before = judge.cached_dpo_verdicts(eligible, cfg)
-    pending_before = sum(v["verdict"] in ("pending", "review_failed") for v in before.values())
-    verdicts: Dict[str, Dict[str, Any]] = {}
+    before = judge.resolve_dpo_reviews(eligible, cfg)
+    pending = [p for p, v in zip(eligible, before) if v["verdict"] in ("pending", "review_failed")]
+    pending_before = len(pending)
     if pending_before:
         stepcat.begin(log, "s3.dpo_review", msg=f"待评估 {pending_before} 对")
         stepcat.emit(log, "s3.dpo_review", 0, pending_before, f"待评估 {pending_before} 对")
-        verdicts = judge.review_dpo(eligible, cfg=cfg, log=log)
-    after = judge.cached_dpo_verdicts(eligible, cfg)
-    pending_after = sum(v["verdict"] in ("pending", "review_failed") for v in after.values())
-    failed = sum(v.get("verdict") == "review_failed" for v in verdicts.values())
+        judge.review_dpo(pending, cfg=cfg, log=log)
+    after = judge.resolve_dpo_reviews(eligible, cfg)
+    pending_after = sum(v["verdict"] in ("pending", "review_failed") for v in after)
+    failed = sum(v["verdict"] == "review_failed" for v in after)
     completed = max(0, pending_before - pending_after)
     if pending_before:
         tail = f"完成 {completed}/{pending_before}"
@@ -896,10 +923,10 @@ def evaluate_dpo_pending(cfg: Optional[Dict[str, Any]] = None, log=print) -> Dic
         "evaluated": pending_before,
         "pending": pending_after,
         "failed": failed,
-        "good": sum(v["verdict"] == "good" for v in after.values()),
-        "swap": sum(v["verdict"] == "swap" for v in after.values()),
-        "drop": sum(v["verdict"] == "drop" for v in after.values()),
-        "bypassed": sum(v["verdict"] == "bypassed" for v in after.values()),
+        "good": sum(v["verdict"] == "good" for v in after),
+        "swap": sum(v["verdict"] == "swap" for v in after),
+        "drop": sum(v["verdict"] == "drop" for v in after),
+        "bypassed": sum(v["verdict"] == "bypassed" for v in after),
     }
 
 
@@ -995,10 +1022,10 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
         })
 
     dpo_candidates, _ = synthesize_dpo_candidates(records, cfg, split_map, session_splits)
-    dpo_verdicts = judge.cached_dpo_verdicts(dpo_candidates, cfg)
+    dpo_verdicts = judge.resolve_dpo_reviews(dpo_candidates, cfg)
     legacy_exclusions = _load_dpo_exclusions(dirs["state"])
-    pending_evaluations = 0
-    for pair in dpo_candidates:
+    eligible_reviews = []
+    for pair, verdict in zip(dpo_candidates, dpo_verdicts):
         sample_id = str(pair.get("sample_id") or "")
         meta = pair.get("metadata") or {}
         dpo_project = meta.get("project_group") or "unknown"
@@ -1006,7 +1033,6 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
         decision = dataset_draft.exclusion_for(
             sample_id, dpo_project, dpo_sid, draft, legacy_exclusions, is_dpo=True
         )
-        verdict = dpo_verdicts.get(sample_id) or {"verdict": "pending", "reason": "尚未完成模型复核"}
         gate_status = verdict["verdict"]
         content_issue = _dpo_content_issue(pair)
         manually_excluded = decision["action"] == "exclude"
@@ -1015,8 +1041,8 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
             reason = content_issue
             is_included = False
         else:
-            if not manually_excluded and gate_status in ("pending", "review_failed"):
-                pending_evaluations += 1
+            if not manually_excluded:
+                eligible_reviews.append(verdict)
             is_included = not manually_excluded and gate_status in ("good", "swap", "bypassed")
             reason = decision.get("reason", "") if manually_excluded else verdict.get("reason", "")
         project = meta.get("project_group") or "unknown"
@@ -1043,14 +1069,18 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
             "included": is_included,
             "decision": decision["action"],
             "gate_status": gate_status,
+            "review_source": verdict["review_source"],
+            "content_fingerprint": verdict["content_fingerprint"],
             "decision_reason": reason,
             "decision_at": decision.get("at"),
             "preview": _dpo_row_preview(pair),
         })
 
+    dpo_audit = dpo_review_audit(len(dpo_candidates), eligible_reviews)
     return {
         "rows": rows,
         "sessions": sessions,
+        "dpo_audit": dpo_audit,
         "split": split_map,
         "split_plan": draft.get("split_plan") or {},
         "scope_decisions": draft.get("scope_decisions") or {},
@@ -1059,7 +1089,7 @@ def draft_preview(cfg: Optional[Dict[str, Any]] = None, persist_split: bool = Tr
             "included": sum(1 for row in rows if row["included"]),
             "excluded": sum(1 for row in rows if not row["included"] and row["decision"] == "exclude"),
             "gate_excluded": sum(1 for row in rows if not row["included"] and row["decision"] != "exclude"),
-            "pending_evaluations": pending_evaluations,
+            "pending_evaluations": dpo_audit["pending_evaluations"],
             "blocked_sessions": sum(
                 1 for s in sessions if not s["full_sft_allowed"] and not s["subsegment_only"]
             ),
@@ -1157,7 +1187,10 @@ def draft_sample(sample_id: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[s
     raise KeyError(f"草稿样本不存在: {sample_id}")
 
 
-def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def run(
+    force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None, *,
+    require_reviewed_dpo: bool = False,
+) -> Dict[str, Any]:
     cfg = cfg or load_config()
     dirs = stage_dirs(cfg)
     gold_index = load_index(dirs["gold"] / "index.json")
@@ -1179,6 +1212,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
     gold_trajs: List[Dict[str, Any]] = []
     step_pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     dpo_pairs, dpo_source_counts = synthesize_dpo_candidates(records, cfg, split_map, session_splits)
+    total_dpo_candidates = len(dpo_pairs)
     diagnostics: List[Dict[str, Any]] = []
     session_funnels: Dict[str, Any] = {}
     draft_excluded = {"sft": 0, "trajectory": 0, "dpo": 0}
@@ -1335,22 +1369,21 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
             continue
         content_ok.append(pair)
     dpo_pairs = content_ok
-    verdicts = judge.cached_dpo_verdicts(dpo_pairs, cfg)
-    pending = [
-        str(p.get("sample_id")) for p in dpo_pairs
-        if (verdicts.get(str(p.get("sample_id"))) or {}).get("verdict") in ("pending", "review_failed")
-    ]
-    dpo_review_stats["pending"] = len(pending)
+    reviews = judge.resolve_dpo_reviews(dpo_pairs, cfg)
+    dpo_audit = dpo_review_audit(total_dpo_candidates, reviews)
+    if require_reviewed_dpo and dpo_audit["readiness"] != "ready":
+        raise DPOReviewRequired(dpo_audit)
+    pending = dpo_audit["pending_evaluations"]
+    dpo_review_stats["pending"] = pending
     if pending:
         raise RuntimeError(
-            f"{len(pending)} 个 DPO 偏好对尚未完成模型复核；"
-            "请运行「评估并构建」（Stage 3 会先评估）或单独的 DPO 评估"
+            f"{pending} 个 DPO 偏好对尚未完成模型复核；"
+            "请用 gt curate dpo 提交裁决，或启用 judge 后运行单独的 DPO 评估"
         )
     if dpo_pairs:
         kept_pairs = []
-        for pair in dpo_pairs:
-            verdict = verdicts.get(str(pair.get("sample_id"))) or {}
-            kind = verdict.get("verdict")
+        for pair, verdict in zip(dpo_pairs, reviews):
+            kind = verdict["verdict"]
             if kind == "drop":
                 dpo_review_stats["checked"] += 1
                 dpo_review_stats["dropped"] += 1
@@ -1622,6 +1655,7 @@ def run(force: bool = False, log=print, cfg: Optional[Dict[str, Any]] = None) ->
         **counts,
         "split": split_map,
         "stats": stats,
+        "dpo_audit": dpo_audit,
         "build_id": build_id,
         "build_dir": str(build_dir),
         "package": None,

@@ -1,23 +1,23 @@
 {
   "stage": "stage3",
   "stats": {
-    "generated_at": "2026-11-18T15:03:29+08:00",
-    "config_hash": "78d5b1cf763ba7a4",
+    "generated_at": "2026-11-19T18:05:39+08:00",
+    "config_hash": "caf680c2f8102063",
     "counts": {
       "sft_gold_trajectories_sharegpt.jsonl": 27,
-      "sft_step_windows_sharegpt.jsonl": 2556,
-      "sft_step_windows_openai.jsonl": 2556,
-      "dpo_preference_pairs.jsonl": 1292,
-      "negative_diagnostics.jsonl": 1879,
+      "sft_step_windows_sharegpt.jsonl": 3144,
+      "sft_step_windows_openai.jsonl": 3144,
+      "dpo_preference_pairs.jsonl": 729,
+      "negative_diagnostics.jsonl": 2091,
       "sft_gold_trajectories_sharegpt.train.jsonl": 22,
       "sft_gold_trajectories_sharegpt.eval.jsonl": 5,
-      "sft_step_windows_sharegpt.train.jsonl": 2166,
-      "sft_step_windows_sharegpt.eval.jsonl": 390,
-      "sft_step_windows_openai.train.jsonl": 2166,
-      "sft_step_windows_openai.eval.jsonl": 390,
-      "dpo_preference_pairs.train.jsonl": 1057,
-      "dpo_preference_pairs.eval.jsonl": 235,
-      "negative_diagnostics.train.jsonl": 1879
+      "sft_step_windows_sharegpt.train.jsonl": 2651,
+      "sft_step_windows_sharegpt.eval.jsonl": 493,
+      "sft_step_windows_openai.train.jsonl": 2651,
+      "sft_step_windows_openai.eval.jsonl": 493,
+      "dpo_preference_pairs.train.jsonl": 643,
+      "dpo_preference_pairs.eval.jsonl": 86,
+      "negative_diagnostics.train.jsonl": 2091
     },
     "split": {
       "game::altosodyssey": "eval",
@@ -41,50 +41,50 @@
       "game::youmustescape2": "train"
     },
     "by_project": {
-      "game::jigsawcard": 654,
-      "game::meowdoku": 281,
-      "game::mahjong": 127,
-      "game::altosodyssey": 58,
-      "game::riddle": 317,
+      "game::jigsawcard": 773,
+      "game::meowdoku": 294,
+      "game::altosodyssey": 76,
       "game::puzzle": 130,
       "game::sudokuquest": 72,
-      "game::unblock3d": 37,
       "game::youmustescape2": 15,
       "game::realboxing2": 44,
       "game::cookingmadness": 125,
-      "game::linesthegame": 36,
+      "game::linesthegame": 35,
       "game::leveldevil": 113,
       "game::bananakong": 63,
       "game::mergehotel": 162,
       "game::minesweeper": 16,
-      "game::usagishima": 37,
-      "game::klondike": 111,
-      "game::monkeymart": 158
+      "game::usagishima": 45,
+      "game::klondike": 197,
+      "game::monkeymart": 232,
+      "game::riddle": 237,
+      "game::unblock3d": 276,
+      "game::mahjong": 239
     },
     "by_stage": {
-      "opening": 75,
-      "key_decision": 1267,
-      "routine": 1045,
-      "highlight": 118,
-      "closing": 51
+      "opening": 71,
+      "key_decision": 1593,
+      "routine": 1295,
+      "highlight": 131,
+      "closing": 54
     },
     "by_model": {
       "glm-5.3": 2,
-      "deepseek-v4.1-flash-1017": 4,
-      "glm-5.3-flash": 17,
-      "MiniMax-M3.1-Flash": 4
+      "deepseek-v4.1-flash-1017": 7,
+      "glm-5.3-flash": 15,
+      "MiniMax-M3.1-Flash": 3
     },
     "admit_reasons": {
-      "clean_gold": 2126,
-      "rescued_by_rewrite": 429,
+      "clean_gold": 2403,
+      "rescued_by_rewrite": 740,
       "human_kept": 1
     },
     "drop_reasons": {
-      "excluded_by_review": 13,
-      "synthesized_thinking_unverified": 839,
+      "excluded_by_review": 10,
+      "pathology": 96,
+      "synthesized_thinking_unverified": 738,
       "premature_stop_without_tool": 7,
-      "pathology": 61,
-      "empty_thinking": 11,
+      "empty_thinking": 12,
       "model_discard": 703
     },
     "session_funnels": {
@@ -99,25 +99,25 @@
         "subsegment_only": false,
         "funnel": {
           "raw_steps": 316,
-          "gold_steps": 285,
-          "admitted_steps": 198,
-          "rescued_steps": 30,
+          "gold_steps": 294,
+          "admitted_steps": 267,
+          "rescued_steps": 99,
           "human_kept_steps": 1,
           "excluded_steps": 12,
-          "pathology_dropped": 2,
-          "synthesized_dropped": 72,
+          "pathology_dropped": 11,
+          "synthesized_dropped": 3,
           "empty_dropped": 1,
           "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 370
+          "weighted_steps": 469
         },
-        "dpo_pruned": 31,
-        "dpo_review": 99,
+        "dpo_pruned": 15,
+        "dpo_review": 25,
         "dpo_negative": 0,
         "diagnostics": 143,
-        "dpo_written": 130,
+        "dpo_written": 36,
         "dpo_written_parts": {
-          "pruned": 31,
-          "review": 99,
+          "pruned": 12,
+          "review": 24,
           "negative": 0
         }
       },
@@ -132,25 +132,25 @@
         "subsegment_only": false,
         "funnel": {
           "raw_steps": 305,
-          "gold_steps": 281,
-          "admitted_steps": 224,
-          "rescued_steps": 49,
+          "gold_steps": 290,
+          "admitted_steps": 276,
+          "rescued_steps": 99,
           "human_kept_steps": 0,
           "excluded_steps": 3,
-          "pathology_dropped": 1,
-          "synthesized_dropped": 53,
+          "pathology_dropped": 8,
+          "synthesized_dropped": 3,
           "empty_dropped": 0,
           "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 411
+          "weighted_steps": 494
         },
-        "dpo_pruned": 34,
-        "dpo_review": 98,
+        "dpo_pruned": 25,
+        "dpo_review": 45,
         "dpo_negative": 0,
         "diagnostics": 125,
-        "dpo_written": 131,
+        "dpo_written": 70,
         "dpo_written_parts": {
-          "pruned": 33,
-          "review": 98,
+          "pruned": 25,
+          "review": 45,
           "negative": 0
         }
       },
@@ -180,9 +180,9 @@
         "dpo_review": 10,
         "dpo_negative": 10,
         "diagnostics": 15,
-        "dpo_written": 16,
+        "dpo_written": 15,
         "dpo_written_parts": {
-          "pruned": 6,
+          "pruned": 5,
           "review": 10,
           "negative": 0
         }
@@ -246,9 +246,9 @@
         "dpo_review": 8,
         "dpo_negative": 8,
         "diagnostics": 26,
-        "dpo_written": 22,
+        "dpo_written": 21,
         "dpo_written_parts": {
-          "pruned": 14,
+          "pruned": 13,
           "review": 8,
           "negative": 0
         }
@@ -264,25 +264,25 @@
         "subsegment_only": false,
         "funnel": {
           "raw_steps": 174,
-          "gold_steps": 165,
-          "admitted_steps": 160,
-          "rescued_steps": 12,
+          "gold_steps": 170,
+          "admitted_steps": 165,
+          "rescued_steps": 15,
           "human_kept_steps": 0,
           "excluded_steps": 1,
-          "pathology_dropped": 0,
-          "synthesized_dropped": 4,
+          "pathology_dropped": 3,
+          "synthesized_dropped": 1,
           "empty_dropped": 0,
           "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 360
+          "weighted_steps": 371
         },
-        "dpo_pruned": 9,
-        "dpo_review": 15,
+        "dpo_pruned": 4,
+        "dpo_review": 13,
         "dpo_negative": 0,
         "diagnostics": 23,
-        "dpo_written": 24,
+        "dpo_written": 16,
         "dpo_written_parts": {
-          "pruned": 9,
-          "review": 15,
+          "pruned": 3,
+          "review": 13,
           "negative": 0
         }
       },
@@ -298,24 +298,24 @@
         "funnel": {
           "raw_steps": 78,
           "gold_steps": 62,
-          "admitted_steps": 53,
-          "rescued_steps": 1,
+          "admitted_steps": 61,
+          "rescued_steps": 9,
           "human_kept_steps": 0,
           "excluded_steps": 0,
           "pathology_dropped": 0,
-          "synthesized_dropped": 8,
+          "synthesized_dropped": 0,
           "empty_dropped": 1,
           "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 104
+          "weighted_steps": 120
         },
-        "dpo_pruned": 16,
-        "dpo_review": 9,
+        "dpo_pruned": 12,
+        "dpo_review": 0,
         "dpo_negative": 0,
         "diagnostics": 25,
-        "dpo_written": 21,
+        "dpo_written": 10,
         "dpo_written_parts": {
-          "pruned": 12,
-          "review": 9,
+          "pruned": 10,
+          "review": 0,
           "negative": 0
         }
       },
@@ -345,10 +345,10 @@
         "dpo_review": 9,
         "dpo_negative": 10,
         "diagnostics": 27,
-        "dpo_written": 17,
+        "dpo_written": 12,
         "dpo_written_parts": {
           "pruned": 8,
-          "review": 9,
+          "review": 4,
           "negative": 0
         }
       },
@@ -378,10 +378,10 @@
         "dpo_review": 22,
         "dpo_negative": 22,
         "diagnostics": 28,
-        "dpo_written": 24,
+        "dpo_written": 23,
         "dpo_written_parts": {
           "pruned": 2,
-          "review": 22,
+          "review": 21,
           "negative": 0
         }
       },
@@ -411,43 +411,10 @@
         "dpo_review": 24,
         "dpo_negative": 27,
         "diagnostics": 93,
-        "dpo_written": 92,
+        "dpo_written": 86,
         "dpo_written_parts": {
-          "pruned": 68,
+          "pruned": 62,
           "review": 24,
-          "negative": 0
-        }
-      },
-      "01a1676b-754b-7585-bd57-f8f082f6153c": {
-        "session_id": "01a1676b-754b-7585-bd57-f8f082f6153c",
-        "label": "positive",
-        "project_group": "game::mahjong",
-        "model": "glm-5.3-flash",
-        "split": "train",
-        "effective_state": "approved",
-        "full_sft_allowed": true,
-        "subsegment_only": false,
-        "funnel": {
-          "raw_steps": 200,
-          "gold_steps": 177,
-          "admitted_steps": 127,
-          "rescued_steps": 20,
-          "human_kept_steps": 0,
-          "excluded_steps": 3,
-          "pathology_dropped": 1,
-          "synthesized_dropped": 46,
-          "empty_dropped": 0,
-          "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 194
-        },
-        "dpo_pruned": 25,
-        "dpo_review": 60,
-        "dpo_negative": 0,
-        "diagnostics": 90,
-        "dpo_written": 85,
-        "dpo_written_parts": {
-          "pruned": 25,
-          "review": 60,
           "negative": 0
         }
       },
@@ -457,63 +424,30 @@
         "project_group": "game::altosodyssey",
         "model": "glm-5.3-flash",
         "split": "eval",
-        "effective_state": "approved",
-        "full_sft_allowed": true,
-        "subsegment_only": false,
-        "funnel": {
-          "raw_steps": 85,
-          "gold_steps": 79,
-          "admitted_steps": 58,
-          "rescued_steps": 9,
-          "human_kept_steps": 0,
-          "excluded_steps": 0,
-          "pathology_dropped": 0,
-          "synthesized_dropped": 21,
-          "empty_dropped": 0,
-          "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 125
-        },
-        "dpo_pruned": 7,
-        "dpo_review": 27,
-        "dpo_negative": 0,
-        "diagnostics": 36,
-        "dpo_written": 34,
-        "dpo_written_parts": {
-          "pruned": 7,
-          "review": 27,
-          "negative": 0
-        }
-      },
-      "01a167bd-83e7-75b6-89c4-02717ef954f2": {
-        "session_id": "01a167bd-83e7-75b6-89c4-02717ef954f2",
-        "label": "positive",
-        "project_group": "game::riddle",
-        "model": "MiniMax-M3.1-Flash",
-        "split": "train",
         "effective_state": "auto_gold",
         "full_sft_allowed": true,
         "subsegment_only": false,
         "funnel": {
-          "raw_steps": 429,
-          "gold_steps": 402,
-          "admitted_steps": 317,
-          "rescued_steps": 67,
+          "raw_steps": 85,
+          "gold_steps": 81,
+          "admitted_steps": 76,
+          "rescued_steps": 27,
           "human_kept_steps": 0,
           "excluded_steps": 0,
-          "pathology_dropped": 5,
-          "synthesized_dropped": 80,
+          "pathology_dropped": 2,
+          "synthesized_dropped": 3,
           "empty_dropped": 0,
           "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 488
+          "weighted_steps": 154
         },
-        "dpo_pruned": 27,
-        "dpo_review": 60,
+        "dpo_pruned": 5,
+        "dpo_review": 9,
         "dpo_negative": 0,
-        "diagnostics": 178,
-        "dpo_written": 87,
+        "diagnostics": 36,
+        "dpo_written": 13,
         "dpo_written_parts": {
-          "pruned": 27,
-          "review": 60,
+          "pruned": 4,
+          "review": 9,
           "negative": 0
         }
       },
@@ -543,10 +477,10 @@
         "dpo_review": 8,
         "dpo_negative": 0,
         "diagnostics": 65,
-        "dpo_written": 19,
+        "dpo_written": 15,
         "dpo_written_parts": {
-          "pruned": 11,
-          "review": 8,
+          "pruned": 9,
+          "review": 6,
           "negative": 0
         }
       },
@@ -576,43 +510,10 @@
         "dpo_review": 8,
         "dpo_negative": 0,
         "diagnostics": 41,
-        "dpo_written": 17,
+        "dpo_written": 15,
         "dpo_written_parts": {
-          "pruned": 9,
+          "pruned": 7,
           "review": 8,
-          "negative": 0
-        }
-      },
-      "01a1bfd3-38f7-7603-8979-1f8cf97db161": {
-        "session_id": "01a1bfd3-38f7-7603-8979-1f8cf97db161",
-        "label": "positive",
-        "project_group": "game::unblock3d",
-        "model": "glm-5.3-flash",
-        "split": "train",
-        "effective_state": "auto_gold",
-        "full_sft_allowed": true,
-        "subsegment_only": false,
-        "funnel": {
-          "raw_steps": 47,
-          "gold_steps": 44,
-          "admitted_steps": 37,
-          "rescued_steps": 6,
-          "human_kept_steps": 0,
-          "excluded_steps": 0,
-          "pathology_dropped": 2,
-          "synthesized_dropped": 5,
-          "empty_dropped": 0,
-          "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 51
-        },
-        "dpo_pruned": 3,
-        "dpo_review": 4,
-        "dpo_negative": 0,
-        "diagnostics": 16,
-        "dpo_written": 7,
-        "dpo_written_parts": {
-          "pruned": 3,
-          "review": 4,
           "negative": 0
         }
       },
@@ -726,24 +627,24 @@
         "subsegment_only": false,
         "funnel": {
           "raw_steps": 68,
-          "gold_steps": 60,
-          "admitted_steps": 36,
-          "rescued_steps": 4,
+          "gold_steps": 61,
+          "admitted_steps": 35,
+          "rescued_steps": 3,
           "human_kept_steps": 0,
           "excluded_steps": 0,
-          "pathology_dropped": 1,
-          "synthesized_dropped": 23,
+          "pathology_dropped": 2,
+          "synthesized_dropped": 24,
           "empty_dropped": 0,
           "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 76
+          "weighted_steps": 75
         },
-        "dpo_pruned": 8,
+        "dpo_pruned": 7,
         "dpo_review": 2,
         "dpo_negative": 0,
         "diagnostics": 36,
-        "dpo_written": 10,
+        "dpo_written": 8,
         "dpo_written_parts": {
-          "pruned": 8,
+          "pruned": 6,
           "review": 2,
           "negative": 0
         }
@@ -774,10 +675,10 @@
         "dpo_review": 19,
         "dpo_negative": 0,
         "diagnostics": 78,
-        "dpo_written": 32,
+        "dpo_written": 22,
         "dpo_written_parts": {
-          "pruned": 13,
-          "review": 19,
+          "pruned": 7,
+          "review": 15,
           "negative": 0
         }
       },
@@ -807,9 +708,9 @@
         "dpo_review": 12,
         "dpo_negative": 0,
         "diagnostics": 59,
-        "dpo_written": 32,
+        "dpo_written": 29,
         "dpo_written_parts": {
-          "pruned": 20,
+          "pruned": 17,
           "review": 12,
           "negative": 0
         }
@@ -840,9 +741,9 @@
         "dpo_review": 15,
         "dpo_negative": 0,
         "diagnostics": 72,
-        "dpo_written": 31,
+        "dpo_written": 24,
         "dpo_written_parts": {
-          "pruned": 16,
+          "pruned": 9,
           "review": 15,
           "negative": 0
         }
@@ -873,10 +774,10 @@
         "dpo_review": 15,
         "dpo_negative": 0,
         "diagnostics": 57,
-        "dpo_written": 34,
+        "dpo_written": 24,
         "dpo_written_parts": {
-          "pruned": 19,
-          "review": 15,
+          "pruned": 14,
+          "review": 10,
           "negative": 0
         }
       },
@@ -906,9 +807,9 @@
         "dpo_review": 1,
         "dpo_negative": 0,
         "diagnostics": 10,
-        "dpo_written": 2,
+        "dpo_written": 1,
         "dpo_written_parts": {
-          "pruned": 1,
+          "pruned": 0,
           "review": 1,
           "negative": 0
         }
@@ -924,25 +825,25 @@
         "subsegment_only": false,
         "funnel": {
           "raw_steps": 51,
-          "gold_steps": 47,
-          "admitted_steps": 37,
-          "rescued_steps": 5,
+          "gold_steps": 48,
+          "admitted_steps": 45,
+          "rescued_steps": 13,
           "human_kept_steps": 0,
           "excluded_steps": 0,
-          "pathology_dropped": 0,
-          "synthesized_dropped": 10,
+          "pathology_dropped": 1,
+          "synthesized_dropped": 2,
           "empty_dropped": 0,
           "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 90
+          "weighted_steps": 103
         },
-        "dpo_pruned": 4,
-        "dpo_review": 13,
+        "dpo_pruned": 3,
+        "dpo_review": 4,
         "dpo_negative": 0,
         "diagnostics": 19,
-        "dpo_written": 17,
+        "dpo_written": 7,
         "dpo_written_parts": {
-          "pruned": 4,
-          "review": 13,
+          "pruned": 3,
+          "review": 4,
           "negative": 0
         }
       },
@@ -957,25 +858,25 @@
         "subsegment_only": false,
         "funnel": {
           "raw_steps": 229,
-          "gold_steps": 200,
-          "admitted_steps": 111,
-          "rescued_steps": 27,
+          "gold_steps": 210,
+          "admitted_steps": 197,
+          "rescued_steps": 113,
           "human_kept_steps": 0,
           "excluded_steps": 0,
-          "pathology_dropped": 1,
-          "synthesized_dropped": 88,
+          "pathology_dropped": 11,
+          "synthesized_dropped": 2,
           "empty_dropped": 0,
           "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 193
+          "weighted_steps": 316
         },
-        "dpo_pruned": 29,
-        "dpo_review": 113,
+        "dpo_pruned": 6,
+        "dpo_review": 23,
         "dpo_negative": 0,
         "diagnostics": 145,
-        "dpo_written": 142,
+        "dpo_written": 28,
         "dpo_written_parts": {
-          "pruned": 29,
-          "review": 113,
+          "pruned": 5,
+          "review": 23,
           "negative": 0
         }
       },
@@ -990,25 +891,25 @@
         "subsegment_only": false,
         "funnel": {
           "raw_steps": 234,
-          "gold_steps": 206,
-          "admitted_steps": 125,
-          "rescued_steps": 23,
+          "gold_steps": 215,
+          "admitted_steps": 199,
+          "rescued_steps": 97,
           "human_kept_steps": 0,
           "excluded_steps": 0,
-          "pathology_dropped": 0,
-          "synthesized_dropped": 81,
+          "pathology_dropped": 8,
+          "synthesized_dropped": 8,
           "empty_dropped": 0,
           "blocked_or_subsegment_dropped": 0,
-          "weighted_steps": 241
+          "weighted_steps": 348
         },
-        "dpo_pruned": 28,
-        "dpo_review": 96,
+        "dpo_pruned": 14,
+        "dpo_review": 18,
         "dpo_negative": 0,
         "diagnostics": 132,
-        "dpo_written": 124,
+        "dpo_written": 29,
         "dpo_written_parts": {
-          "pruned": 28,
-          "review": 96,
+          "pruned": 11,
+          "review": 18,
           "negative": 0
         }
       },
@@ -1038,10 +939,10 @@
         "dpo_review": 8,
         "dpo_negative": 0,
         "diagnostics": 24,
-        "dpo_written": 10,
+        "dpo_written": 8,
         "dpo_written_parts": {
-          "pruned": 2,
-          "review": 8,
+          "pruned": 1,
+          "review": 7,
           "negative": 0
         }
       },
@@ -1104,10 +1005,10 @@
         "dpo_review": 9,
         "dpo_negative": 0,
         "diagnostics": 75,
-        "dpo_written": 18,
+        "dpo_written": 11,
         "dpo_written_parts": {
-          "pruned": 9,
-          "review": 9,
+          "pruned": 4,
+          "review": 7,
           "negative": 0
         }
       },
@@ -1170,26 +1071,125 @@
         "dpo_review": 44,
         "dpo_negative": 0,
         "diagnostics": 109,
-        "dpo_written": 68,
+        "dpo_written": 48,
         "dpo_written_parts": {
-          "pruned": 24,
-          "review": 44,
+          "pruned": 18,
+          "review": 30,
+          "negative": 0
+        }
+      },
+      "01a1f253-2f15-71b9-ac22-f64b62f379dc": {
+        "session_id": "01a1f253-2f15-71b9-ac22-f64b62f379dc",
+        "label": "positive",
+        "project_group": "game::riddle",
+        "model": "deepseek-v4.1-flash-1017",
+        "split": "train",
+        "effective_state": "auto_gold",
+        "full_sft_allowed": true,
+        "subsegment_only": false,
+        "funnel": {
+          "raw_steps": 417,
+          "gold_steps": 394,
+          "admitted_steps": 237,
+          "rescued_steps": 22,
+          "human_kept_steps": 0,
+          "excluded_steps": 0,
+          "pathology_dropped": 0,
+          "synthesized_dropped": 157,
+          "empty_dropped": 0,
+          "blocked_or_subsegment_dropped": 0,
+          "weighted_steps": 366
+        },
+        "dpo_pruned": 25,
+        "dpo_review": 11,
+        "dpo_negative": 0,
+        "diagnostics": 202,
+        "dpo_written": 32,
+        "dpo_written_parts": {
+          "pruned": 21,
+          "review": 11,
+          "negative": 0
+        }
+      },
+      "01a1f253-2f7d-71f6-9d26-f75a577dbec2": {
+        "session_id": "01a1f253-2f7d-71f6-9d26-f75a577dbec2",
+        "label": "positive",
+        "project_group": "game::unblock3d",
+        "model": "deepseek-v4.1-flash-1017",
+        "split": "train",
+        "effective_state": "auto_gold",
+        "full_sft_allowed": true,
+        "subsegment_only": false,
+        "funnel": {
+          "raw_steps": 436,
+          "gold_steps": 414,
+          "admitted_steps": 276,
+          "rescued_steps": 32,
+          "human_kept_steps": 0,
+          "excluded_steps": 0,
+          "pathology_dropped": 1,
+          "synthesized_dropped": 136,
+          "empty_dropped": 1,
+          "blocked_or_subsegment_dropped": 0,
+          "weighted_steps": 400
+        },
+        "dpo_pruned": 24,
+        "dpo_review": 25,
+        "dpo_negative": 0,
+        "diagnostics": 190,
+        "dpo_written": 37,
+        "dpo_written_parts": {
+          "pruned": 15,
+          "review": 22,
+          "negative": 0
+        }
+      },
+      "01a1f253-2fcc-73b4-b188-2e0ddd904c22": {
+        "session_id": "01a1f253-2fcc-73b4-b188-2e0ddd904c22",
+        "label": "positive",
+        "project_group": "game::mahjong",
+        "model": "deepseek-v4.1-flash-1017",
+        "split": "train",
+        "effective_state": "auto_gold",
+        "full_sft_allowed": true,
+        "subsegment_only": false,
+        "funnel": {
+          "raw_steps": 310,
+          "gold_steps": 291,
+          "admitted_steps": 239,
+          "rescued_steps": 37,
+          "human_kept_steps": 0,
+          "excluded_steps": 0,
+          "pathology_dropped": 1,
+          "synthesized_dropped": 51,
+          "empty_dropped": 0,
+          "blocked_or_subsegment_dropped": 0,
+          "weighted_steps": 415
+        },
+        "dpo_pruned": 20,
+        "dpo_review": 31,
+        "dpo_negative": 0,
+        "diagnostics": 108,
+        "dpo_written": 43,
+        "dpo_written_parts": {
+          "pruned": 14,
+          "review": 29,
           "negative": 0
         }
       }
     },
-    "weighted_steps": 4629,
+    "weighted_steps": 5553,
     "dpo_by_source": {
-      "stage2_pruned": 471,
-      "review_rewrite": 821
+      "stage2_pruned": 338,
+      "review_rewrite": 391
     },
     "diagnostics_by_pathology": {
-      "over_rumination_doubt_loop": 329,
-      "over_rumination_length": 395,
-      "mental_hex_checkmark": 163,
-      "tool_logical_failure": 81,
-      "tool_execution_error": 372,
-      "missing_thinking_block": 1044,
+      "over_rumination_doubt_loop": 286,
+      "over_rumination_length": 369,
+      "mental_hex_checkmark": 160,
+      "tool_logical_failure": 92,
+      "tool_execution_error": 374,
+      "missing_thinking_block": 1281,
       "cross_dir_violation": 14,
       "hallucinated_source_search": 10
     },
@@ -1198,46 +1198,46 @@
       "negative": 6
     },
     "review_states": {
-      "auto_gold": 26,
-      "approved": 6,
+      "auto_gold": 28,
+      "approved": 4,
       "auto_reject": 1
     },
     "dpo_review": {
-      "checked": 1292,
+      "checked": 845,
       "swapped": 0,
-      "dropped": 0,
+      "dropped": 116,
       "pending": 0,
       "invalid": 67
     },
     "draft": {
-      "plan_hash": "3190a772ccb73f50",
-      "build_id": "3190a772ccb73f50",
-      "sft_included": 2556,
+      "plan_hash": "b81306503c652a1c",
+      "build_id": "b81306503c652a1c",
+      "sft_included": 3144,
       "trajectory_included": 27,
-      "dpo_included": 1292,
-      "sft_excluded": 737,
+      "dpo_included": 729,
+      "sft_excluded": 739,
       "trajectory_excluded": 5,
-      "dpo_excluded": 21
+      "dpo_excluded": 17
     }
   },
-  "last_run": "2026-11-18T15:03:57+08:00",
-  "generated_at": "2026-11-18T15:03:57+08:00",
+  "last_run": "2026-11-19T18:06:05+08:00",
+  "generated_at": "2026-11-19T18:06:05+08:00",
   "sessions": {
     "_files": {
       "sft_gold_trajectories_sharegpt.jsonl": 27,
-      "sft_step_windows_sharegpt.jsonl": 2556,
-      "sft_step_windows_openai.jsonl": 2556,
-      "dpo_preference_pairs.jsonl": 1292,
-      "negative_diagnostics.jsonl": 1879,
+      "sft_step_windows_sharegpt.jsonl": 3144,
+      "sft_step_windows_openai.jsonl": 3144,
+      "dpo_preference_pairs.jsonl": 729,
+      "negative_diagnostics.jsonl": 2091,
       "sft_gold_trajectories_sharegpt.train.jsonl": 22,
       "sft_gold_trajectories_sharegpt.eval.jsonl": 5,
-      "sft_step_windows_sharegpt.train.jsonl": 2166,
-      "sft_step_windows_sharegpt.eval.jsonl": 390,
-      "sft_step_windows_openai.train.jsonl": 2166,
-      "sft_step_windows_openai.eval.jsonl": 390,
-      "dpo_preference_pairs.train.jsonl": 1057,
-      "dpo_preference_pairs.eval.jsonl": 235,
-      "negative_diagnostics.train.jsonl": 1879
+      "sft_step_windows_sharegpt.train.jsonl": 2651,
+      "sft_step_windows_sharegpt.eval.jsonl": 493,
+      "sft_step_windows_openai.train.jsonl": 2651,
+      "sft_step_windows_openai.eval.jsonl": 493,
+      "dpo_preference_pairs.train.jsonl": 643,
+      "dpo_preference_pairs.eval.jsonl": 86,
+      "negative_diagnostics.train.jsonl": 2091
     }
   }
 }

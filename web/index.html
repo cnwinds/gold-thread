@@ -2492,8 +2492,8 @@ async function openPackDiffDrawer(beforeId, afterId) {
 
 async function buildWorkspaceFromGraph() {
   try {
-    const r = await api("/api/run", { method: "POST", body: JSON.stringify({ stage: "stage3", force: false }) });
-    toast(r.status === "queued" ? "构建任务已加入排队，可在账本与任务页查看日志" : "已启动草稿构建 Build", "ok");
+    const r = await api("/api/run", { method: "POST", body: JSON.stringify({ stage: "build", force: false }) });
+    toast(r.status === "queued" ? "构建任务已加入排队，可在账本与任务页查看日志" : "已启动工作区构建（黄金提纯 → 训练集合成 → 门禁校验）", "ok");
     if (r.job_id) watchJob(r.job_id, () => { if (STATE.tab === "overview") loadOverview(); });
   } catch (err) {
     toast(err.message, "err");

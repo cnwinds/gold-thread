@@ -722,7 +722,7 @@ class DatasetDraftApiTests(unittest.TestCase):
         self.cfg["judge"] = {"enabled": True}
         with patch("pipeline.judge._call", side_effect=_good_dpo_verdict):
             stage3_synth.evaluate_dpo_pending(cfg=self.cfg, log=lambda _msg: None)
-        cached = stage3_synth.judge.cached_dpo_verdicts
+        cached = stage3_synth.judge.resolve_dpo_reviews
 
         def change_legacy_input(pairs, cfg):
             result = cached(pairs, cfg)
@@ -732,7 +732,7 @@ class DatasetDraftApiTests(unittest.TestCase):
             )
             return result
 
-        with patch("pipeline.stage3_synth.judge.cached_dpo_verdicts", side_effect=change_legacy_input):
+        with patch("pipeline.stage3_synth.judge.resolve_dpo_reviews", side_effect=change_legacy_input):
             with self.assertRaisesRegex(RuntimeError, "构建期间.*变化"):
                 stage3_synth.run(cfg=self.cfg, log=lambda _msg: None)
         self.assertFalse((self.dirs["train"] / "dpo_preference_pairs.jsonl").exists())
