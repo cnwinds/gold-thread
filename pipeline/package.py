@@ -77,9 +77,16 @@ def _template_static_files() -> Dict[str, bytes]:
     if not (root / "autotrain.py").is_file():
         raise FileNotFoundError(f"训练打包模板缺失: {root}")
     skip = {"README.md", "settings.yaml"}
+    skip_dirs = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "runs", "saves", "models", ".git"}
+    skip_suffixes = (".pyc", ".pyo", ".pyd", ".orig", ".tmp")
     found: Dict[str, bytes] = {}
     for path in root.rglob("*"):
         if not path.is_file():
+            continue
+        rel_parts = path.relative_to(root).parts
+        if any(part in skip_dirs or part.startswith(".") for part in rel_parts):
+            continue
+        if path.name in {"Thumbs.db", ".DS_Store"} or path.name.lower().endswith(skip_suffixes):
             continue
         rel = path.relative_to(root).as_posix()
         if rel in skip or rel.startswith("data/"):
@@ -214,12 +221,51 @@ def compute_package_hash(
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
 
 
+def _normalize_pack_hash_ref(ref: Optional[str]) -> Optional[str]:
+    if not ref:
+        return None
+    stem = Path(str(ref).strip()).stem
+    for prefix in ("goldthread-train-", "goldthread-delivery-"):
+        if stem.startswith(prefix):
+            stem = stem[len(prefix):]
+    return stem or None
+
+
+def _read_existing_manifest(zip_path: Path) -> Dict[str, Any]:
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for arc in (f"{_PACK_ROOT}/data/MANIFEST.json", "data/MANIFEST.json", "MANIFEST.json"):
+                if arc in zf.namelist():
+                    return json.loads(zf.read(arc).decode("utf-8"))
+    except (OSError, zipfile.BadZipFile, json.JSONDecodeError, KeyError):
+        pass
+    return {}
+
+
+def _infer_default_parent_pack(delivery_dir: Path, current_zip_name: str, current_zip_path: Path) -> Optional[str]:
+    if current_zip_path.is_file():
+        old_man = _read_existing_manifest(current_zip_path)
+        if "parent_pack" in old_man:
+            return _normalize_pack_hash_ref(old_man.get("parent_pack"))
+    candidates = [
+        p for p in delivery_dir.glob(f"{_ZIP_PREFIX}*.zip")
+        if p.is_file() and p.name != current_zip_name
+    ]
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+    man = _read_existing_manifest(latest)
+    return _normalize_pack_hash_ref(man.get("package_hash") or latest.name)
+
+
 def build_delivery_zip(
     train_root: Optional[Path] = None,
     cfg: Optional[Dict[str, Any]] = None,
     log=None,
     profile: Optional[str] = None,
     delivery_dir: Optional[Path] = None,
+    parent_pack: Optional[str] = None,
+    reference_delivery_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """按 goldthread-train 模板打包当前数据集，返回 zip 路径与元信息。"""
     cfg = cfg or load_config()
@@ -236,7 +282,8 @@ def build_delivery_zip(
     else:
         delivery_dir = release_root / "delivery"
     delivery_dir.mkdir(parents=True, exist_ok=True)
-    spec = resolve_export_profile(profile or _remembered_profile(delivery_dir))
+    ref_dir = Path(reference_delivery_dir) if reference_delivery_dir else delivery_dir
+    spec = resolve_export_profile(profile or _remembered_profile(ref_dir))
 
     cfg_h = config_hash(cfg)
 
@@ -289,7 +336,10 @@ def build_delivery_zip(
     )
     zip_name = f"{_ZIP_PREFIX}{pkg_h}.zip"
     zip_path = delivery_dir / zip_name
-    generated_at = now_iso()
+    ref_zip_path = ref_dir / zip_name
+    existing_man = _read_existing_manifest(ref_zip_path) if ref_zip_path.is_file() else {}
+    # 幂等重打同一 package_hash 时，保留原创建时间戳与父包指针，禁止重写历史顺序
+    generated_at = str(existing_man.get("generated_at") or "") or now_iso()
     format_contract = {
         "profile": spec["id"],
         "label": spec["label"],
@@ -319,6 +369,15 @@ def build_delivery_zip(
     )
     manifest["package"] = zip_name
     manifest["layout"] = _PACK_ROOT
+    if parent_pack is not None:
+        resolved_parent = _normalize_pack_hash_ref(parent_pack)
+    elif existing_man and "parent_pack" in existing_man:
+        resolved_parent = _normalize_pack_hash_ref(existing_man.get("parent_pack"))
+    else:
+        resolved_parent = _infer_default_parent_pack(ref_dir, zip_name, ref_zip_path)
+    if resolved_parent == pkg_h:
+        resolved_parent = None
+    manifest["parent_pack"] = resolved_parent
     if prepared.weighted_expansion:
         manifest["weighted_expansion"] = prepared.weighted_expansion
     manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
@@ -335,6 +394,32 @@ def build_delivery_zip(
         data = content if isinstance(content, bytes) else content.encode("utf-8")
         zf.writestr(f"{_PACK_ROOT}/{rel}", data)
         manifest_files.append({"path": f"{_PACK_ROOT}/{rel}", "size": len(data)})
+
+    if zip_path == ref_zip_path and zip_path.is_file() and existing_man.get("package_hash") == pkg_h and parent_pack is None:
+        # 目标同目录已存在完全相同哈希的已发布包：完全幂等复用，不改写原字节与 mtime
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                file_count_actual = len(zf.namelist())
+        except zipfile.BadZipFile:
+            file_count_actual = 0
+        if file_count_actual > 0:
+            return {
+                "zip_path": str(zip_path),
+                "zip_name": zip_name,
+                "size_bytes": zip_path.stat().st_size,
+                "file_count": file_count_actual,
+                "generated_at": generated_at,
+                "config_hash": cfg_h,
+                "package_hash": pkg_h,
+                "parent_pack": resolved_parent,
+                "build_id": build_id or None,
+                "counts": prepared.counts,
+                "sources": prepared.sources,
+                "datasets": manifest["datasets"],
+                "length_gate": prepared.length_gate,
+                "format": format_contract,
+                "reused_existing": True,
+            }
 
     _emit(f"[package] 正在写入 zip：{zip_name}…")
     partial = delivery_dir / f".{zip_name}.partial"
@@ -376,6 +461,7 @@ def build_delivery_zip(
         "generated_at": manifest["generated_at"],
         "config_hash": cfg_h,
         "package_hash": pkg_h,
+        "parent_pack": resolved_parent,
         "build_id": build_id or None,
         "counts": prepared.counts,
         "sources": prepared.sources,
@@ -405,6 +491,8 @@ def build_delivery_zip_from_build(
     profile: Optional[str] = None,
     log=None,
     delivery_dir: Optional[Path] = None,
+    parent_pack: Optional[str] = None,
+    reference_delivery_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """从不可变 Build 快照打包交付 zip，严格使用 Build 冻结的配置快照。"""
     from pipeline import dataset_build  # noqa: PLC0415
@@ -423,6 +511,8 @@ def build_delivery_zip_from_build(
         log=log,
         profile=profile,
         delivery_dir=out_dir,
+        parent_pack=parent_pack,
+        reference_delivery_dir=reference_delivery_dir,
     )
     result["build_id"] = manifest["build_id"]
     return result

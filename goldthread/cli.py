@@ -16,6 +16,7 @@ from . import (
     eval_tools,
     inspect_tools,
     ledger,
+    lineage_graph,
     report_tools,
 )
 
@@ -269,6 +270,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ins_stp.add_argument("sid", help="会话 ID 或唯一前缀")
     p_ins_stp.add_argument("step_ref", help="msg_id（支持前缀）或 0-based 步骤序号")
 
+    ins_sub.add_parser("graph", parents=[common], help="查看虚拟数据集演进关系图（DAG）与工作空间状态")
+
     # eval
     p_ev = sub.add_parser("eval", help="训练包体检与实测评估")
     ev_sub = p_ev.add_subparsers(dest="action", required=True)
@@ -378,6 +381,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("--scan-raw", action="store_true", help="构建前先扫描 raw 源目录 (stage1)")
     p_build.add_argument("--dry-run", action="store_true", help="仅预览 Stage 3 规模与门禁预期，不落盘")
     p_build.add_argument("--no-gate", action="store_true", help="构建后跳过 gate check")
+    p_build.add_argument("--require-reviewed-dpo", action="store_true", help="严格要求全部 DPO 候选均已显式裁决（拒绝未审 bypass）")
     p_build.add_argument("--reason", default="", help="操作原因说明")
     p_build.add_argument("--actor", default="agent", help="操作者")
 
@@ -392,6 +396,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_pack = sub.add_parser("pack", parents=[common], help="从不可变 Build 打包交付 zip")
     p_pack.add_argument("--build", dest="build_id", default=None, help="指定 Build ID（默认 latest）")
     p_pack.add_argument("--profile", default=None, help="导出格式 profile（如 qwen-xml / hermes-json）")
+    p_pack.add_argument("--parent", dest="parent_pack", default=None, help="显式指定父交付包哈希（默认自动继承最新包）")
     p_pack.add_argument("--copy-to", default=None, help="同步拷贝一份到指定目录或文件")
     p_pack.add_argument("--no-gate", action="store_true", help="打包后跳过 gate check")
     p_pack.add_argument("--reason", default="", help="操作原因说明")
@@ -453,6 +458,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             elif args.action == "step":
                 res = inspect_tools.inspect_step(args.sid, args.step_ref, cfg=cfg)
                 _print_json(res) if json_mode else _format_inspect_step(res)
+            elif args.action == "graph":
+                res = lineage_graph.build_dataset_graph(cfg=cfg)
+                if json_mode:
+                    _print_json(res)
+                else:
+                    ws = res["workspace"]
+                    print(
+                        f"[inspect.graph] packs={len(res['nodes'])} edges={len(res['edges'])} "
+                        f"head={res['head_pack'] or '-'} workspace_dirty={ws['dirty']} "
+                        f"cas_objects={res['cas_total_objects']}"
+                    )
+                    for n in res["nodes"]:
+                        print(
+                            f"  pack {n['id']} (parent={n.get('resolved_parent') or '-'}) "
+                            f"projects={n['projects_count']} sft={n['sft_train']}/{n['sft_eval']} "
+                            f"dpo={n['dpo_train']}/{n['dpo_eval']}"
+                        )
 
         elif args.group == "eval":
             if args.action == "pack":
@@ -633,6 +655,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 scan_raw=bool(args.scan_raw),
                 dry_run=bool(args.dry_run),
                 run_gate=not bool(args.no_gate),
+                require_reviewed_dpo=bool(getattr(args, "require_reviewed_dpo", False)),
                 reason=args.reason,
                 actor=args.actor,
                 cfg=cfg,
@@ -651,6 +674,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             res = build_tools.pack_delivery(
                 build_id=args.build_id,
                 profile=args.profile,
+                parent_pack=args.parent_pack,
                 copy_to=args.copy_to,
                 run_gate=not bool(args.no_gate),
                 reason=args.reason,

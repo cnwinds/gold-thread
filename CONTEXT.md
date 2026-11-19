@@ -2,7 +2,7 @@
 
 本文件是 **领域词汇与产品/工程需求的单一事实源**。Agent 写 issue、改管线或控制台前应先读这里；术语以本文为准，勿自造同义词。细节规范见 `DATASET_BEST_PRACTICES.md` 与 `README.md`；训练上机见 `data/03_train/handoff.md`。开发约束见 `agents.md`。
 
-**最后整理**：2026-11-18（已完成 ADR-0008 Agent-First `gt` CLI 工具化、纯确定性构建门禁、统一操作账本与 Web 留痕看板升级）。
+**最后整理**：2026-11-19（已完成 ADR-0008 Agent-First `gt` CLI 工具化、纯确定性构建门禁，以及 ADR-0009 虚拟数据集条目、CAS 去重快照池与演进 DAG 图谱看板）。
 
 ---
 
@@ -40,7 +40,7 @@
 | **Stage 1 · 采集与清洗** | `01_raw/` | 源 `.jsonl` **逐字节不可变副本** + 同名 `.meta.json`（回合 kind、根任务、标签） |
 | **Stage 2 · 黄金提纯** | `02_gold/` | 每条会话的 `.gold.jsonl`、剪枝/DPO、结构化决策与 `annotations/` |
 | **Stage 3 · 训练集合成** | `03_train/` | ShareGPT / OpenAI 窗口、DPO、切分、`dataset_info.json` |
-| **发布与归档** | `04_release/` | 不可变 `builds/`、`delivery/` zip、`reports/` 历次评估与迭代对比报告 |
+| **发布与归档** | `04_release/` | 不可变 `builds/`、`cas/`（按 SHA256 去重的原始/黄金历史快照池）、`delivery/` zip、`reports/` 历次评估与迭代对比报告 |
 
 **增量状态与全链路账本**：`00_state/`（统一操作审计账本 `ledger.jsonl`、步级决策 `step_decisions.json`、DPO 裁决 `dpo_verdicts.json`、数据集草稿 `dataset_draft.json`、标签覆盖 `labels.json`、LLM 缓存、运行历史等）。
 
@@ -60,7 +60,7 @@
 
 | 旧字段 | 现在的含义 | 典型来源 |
 |------|------|----------|
-| **positive** | Teacher 来源标识，仅用于血缘 | 主导模型匹配 `^deepseek` / `^glm-` |
+| **positive** | Teacher 来源标识，仅用于血缘 | 主导模型匹配 `^deepseek` / `^glm-` / `^minimax` |
 | **negative** | Student 来源标识，仅用于血缘 | 主导模型含 `qwen` |
 | **pending** | 来源未知，无需人工处理 | 规则未命中或主导模型歧义 |
 
@@ -113,21 +113,20 @@
 
 ### 6.1 合成规则（摘要）
 
-- **单步窗口**：`[system, 根任务] + 最近 W 步历史 + 目标步`；**历史步 strip thinking**，仅目标步算 loss（`mask_history` 等，见 handoff）。
+- **单步窗口**：`[system, 根任务] + 最近 W 步历史 + 目标步`；历史步 `<think>` 按 `strip_history_thinking` / `history_thinking_max_chars`（默认保留并截断至 600 字符）对齐推理期分布，仅目标步算 loss（`mask_history: true`）。
 - **切分**：按 **`project_group` 整包** 留 eval，禁止逐步随机切分。
 - **门控**：discard、模型否决、（遗留）复核态与步级质量决定样本去向，**不再按会话来源标签限制 SFT**。
 - **DPO**：Stage 2 剪枝对 + 来源会话病态步 +（可选）模型逐对复核 good/swap/drop；与 SFT 可来自同一会话。
 
-### 6.2 控制台页面与血缘（2026-11 Agent-First 留痕看板）
+### 6.2 控制台页面与血缘（极简三栏导航）
 
-| 页面 | 用户应一眼看到什么 |
+左侧菜单已去除冗余的全局「原始/黄金/训练/交付」旧分页与「运行全流程」按钮，收敛为 **3 个正交入口**（旧 hash 如 `#raw`/`#gold`/`#train`/`#runs` 自动重定向至 `#overview`）：
+
+| 顶层页面 | 用户应一眼看到什么 |
 |------|-------------------|
-| **演进评估与精炼工作台 `#overview`** | 最新 Build / 最新交付包快照、**历次评估与版本演进报告流**（含包间 Diff 表）、**最近操作审计账本（Ledger Feed）** 及三阶段精炼漏斗 |
-| **原始数据 `#raw`** | 会话是否 **已分析**；按项目、主导模型与分析状态筛选；抽屉内支持一键跳转 **三态血缘与审计** |
-| **黄金数据与血缘 `#gold`（别名 `#sessions`）** | 每会话 **SFT 窗口数 vs DPO 对数** 及去向；抽屉切换 **黄金会话 / 三态血缘 Diff（回合折叠 + 原文/黄金改写/剪枝对照 + 会话账本） / SFT 样本 / DPO 偏好对**，并保留应急步级/会话停用开关 |
-| **训练数据 `#train`（别名 `#dataset`）** | 按 `Train / Eval / 已停用` 树状检视全部样本与阶段权重，**构建不可变 Build**（**不在此页打 zip**） |
-| **操作审计账本与任务 `#tasks`（别名 `#ledger`）** | 统一检索 **Agent CLI + Web 全量操作审计账本（`ledger.jsonl`）**（按工具/主体/sid/关键词过滤，点击 sid 直达血缘），并可切换查看后台任务实时日志 |
-| **交付 `#runs`（别名 `#packs`）** | **历史交付包列表**：一键查看 **硬性门禁体检（Gate Check）**、说明、长度分布、**包间指标 Diff 对比**，按格式下载或删除；顶部可「用当前 Build 新建包」 |
+| **数据集图谱 `#overview`（Variant A）** | 横向 **数据集演进 DAG 画布**（以带 `package_hash` 的交付包为唯一虚拟条目，连线挂载评估报告、包间 Diff 抽屉与区间 `ledger` 因果；工作区 Clean 时隐藏草稿、Dirty 时浮现虚线 `Workspace` 节点并提供一键构建/打包；右上角提供外部 pi/Cursor 会话采集抽屉）+ 下钻检视单数据集 **1. 概览体检（含项目切分表/样本构成/说明/长度统计/下载/删包） / 2. 训练切片 / 3. 黄金 CAS 快照（对话回复 + 三态血缘 + SFT 停用开关） / 4. 原始范围** |
+| **账本与任务 `#tasks`（别名 `#ledger`）** | 统一检索 **Agent CLI + Web 全量操作审计账本（`ledger.jsonl`）**（按工具/主体/sid/关键词过滤，点击 sid 直达血缘），并可切换查看后台任务实时日志 |
+| **配置 `#config`** | 按分组调整 `pipeline.yaml` 常用参数；高级参数与 YAML 源码保留在同一工作区 |
 
 **异步作业 UX**：提交采集/分析/stage/打包后 **留在当前 tab**，toast 提示「任务中心可查看」；侧栏 **任务中心** 显示 **进行中 N** 角标。打包进度同时显示在 `#runs` 当前包状态区，完整日志统一在任务中心查看。
 
@@ -179,6 +178,10 @@
 | **数据集构建（Dataset Build）** | 使用同一草稿决策生成的确定性结果与统计快照；不等于冻结 release |
 | **DPO 评估** | 在构建前按偏好对内容和评审模型缓存 `pending/good/swap/drop/review_failed`；`bypassed` 表示模型判断被显式关闭 |
 | **不可变 Build** | 已固定输入指纹、样本、配置、切分、决策和文件哈希的构建版本；交付打包的来源，不被后续草稿或会话删除修改 |
+| **虚拟数据集条目** | 控制台对外的一级实体（以交付包 `package_hash` 为标识，内部收敛 `Build` 元数据），点击可穿透查看其概览体检、训练切片、黄金 CAS 快照与原始范围四层数据 |
+| **CAS 快照池** | `04_release/cas/<sha[:2]>/<sha>` 内容寻址去重对象池：新建 Build（`fidelity=full`）按 SHA256 完整保存原始/黄金/标注文件并按冻结配置回放，免疫工作区后续删改；旧 Build 按已记录哈希校验回填（`backfilled`）；无关联 Build 的早期独立包仅冻结训练切片（`none`） |
+| **parent_pack** | 交付包 `MANIFEST.json` 中的父包 `package_hash`（默认自动继承打包前最新包，可显式指定），与评估报告共同构成演进 DAG |
+| **工作空间 Clean / Dirty** | 比对当前工作区实质数据哈希与最新正式包绑定 Build：一致（Clean）时隐藏草稿卡片；存在未打包演进变更（Dirty）或 0 包时在图谱末端浮现虚线 `Workspace` 节点 |
 
 避免说法：把旧 **negative 字段**叫「垃圾会话全删」— 任何来源都可能同时提供 SFT 与 DPO；把旧 **pending 字段**叫「未采集」— 它只表示来源未知，未采集则指源目录尚未 ingest。
 
@@ -213,6 +216,7 @@
 | 数据集草稿与切分计划 | 训练页操作持久化到草稿决策账本；项目归属跨重建稳定，显式重规划才允许批量移动 | [ADR-0006](docs/adr/ADR-0006-dataset-draft-and-split-plan.md) |
 | DPO 评估与不可变 Build | 评估先于构建；Build 固定输入与文件哈希，产品打包只读指定 Build，不自动激活 release | [ADR-0007](docs/adr/ADR-0007-dpo-evaluation-and-immutable-builds.md) |
 | Agent-First 工具集与操作账本 | 统一 `gt` CLI + `SKILL.md`；主构建默认 100% 纯确定性（小模型初筛收至 `gt assist`）；CLI/Web 写操作统一留痕 `00_state/ledger.jsonl`，评估报告归档至 `04_release/reports/` 并呈现在可观测看板 | [ADR-0008](docs/adr/ADR-0008-agent-first-cli-and-operation-ledger.md) |
+| 虚拟数据集、CAS 快照与演进 DAG | 以 `package_hash` 包为虚拟数据集条目（内聚概览/训练/黄金/原始四层）；`04_release/cas/` 按 SHA256 去重归档会话产物实现 100% 历史回放；工作空间按 Clean/Dirty 动态显隐；首页展示演进关系图 | [ADR-0009](docs/adr/ADR-0009-virtual-datasets-cas-and-lineage-dag.md) |
 
 **本地 backlog**（`.scratch/goldthread-backlog/issues/`）：
 

@@ -1468,6 +1468,52 @@
   .gate-check-row{display:flex;align-items:baseline;gap:10px;padding:8px 12px;border-radius:8px;background:var(--ink-0);border:1px solid var(--line-soft);font-size:12.5px}
   .diff-delta-pos{color:var(--pos);font-weight:600}
   .diff-delta-neg{color:var(--neg);font-weight:600}
+
+  /* ---------- Variant A：虚拟数据集条目、演进 DAG 画布与 CAS 四层钻取 ---------- */
+  .dag-canvas{
+    padding:20px 18px;overflow-x:auto;
+    background:radial-gradient(circle at 1px 1px,rgba(255,255,255,.045) 1px,transparent 0);
+    background-size:20px 20px;
+  }
+  .dag-track{display:flex;align-items:flex-start;gap:12px;min-width:max-content}
+  .dag-col{display:flex;flex-direction:column;gap:12px}
+  .vds-node{
+    width:246px;padding:13px 15px;border-radius:11px;cursor:pointer;
+    background:var(--ink-1);border:1.5px solid var(--line);
+    transition:transform .12s,border-color .15s,box-shadow .15s,background .15s;
+  }
+  .vds-node:hover{border-color:#525f77;transform:translateY(-1px)}
+  .vds-node.selected{border-color:var(--gold);box-shadow:0 0 0 3px rgba(217,180,103,.16);background:#202632}
+  .vds-node.is-draft{
+    border-style:dashed;border-color:var(--gold);
+    background:repeating-linear-gradient(-45deg,rgba(217,180,103,.04),rgba(217,180,103,.04) 8px,rgba(28,32,40,.92) 8px,rgba(28,32,40,.92) 16px);
+  }
+  .vds-title{display:flex;align-items:center;gap:7px;font-weight:700;font-size:14px;margin-top:6px}
+  .vds-metrics{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px;margin-top:10px;padding-top:9px;border-top:1px solid var(--line-soft);font-size:12px;color:var(--text-2)}
+  .vds-metrics b{color:var(--text);font-family:var(--f-num)}
+  .vds-edge{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:194px;padding-top:24px;position:relative}
+  .vds-edge-line{width:100%;height:2px;background:var(--line);position:relative}
+  .vds-edge-line.dashed{background:repeating-linear-gradient(90deg,var(--gold) 0 6px,transparent 6px 12px)}
+  .vds-edge-line::after{content:"▸";position:absolute;right:-4px;top:-11px;color:var(--gold);font-size:14px}
+  .vds-edge-card{
+    margin-top:-15px;z-index:2;padding:8px 11px;border-radius:9px;cursor:pointer;
+    background:var(--ink-2);border:1px solid var(--line);width:184px;font-size:11.5px;
+    transition:border-color .15s,background .15s,box-shadow .15s;
+  }
+  .vds-edge-card:hover{border-color:var(--mint);background:var(--ink-3)}
+  .vds-edge-card.selected{border-color:var(--mint);box-shadow:0 0 0 3px rgba(95,185,196,.18)}
+  .vds-subtabs{display:flex;gap:4px;padding:0 18px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,.14);flex-wrap:wrap}
+  .vds-subtabs button{background:transparent;border:none;border-bottom:2px solid transparent;border-radius:0;padding:11px 14px;color:var(--text-2);font-weight:500}
+  .vds-subtabs button:hover{color:var(--text);background:transparent}
+  .vds-subtabs button.active{color:var(--gold);border-bottom-color:var(--gold)}
+  .vds-subtabs .cnt{font-family:var(--f-num);font-size:12px;color:var(--text-3);margin-left:5px}
+  .cas-chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--f-mono);font-size:11.5px;padding:2px 8px;border-radius:999px;color:var(--mint);background:rgba(95,185,196,.09);border:1px solid rgba(95,185,196,.32);white-space:nowrap}
+  .vds-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+  .vds-kpi{padding:13px 15px;border-radius:10px;background:var(--ink-0);border:1px solid var(--line-soft)}
+  .vds-kpi .k{font-size:12px;color:var(--text-3)}
+  .vds-kpi .v{font-size:20px;font-weight:700;font-family:var(--f-num);margin-top:3px}
+  .vds-kpi .s{font-size:11.5px;color:var(--text-2);margin-top:3px}
+  @media (max-width:960px){.vds-kpi-grid{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
@@ -1484,26 +1530,15 @@
     <nav id="tabs">
       <button data-tab="overview">
         <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
-        流程工作台</button>
-      <div class="nav-cap">管线阶段</div>
-      <div class="steps">
-        <button data-tab="raw" class="s-raw"><span class="node"></span>原始数据<em id="navRaw"></em></button>
-        <button data-tab="gold" class="s-gold"><span class="node"></span>黄金数据<em id="navGold"></em></button>
-        <button data-tab="train" class="s-train"><span class="node"></span>训练数据<em id="navTrain"></em></button>
-      </div>
-      <div class="nav-cap">审计与操作</div>
+        数据集图谱</button>
       <button data-tab="tasks">
         <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg>
         账本与任务<em id="navTasksBadge"></em></button>
-      <button data-tab="runs">
-        <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5 3.5v9l7-4.5z" stroke-linejoin="round"/></svg>
-        交付</button>
       <button data-tab="config">
         <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.4" fill="var(--ink-1)"/><circle cx="10.5" cy="8" r="1.4" fill="var(--ink-1)"/><circle cx="5" cy="12" r="1.4" fill="var(--ink-1)"/></svg>
         配置</button>
     </nav>
     <div class="rail-foot">
-      <button id="btnRunAll" class="primary">运行全流程</button>
       <dl class="rail-meta" id="hdrMeta"></dl>
     </div>
   </aside>
@@ -1514,12 +1549,8 @@
     </header>
     <main>
       <section id="view-overview"></section>
-      <section id="view-raw" class="hidden"></section>
-      <section id="view-gold" class="hidden"></section>
-      <section id="view-train" class="hidden"></section>
       <section id="view-tasks" class="hidden"></section>
       <section id="view-config" class="hidden"></section>
-      <section id="view-runs" class="hidden"></section>
     </main>
   </div>
 </div>
@@ -1558,17 +1589,13 @@ const DPO_SRC_ZH = {stage2_pruned:"弯路", negative_step:"坏步", review_rewri
 const DPO_GATE_ZH = {good:"通过", swap:"对调后纳入", drop:"丢弃", pending:"待复核", review_failed:"复核失败", bypassed:"已跳过", passed:"通过", invalid:"内容无效"};
 const SKIP_ZH = {non_crack_folder:"非目标目录", excluded_folder:"排除目录", empty:"空会话"};
 const PAGES = {
-  overview: ["演进评估与精炼工作台", "审阅历次模型评估报告、最近工具操作账本，并穿透检视源会话 → 黄金层 → 训练集的转化与门禁状态。"],
-  raw:      ["原始数据", "采集源会话、查看分析状态，以及回合清洗与黄金提纯进度。"],
-  gold:     ["黄金数据与血缘", "按项目检视会话的有用步、三态血缘 Diff（原文/改写/剪枝）、SFT 窗口与 DPO 偏好对。"],
-  train:    ["训练数据", "审核将要纳入的样本，构建不可变 Build；打包 zip 请到交付页。"],
-  runs:     ["交付", "历史交付包列表：看门禁体检、说明、长度分布、包间指标 Diff，按格式下载或删除。"],
+  overview: ["数据集与演进图谱", "以带哈希的交付包为唯一虚拟数据集条目，一站式检视演进关系、评估报告、门禁体检与 CAS 四层历史快照。"],
   tasks:    ["操作审计账本与任务", "统一检索 Agent CLI / Web 全量操作留痕账本（Ledger），并查看后台任务实时日志。"],
   config:   ["配置", "按分组调整常用参数；高级参数与 YAML 源码保留在同一工作区。"],
 };
-const TAB_ALIASES = { ledger: "tasks", sessions: "gold", dataset: "train", packs: "runs" };
+const TAB_ALIASES = { ledger: "tasks", raw: "overview", gold: "overview", train: "overview", runs: "overview", sessions: "overview", dataset: "overview", packs: "overview" };
 
-let STATE = { tab: "overview", overview: null, tasksMode: "ledger", tasksSelectedId: "", ledger: {events:[], tools:[], actors:[], tool:"", actor:"", sid:"", project:"", q:""}, lineageFilter: "all", packDiff: {before:"", after:"", data:null, loading:false, error:""}, raw: {project:"", model:"", adopted:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {project:"", model:"", output:"", category:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {workspace:"draft", name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", kind:"", decision:"", fileq:"", scope:"all", splitPlan:null, replanPreview:null, builds:[], groupBy:"project", expanded:null, treeData:null}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
+let STATE = { tab: "overview", overview: null, vds: { graph: null, focusType: "dataset", selectedId: "", selectedEdge: "", subTab: "overview", trainFilter: {kind:"all", split:"", project:"", q:"", offset:0}, goldFilter: {project:"", q:""}, rawFilter: {project:"", q:""} }, tasksMode: "ledger", tasksSelectedId: "", ledger: {events:[], tools:[], actors:[], tool:"", actor:"", sid:"", project:"", q:""}, lineageFilter: "all", packDiff: {before:"", after:"", data:null, loading:false, error:""}, raw: {project:"", model:"", adopted:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {project:"", model:"", output:"", category:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {workspace:"draft", name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", kind:"", decision:"", fileq:"", scope:"all", splitPlan:null, replanPreview:null, builds:[], groupBy:"project", expanded:null, treeData:null}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
 /** 交付打包作业 UI 状态（独立于 pipeline stage jobs） */
 let PACK = { running: false, jobId: null, startedAt: null, elapsed: 0, phase: "", error: null, result: null, timer: null,
   profile: localStorage.getItem("gt.exportProfile") || "", profileChosen: !!localStorage.getItem("gt.exportProfile") };
@@ -1602,21 +1629,10 @@ function onTaskFinished(t) {
   if (cb && cb.onDone) try { cb.onDone(t); } catch (_) {}
   TASK_HUB.watched.delete(t.id);
   refreshMeta().catch(() => {});
-  const aff = t.affects || [];
-  if (aff.includes("overview") && STATE.tab === "overview") loadOverview().catch(() => {});
-  if (aff.includes("raw") && STATE.tab === "raw") loadRaw().catch(() => {});
-  if (aff.includes("gold") && STATE.tab === "gold") loadGold().catch(() => {});
-  if (aff.includes("train") && STATE.tab === "train") loadTrainDraft().catch(() => {});
-  if (t.stage === "package" || t.kind === "package") {
-    if (STATE.tab === "runs") loadRuns().catch(() => {});
-  }
+  if (STATE.tab === "overview") loadOverview().catch(() => {});
   if (t.status === "done" && t.stage !== "package") {
     STATE.poured = true;
-    if (t.stage === "stage3" || t.stage === "all") {
-      toast(`${t.title || t.stage} 已完成：Build 已固化，可到交付页打包`, "ok");
-    } else {
-      toast(`${t.title || t.stage} 已完成`, "ok");
-    }
+    toast(`${t.title || t.stage} 已完成`, "ok");
   }
   else if (t.status === "failed") toast(`${t.title || t.stage} 失败：${t.error || ""}`, "err");
   else if (t.status === "stale") toast(`${t.title || t.stage} 已中断`, "err");
@@ -1681,23 +1697,12 @@ function taskOpenAction(t) {
   const st = taskEffectiveStatus(t);
   const sids = (t.links && t.links.sids) || (t.result && t.result.sessions) || (t.extra && t.extra.sessions) || [];
   const sid = Array.isArray(sids) ? sids[0] : null;
-  const tab = (t.links && t.links.open_tab) || "gold";
   const dis = st !== "done" ? " disabled" : "";
   const tip = st === "running" || st === "queued" ? " title=\"任务尚未完成，完成后可打开\"" : (st === "failed" ? " title=\"任务失败\"" : "");
-  if (!sid && tab !== "train" && tab !== "runs") return st === "running" ? `<span class="faint" style="font-size:12px">分析完成后可查看黄金</span>` : "";
-  if (tab === "gold" && sid) {
-    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;closeDrawer();STATE.pendingGold='${esc(sid)}';setTab('gold')">打开黄金</button>`;
+  if (sid) {
+    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;setTab('overview');openDatasetSessionDrawer(STATE.vds.selectedId||'workspace','${esc(sid)}','gold')">查看会话</button>`;
   }
-  if (tab === "raw" && sid) {
-    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;closeDrawer();setTab('raw');openRaw('${esc(sid)}')">打开原始</button>`;
-  }
-  if (tab === "train") {
-    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;setTab('train')">训练数据</button>`;
-  }
-  if (tab === "runs") {
-    return `<button class="primary"${dis}${tip} onclick="if(this.disabled)return;setTab('runs')">交付</button>`;
-  }
-  return "";
+  return `<button class="ghost slim"${dis}${tip} onclick="if(this.disabled)return;setTab('overview')">回到图谱</button>`;
 }
 
 function taskEffectiveStatus(t) {
@@ -2016,7 +2021,7 @@ function paintTasksView() {
     <div class="tasks-shell">
       <div class="tasks-list">
         <div class="tasks-list-head"><b>全部任务</b><span class="grow"></span>${(TASK_HUB.running || TASK_HUB.queued) ? `<span class="chip model">${TASK_HUB.running ? `${TASK_HUB.running} 进行中` : ""}${TASK_HUB.running && TASK_HUB.queued ? " · " : ""}${TASK_HUB.queued ? `${TASK_HUB.queued} 排队` : ""}</span>` : `<span class="faint">${tasks.length} 条记录</span>`}</div>
-        ${tasks.length ? tasks.map(taskRowHtml).join("") : `<div class="empty"><h3>还没有任务</h3><p>采集、会话分析、管线运行和打包后，进度与日志会出现在这里。</p><button onclick="jumpToRaw()">去采集会话</button></div>`}
+        ${tasks.length ? tasks.map(taskRowHtml).join("") : `<div class="empty"><h3>还没有任务</h3><p>采集、会话分析、管线运行和打包后，进度与日志会出现在这里。</p><button onclick="openCollectDrawer()">去采集会话</button></div>`}
       </div>
       <div class="task-detail">
         ${sel ? `<div class="task-detail-head">
@@ -2136,7 +2141,7 @@ function setTab(tab) {
   $("#pageDesc").textContent = PAGES[tab][1];
   document.title = PAGES[tab][0] + " · GoldThread";
   for (const t of Object.keys(PAGES)) $("#view-"+t).classList.toggle("hidden", t !== tab);
-  const loaders = {overview: loadOverview, raw: loadRaw, gold: loadGold, train: loadTrain, config: loadConfig, runs: loadRuns, tasks: loadTasks};
+  const loaders = {overview: loadOverview, config: loadConfig, tasks: loadTasks};
   const view = $("#view-"+tab);
   if (!view.innerHTML.trim()) view.innerHTML = `<div class="loading">加载中…</div>`;
   loaders[tab]().catch(e => {
@@ -2155,239 +2160,650 @@ async function refreshMeta() {
     <dt>回合分类</dt><dd>${d.config.use_model_turns ? "模型判定" : "正则规则"}</dd>
     <dt>配置版本</dt><dd class="mono" style="font-size:11px">${esc(d.config.hash)}</dd>
     <dt>数据目录</dt><dd title="${esc(d.config.data_dir)}">${esc(d.config.data_dir)}</dd>`;
-  $("#navRaw").textContent = fmt(d.stages?.stage1?.sessions);
-  $("#navGold").textContent = fmt(d.stages?.stage2?.sessions);
-  $("#navTrain").textContent = fmt(d.train?.counts?.["sft_step_windows_sharegpt.jsonl"]);
   return d;
 }
 
-/* ------------------------------ 概览 ------------------------------ */
-function assayBand(raw, gold, win) {
-  const max = Math.max(raw, gold, win, 1), H = 104, c = H / 2;
-  const h = v => 8 + (H - 12) * Math.sqrt(v / max);
-  const [a, b, w] = [h(raw), h(gold), h(win)];
-  const X1 = 333.33, X2 = 666.67;
-  const top = `M0 ${c-a/2} C 200 ${c-a/2}, 140 ${c-b/2}, ${X1} ${c-b/2} C 530 ${c-b/2}, 470 ${c-w/2}, ${X2} ${c-w/2} L 1000 ${c-w/2}`;
-  const bot = `L 1000 ${c+w/2} L ${X2} ${c+w/2} C 470 ${c+w/2}, 530 ${c+b/2}, ${X1} ${c+b/2} C 140 ${c+b/2}, 200 ${c+a/2}, 0 ${c+a/2} Z`;
-  return `<svg class="band ${STATE.poured ? "static" : ""}" viewBox="0 0 1000 ${H}" preserveAspectRatio="none" aria-hidden="true">
-    <defs>
-      <linearGradient id="g-flow" x1="0" x2="1000" y1="0" y2="0" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stop-color="${COLORS.ore}" stop-opacity=".55"/>
-        <stop offset=".333" stop-color="${COLORS.gold}" stop-opacity=".85"/>
-        <stop offset=".667" stop-color="${COLORS.mint}" stop-opacity=".8"/>
-        <stop offset="1" stop-color="${COLORS.mint}" stop-opacity=".25"/>
-      </linearGradient>
-      <pattern id="g-strata" width="1000" height="6" patternUnits="userSpaceOnUse">
-        <rect width="1000" height="1" fill="#000" opacity=".14"/>
-      </pattern>
-    </defs>
-    <path d="${top} ${bot}" fill="url(#g-flow)"/>
-    <path d="${top} ${bot}" fill="url(#g-strata)"/>
-    ${[0, X1, X2].map(x => `<line x1="${x}" x2="${x}" y1="0" y2="${H}" stroke="#313845" vector-effect="non-scaling-stroke"/>`).join("")}
-  </svg>`;
-}
-
+/* ------------------------------ 概览：数据集演进图谱（Variant A） ------------------------------ */
 async function loadOverview() {
   const d = await refreshMeta();
-  const sourceModels = Object.entries(d.source_models || {}).sort((a,b) => b[1] - a[1]);
-  const sourceText = sourceModels.slice(0, 3).map(([m,n]) => `${m} ${n}`).join(" · ");
-  const tra = d.train?.counts || {};
-  const sessions = d.stages?.stage1?.sessions || 0;
-  const raw = d.raw_steps || 0, gold = d.gold_steps || 0;
-  const win = tra["sft_step_windows_sharegpt.jsonl"] || 0;
-  const cut = Math.max(0, raw - gold);
-  const patho = d.train?.diagnostics_by_pathology || {};
-  const maxp = Math.max(1, ...Object.values(patho));
-  const byStage = d.train?.by_stage || {};
-  const split = d.train?.split || {};
-  const byProj = d.train?.by_project || {};
-  const dpoSrc = d.train?.dpo_by_source || {};
-  const skipped = d.skipped || {};
-  const turns = d.stages?.stage1 || {};
-  const s2 = d.stages?.stage2 || {};
-  const funnels = Object.values(d.train?.session_funnels || {});
-  const admitted = funnels.reduce((a,x)=>a+(x.funnel?.admitted_steps||0),0);
-  const rescued = funnels.reduce((a,x)=>a+(x.funnel?.rescued_steps||0),0);
-  const stageRows = [
-    ["stage1", "原始提取", d.stages.stage1.last_run, COLORS.ore],
-    ["stage2", "黄金提纯", d.stages.stage2.last_run, COLORS.gold],
-    ["stage3", "训练合成", d.stages.stage3.last_run, COLORS.mint],
-  ];
-  const lb = d.latest_build;
-  const lp = d.latest_pack;
   const reports = d.reports || [];
-  const recentLedger = d.recent_ledger || [];
-  const snapshotHtml = (lb || lp) ? `<div class="snapshot-strip">
-    ${lb ? `<div class="snap-card">
-      <div class="snap-cap"><span class="tag t-done">最新不可变 Build</span><span class="grow"></span><span>${esc(ago(lb.created_at))}</span></div>
-      <div class="snap-title">${esc(lb.build_id)}</div>
-      <div class="snap-meta">
-        <span>SFT 窗口 <b>${fmt(lb.counts?.sft_windows ?? win)}</b></span>
-        <span>DPO <b>${fmt(lb.counts?.dpo_pairs ?? (tra["dpo_preference_pairs.jsonl"] || 0))}</b></span>
-        <span>项目 <b>${fmt((d.projects || []).length)}</b></span>
-        <span class="grow"></span>
-        <button type="button" class="ghost slim" onclick="openPackEval('latest')">门禁体检</button>
-      </div>
-    </div>` : ""}
-    ${lp ? `<div class="snap-card">
-      <div class="snap-cap"><span class="tag ${lp.length_gate_ok ? "t-gold" : "t-pending"}">${lp.length_gate_ok ? "最新交付包 · 长度闸门已过" : "最新交付包"}</span><span class="grow"></span><span>${esc(ago(lp.generated_at))}</span></div>
-      <div class="snap-title">${esc(lp.name)}</div>
-      <div class="snap-meta">
-        <span>SFT <b>${fmt(lp.sft_train)}</b>/${fmt(lp.sft_eval)}</span>
-        <span>DPO <b>${fmt(lp.dpo_train)}</b>/${fmt(lp.dpo_eval)}</span>
-        <span>${esc(lp.format_label || lp.profile || "")}</span>
-        <span class="grow"></span>
-        <button type="button" class="ghost slim" onclick="openPackEval(${jsArg(lp.name)})">体检</button>
-        <button type="button" class="slim" onclick="downloadZip(${jsArg(lp.name)})">下载</button>
-      </div>
-    </div>` : ""}
-  </div>` : "";
+  const graph = d.dataset_graph || await api("/api/datasets/graph");
+  STATE.vds.graph = graph;
+  if (!STATE.vds.selectedId) {
+    STATE.vds.selectedId = graph.head_pack || (graph.workspace?.dirty ? "workspace" : "");
+  } else if (STATE.vds.selectedId === "workspace" && !graph.workspace?.dirty && graph.head_pack) {
+    STATE.vds.selectedId = graph.head_pack;
+  }
 
   $("#view-overview").innerHTML = `
     ${d.sync_dirty ? `<div class="sync-banner"><span class="tag t-failed">存在未同步变更</span><span class="grow">上游数据晚于训练集。运行全流程后，Stage 3 才会反映最新结果。</span><button onclick="runStage('all',false)">立即同步</button></div>` : ""}
     <div id="overviewTaskStrip" class="hidden"></div>
-    ${snapshotHtml}
-    <div class="grid2" style="margin-bottom:18px">
-      <div class="panel" style="margin-bottom:0">
-        <div class="panel-h"><h3>评估报告与版本演进流</h3><span class="hint">模型实测归因与包间迭代档案</span><span class="grow"></span><span class="faint">${fmt(reports.length)} 份</span></div>
-        <div class="report-list">
-          ${reports.length ? reports.slice(0, 6).map(r => `<div class="report-item clickable" tabindex="0" onclick="openReportDrawer(${jsArg(r.report_id)})" onkeydown="if(event.key==='Enter')openReportDrawer(${jsArg(r.report_id)})">
-            <div class="row" style="gap:8px">
-              <span class="report-title">${esc(r.title || r.report_id)}</span>
-              ${(r.before_pack && r.after_pack) ? `<span class="chip model mono">${esc(String(r.before_pack).slice(0, 8))} → ${esc(String(r.after_pack).slice(0, 8))}</span>` : ""}
-              <span class="grow"></span>
-              <span class="faint" style="font-size:11.5px">${esc(ago(r.created_at))}</span>
+    <div class="panel" style="margin-bottom:18px" id="vdsDagPanel">
+      <div class="panel-h">
+        <h3>数据集演进关系图谱 (Dataset Lineage DAG)</h3>
+        <span class="hint">点击「数据集卡片」查看它的原始 / 黄金 / 训练四层快照；点击连线「报告/账本胶囊」审阅版本演进因果</span>
+        <span class="grow"></span>
+        <span class="cas-chip" title="04_release/cas 内容寻址去重对象总数">CAS 对象池 ${fmt(graph.cas_total_objects || 0)}</span>
+        ${reports.length ? `<button type="button" class="ghost slim" onclick="openAllReportsDrawer()">评估报告 (${fmt(reports.length)})</button>` : ""}
+        <button type="button" class="ghost slim" onclick="openCollectDrawer()">采集外部源会话</button>
+        <button type="button" class="ghost slim" onclick="jumpToLedger()">全量审计账本 →</button>
+      </div>
+      <div class="dag-canvas" id="vdsDagCanvas">${renderDatasetDagHtml(graph)}</div>
+    </div>
+    <div id="vdsDetailHost" style="margin-bottom:18px"></div>`;
+  STATE.poured = true;
+  paintOverviewTaskStrip();
+  await renderVdsDetailHost();
+}
+
+function openAllReportsDrawer() {
+  const reports = STATE.overview?.reports || [];
+  openDrawer("历次评估与迭代报告", `共 ${fmt(reports.length)} 份归档报告`);
+  setDrawerFoot("");
+  $("#drawerBody").innerHTML = `<div class="panel"><div class="report-list">${
+    reports.length ? reports.map(r => `<div class="report-item clickable" onclick="openReportDrawer(${jsArg(r.report_id)})">
+      <div class="row"><span class="report-title">${esc(r.title || r.report_id)}</span><span class="grow"></span><span class="faint" style="font-size:11.5px">${esc(ago(r.created_at))}</span></div>
+      ${r.summary ? `<div class="report-sub">${esc(short(r.summary, 150))}</div>` : ""}
+    </div>`).join("") : `<div class="empty">暂无评估报告</div>`
+  }</div></div>`;
+}
+
+/* ---------- Variant A 核心交互函数 ---------- */
+const VDS_DRIFT_ZH = {
+  exact: ["快照一致", "t-done"],
+  workspace_modified: ["工作区后续已改写 · 正从 CAS 精确还原", "t-gold"],
+  workspace_deleted: ["工作区已删除 · 正从 CAS 精确还原", "t-failed"],
+  workspace: ["实时工作区", "t-pending"],
+};
+const VDS_DIRTY_REASON_ZH = {
+  no_delivery_pack: "尚未生成首个正式交付包",
+  unpurified_raw_sessions: "存在新采纳但尚未黄金提纯的会话",
+  pipeline_unsynced: "上游阶段晚于 Stage 3 合成产物",
+  build_ahead_of_pack: "已构建新 Build，尚未打包为交付 zip",
+  session_sources_changed: "黄金会话或标注哈希相比最新包已发生演进",
+  stage3_inputs_changed: "步级决策 / DPO 裁决相比最新包已更新",
+  decisions_changed: "样本准入开关已调整",
+  scope_decisions_changed: "项目或会话停用范围已调整",
+  split_plan_changed: "Train / Eval 切分计划已调整",
+};
+
+function vdsNodeCardHtml(node, ws) {
+  const isDraft = node.kind === "draft";
+  const id = isDraft ? "workspace" : node.id;
+  const isSel = STATE.vds.focusType === "dataset" && STATE.vds.selectedId === id;
+  const headTag = node.is_head
+    ? (ws?.dirty ? `<span class="tag t-gold">最新正式包</span>` : `<span class="tag t-done">HEAD · 与工作区同步</span>`)
+    : (isDraft ? `<span class="tag t-running">演进中草稿 · Dirty</span>` : `<span class="tag t-stale">历史冻结包</span>`);
+  const gateTag = isDraft
+    ? `<span class="chip">待打包 (${fmt((ws?.reasons || []).length)} 项变更)</span>`
+    : (node.length_gate_ok ? `<span class="chip train">长度闸门已过</span>` : `<span class="chip">早期包 (未开闸门)</span>`);
+  const casBadge = !isDraft && node.cas_object_count ? `<span class="cas-chip">CAS:${fmt(node.cas_object_count)}</span>` : "";
+  const projN = isDraft ? (ws?.counts?.projects_count || 0) : (node.projects_count || 0);
+  const sessN = isDraft ? (ws?.counts?.gold_sessions || ws?.counts?.raw_sessions || 0) : (node.sessions_count || 0);
+  const sftT = isDraft ? (ws?.counts?.sft_train || 0) : (node.sft_train || 0);
+  const sftE = isDraft ? (ws?.counts?.sft_eval || 0) : (node.sft_eval || 0);
+  const dpoT = isDraft ? (ws?.counts?.dpo_train || 0) : (node.dpo_train || 0);
+  const dpoE = isDraft ? (ws?.counts?.dpo_eval || 0) : (node.dpo_eval || 0);
+  const timeText = isDraft ? "实时工作区" : ago(node.generated_at);
+
+  return `<div class="vds-node ${isSel ? "selected" : ""} ${isDraft ? "is-draft" : ""}" tabindex="0" onclick="selectVirtualDataset(${jsArg(id)})" onkeydown="if(event.key==='Enter')selectVirtualDataset(${jsArg(id)})">
+    <div class="row" style="gap:6px;justify-content:space-between">${headTag}<span class="faint" style="font-size:11px">${esc(timeText)}</span></div>
+    <div class="vds-title"><span class="mono" style="font-size:14.5px;color:${isDraft ? "var(--gold)" : "var(--text)"}">${isDraft ? "Workspace (未打包)" : "📦 " + esc(id)}</span></div>
+    <div class="row" style="gap:5px;margin-top:6px">${gateTag}${casBadge}</div>
+    <div class="vds-metrics">
+      <span>项目 <b>${fmt(projN)}</b></span>
+      <span>会话 <b>${fmt(sessN)}</b></span>
+      <span>SFT <b>${fmt(sftT)}</b>/${fmt(sftE)}</span>
+      <span>DPO <b>${fmt(dpoT)}</b>/${fmt(dpoE)}</span>
+    </div>
+  </div>`;
+}
+
+function vdsEdgeBridgeHtml(edge) {
+  const isDraft = edge.kind === "draft";
+  const isSel = STATE.vds.focusType === "edge" && STATE.vds.selectedEdge === edge.id;
+  const rpt = (edge.reports || [])[0];
+  const opsCount = (edge.ledger_ops || []).length;
+  const badgeTxt = rpt
+    ? `📄 实测评估报告`
+    : (isDraft ? `⚡ 待打包草稿增量` : (opsCount ? `🔧 ${fmt(opsCount)} 条审计操作` : `演进派生`));
+  const subTxt = rpt
+    ? short(rpt.title || rpt.summary || "", 46)
+    : (isDraft ? `自 ${edge.from} 后新增 ${fmt(opsCount)} 项未打包记录` : (edge.inferred ? "按时间序串联历史基线" : `含 ${fmt(opsCount)} 条 CLI/Web 变更留痕`));
+  return `<div class="vds-edge">
+    <div class="vds-edge-line ${isDraft ? "dashed" : ""}"></div>
+    <div class="vds-edge-card ${isSel ? "selected" : ""}" tabindex="0" onclick="selectLineageEdge(${jsArg(edge.id)})" onkeydown="if(event.key==='Enter')selectLineageEdge(${jsArg(edge.id)})">
+      <div style="font-weight:600;color:${rpt ? "var(--mint)" : "var(--gold)"}">${esc(badgeTxt)}</div>
+      <div class="muted" style="margin-top:3px;font-size:11px;line-height:1.4">${esc(subTxt)}</div>
+      <div class="faint" style="margin-top:4px;font-size:10.5px">点此查看报告与 ${fmt(opsCount)} 条账本 ▸</div>
+    </div>
+  </div>`;
+}
+
+function renderDatasetDagHtml(graph) {
+  const nodes = graph?.nodes || [];
+  const edges = graph?.edges || [];
+  const ws = graph?.workspace || {};
+  if (!nodes.length) {
+    return `<div class="dag-track"><div class="dag-col">${vdsNodeCardHtml({kind:"draft"}, ws)}</div></div>`;
+  }
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+  const edgeMap = Object.fromEntries(edges.map(e => [`${e.from}->${e.to}`, e]));
+  const childrenOf = {};
+  const roots = [];
+  for (const n of nodes) {
+    const p = n.resolved_parent;
+    if (p && byId[p]) (childrenOf[p] = childrenOf[p] || []).push(n);
+    else roots.push(n);
+  }
+  // 挑选包含 head_pack 或后代最多的主干链向右展开，同层兄弟作为紧凑分支挂载在同一列下方
+  const hasHeadDesc = id => {
+    if (byId[id]?.is_head) return true;
+    return (childrenOf[id] || []).some(c => hasHeadDesc(c.id));
+  };
+  const renderChainFromRoot = (rootNode, includeWorkspace) => {
+    let cur = rootNode;
+    const parts = [];
+    while (cur && !visited.has(cur.id)) {
+      visited.add(cur.id);
+      parts.push(`<div class="dag-col">${vdsNodeCardHtml(cur, ws)}</div>`);
+      const kids = childrenOf[cur.id] || [];
+      if (!kids.length) break;
+      const primary = kids.find(k => hasHeadDesc(k.id)) || kids[kids.length - 1];
+      const sideKids = kids.filter(k => k.id !== primary.id);
+      const e = edgeMap[`${cur.id}->${primary.id}`] || { id: `${cur.id}->${primary.id}`, from: cur.id, to: primary.id, reports: [], ledger_ops: [] };
+      parts.push(vdsEdgeBridgeHtml(e));
+      if (sideKids.length) {
+        visited.add(primary.id);
+        parts.push(`<div class="dag-col">
+          ${vdsNodeCardHtml(primary, ws)}
+          ${sideKids.map(sk => { visited.add(sk.id); return `<div style="opacity:.88;transform:scale(.96);transform-origin:left top"><div class="faint" style="font-size:11px;margin:2px 0 4px 4px">↳ 同基线派生分支 (${esc(cur.id)})：</div>${vdsNodeCardHtml(sk, ws)}</div>`; }).join("")}
+        </div>`);
+        const nextKids = childrenOf[primary.id] || [];
+        if (!nextKids.length) { cur = primary; break; }
+        const nextPrimary = nextKids.find(k => hasHeadDesc(k.id)) || nextKids[nextKids.length - 1];
+        const ne = edgeMap[`${primary.id}->${nextPrimary.id}`] || { id: `${primary.id}->${nextPrimary.id}`, from: primary.id, to: nextPrimary.id, reports: [], ledger_ops: [] };
+        parts.push(vdsEdgeBridgeHtml(ne));
+        cur = nextPrimary;
+      } else {
+        cur = primary;
+      }
+    }
+    if (includeWorkspace && ws?.dirty) {
+      const draftEdge = edges.find(e => e.to === "workspace");
+      if (draftEdge) parts.push(vdsEdgeBridgeHtml(draftEdge));
+      parts.push(`<div class="dag-col">${vdsNodeCardHtml({kind:"draft"}, ws)}</div>`);
+    }
+    return `<div class="dag-track" style="margin-bottom:8px">${parts.join("")}</div>`;
+  };
+
+  const mainRoot = roots.find(r => hasHeadDesc(r.id)) || roots[0];
+  const visited = new Set();
+  const tracks = [];
+  if (mainRoot) tracks.push(renderChainFromRoot(mainRoot, true));
+  for (const r of roots) {
+    if (!visited.has(r.id)) tracks.push(renderChainFromRoot(r, false));
+  }
+  for (const n of nodes) {
+    if (!visited.has(n.id)) tracks.push(renderChainFromRoot(n, false));
+  }
+  return tracks.join("");
+}
+
+function selectVirtualDataset(id) {
+  STATE.vds.focusType = "dataset";
+  STATE.vds.selectedId = id;
+  const dag = $("#vdsDagCanvas");
+  if (dag && STATE.vds.graph) dag.innerHTML = renderDatasetDagHtml(STATE.vds.graph);
+  renderVdsDetailHost().catch(err => toast(err.message, "err"));
+}
+
+function selectLineageEdge(edgeId) {
+  STATE.vds.focusType = "edge";
+  STATE.vds.selectedEdge = edgeId;
+  const dag = $("#vdsDagCanvas");
+  if (dag && STATE.vds.graph) dag.innerHTML = renderDatasetDagHtml(STATE.vds.graph);
+  renderVdsDetailHost().catch(err => toast(err.message, "err"));
+}
+
+async function renderVdsDetailHost() {
+  const host = $("#vdsDetailHost");
+  if (!host || !STATE.vds.graph) return;
+  if (STATE.vds.focusType === "edge") {
+    const edge = (STATE.vds.graph.edges || []).find(e => e.id === STATE.vds.selectedEdge) || (STATE.vds.graph.edges || [])[0];
+    if (!edge) { host.innerHTML = ""; return; }
+    const rpts = edge.reports || [];
+    const ops = edge.ledger_ops || [];
+    host.innerHTML = `<div class="panel">
+      <div class="panel-h">
+        <h3>演进因果桥 · <span class="mono">${esc(edge.from)} ──► ${esc(edge.to === "workspace" ? "Workspace (未打包)" : edge.to)}</span></h3>
+        <span class="grow"></span>
+        <button type="button" class="ghost slim" onclick="selectVirtualDataset(${jsArg(edge.from)})">查看源包 ${esc(edge.from)}</button>
+        <button type="button" class="primary slim" onclick="selectVirtualDataset(${jsArg(edge.to)})">查看目标数据集 ${esc(edge.to === "workspace" ? "Workspace" : edge.to)}</button>
+      </div>
+      <div class="panel-b">
+        <div class="grid2">
+          <div class="panel" style="margin-bottom:0;background:var(--ink-0)">
+            <div class="panel-h"><h3>关联实测评估报告</h3><span class="hint">${fmt(rpts.length)} 份</span><span class="grow"></span>${edge.to !== "workspace" ? `<button type="button" class="ghost slim" onclick="openPackDiffDrawer(${jsArg(edge.from)}, ${jsArg(edge.to)})">完整指标 Diff →</button>` : ""}</div>
+            <div class="report-list">
+              ${rpts.length ? rpts.map(r => {
+                const deltaKeys = Object.entries(r.deltas || {}).slice(0, 5);
+                return `<div class="report-item clickable" onclick="openReportDrawer(${jsArg(r.report_id)})">
+                  <div class="row"><span class="report-title">${esc(r.title || r.report_id)}</span><span class="grow"></span><span style="color:var(--gold);font-size:12px">阅读报告全文 →</span></div>
+                  ${r.summary ? `<div class="report-sub">${esc(r.summary)}</div>` : ""}
+                  ${deltaKeys.length ? `<div class="row" style="gap:6px;margin-top:4px">${deltaKeys.map(([k, v]) => `<span class="chip mono">${esc(k)}: ${esc(v.before)}→<b>${esc(v.after)}</b></span>`).join("")}</div>` : ""}
+                </div>`;
+              }).join("") : `<div class="empty" style="padding:26px 16px">${edge.to === "workspace" ? "工作区尚未打包，完成打包与学生实测后可通过 gt report publish 挂载报告" : "此演进段未挂载独立评估报告，右侧记录了期间的操作账本"}</div>`}
             </div>
-            ${r.summary ? `<div class="report-sub">${esc(short(r.summary, 140))}</div>` : ""}
-            <div class="row" style="gap:8px;font-size:11.5px"><span class="mono faint">${esc(r.report_id)}</span>${r.build_id ? `<span class="faint">Build ${esc(String(r.build_id).slice(0, 10))}</span>` : ""}<span class="grow"></span><span style="color:var(--gold)">阅读报告与指标对比 →</span></div>
-          </div>`).join("") : `<div class="empty" style="padding:26px 18px">暂无评估报告（可通过 <span class="mono">gt report publish</span> 归档）</div>`}
-        </div>
-      </div>
-      <div class="panel" style="margin-bottom:0">
-        <div class="panel-h"><h3>最近操作审计账本</h3><span class="hint">CLI / Web 全链路留痕</span><span class="grow"></span><button type="button" class="ghost slim" onclick="jumpToLedger()">全部账本 →</button></div>
-        <div class="ledger-feed">
-          ${recentLedger.length ? recentLedger.slice(0, 6).map(ev => `<div class="ledger-item clickable" tabindex="0" onclick="jumpToLedger({tool:${jsArg(ev.tool || '')}})">
-            <div class="row" style="gap:7px">
-              ${actorBadgeHtml(ev.actor)}
-              <span class="tool-badge">${esc(ev.tool || "")}</span>
-              <span class="grow"></span>
-              <span class="faint" style="font-size:11.5px">${esc(ago(ev.timestamp))}</span>
+          </div>
+          <div class="panel" style="margin-bottom:0;background:var(--ink-0)">
+            <div class="panel-h"><h3>驱动本次演进的操作审计账本</h3><span class="hint">${fmt(ops.length)} 条记录</span></div>
+            <div class="ledger-feed">
+              ${ops.length ? ops.map(op => `<div class="ledger-item">
+                <div class="row" style="gap:7px">${actorBadgeHtml(op.actor)}<span class="tool-badge">${esc(op.tool || "")}</span><span class="mono faint">${esc(op.op_id || "")}</span><span class="grow"></span><span class="faint" style="font-size:11.5px">${esc(stamp(op.timestamp))}</span></div>
+                <div class="ledger-reason">${esc(op.reason || "（未填原因）")}</div>
+              </div>`).join("") : `<div class="empty" style="padding:26px 16px">该区间无显式 CLI/Web 账本记录（早期基线包）</div>`}
             </div>
-            <div class="ledger-reason">${esc(short(ev.reason || "（无说明）", 120))}</div>
-          </div>`).join("") : `<div class="empty" style="padding:26px 18px">暂无操作记录</div>`}
-        </div>
-      </div>
-    </div>
-    <div class="workflow-head">
-      <button type="button" class="wf-stage go" style="--c:${COLORS.ore}" onclick="jumpToRaw()">
-        <div class="wf-top"><span class="wf-no">1</span><span class="mono">COLLECT & CLEAN</span><span class="grow"></span><span>${ago(d.stages.stage1.last_run)}</span></div>
-        <h3>采集与回合清洗</h3>
-        <div class="wf-count">${fmt(sessions)}<small>准入会话</small></div>
-        <div class="wf-foot">${fmt(turns.turns_total)} 个用户回合 · 保留 ${fmt(turns.turns_kept)} · 折叠 ${fmt(turns.turns_folded)} · 剥离 ${fmt(turns.turns_dropped)}</div>
-        <div class="wf-enter">进入原始数据 →</div>
-      </button>
-      <button type="button" class="wf-stage go" style="--c:${COLORS.gold}" onclick="jumpToGold('')">
-        <div class="wf-top"><span class="wf-no">2</span><span class="mono">DISTILL & REVIEW</span><span class="grow"></span><span>${ago(d.stages.stage2.last_run)}</span></div>
-        <h3>黄金提纯</h3>
-        <div class="wf-count">${fmt(gold)}<small>黄金步骤</small></div>
-        <div class="wf-foot">状态折叠 ${fmt(s2.folded)} · 弯路剪枝 ${fmt(s2.pruned)} · CoT 压缩 ${fmt(s2.compressed)}</div>
-        <div class="wf-enter">进入黄金数据 →</div>
-      </button>
-      <button type="button" class="wf-stage go" style="--c:${COLORS.mint}" onclick="jumpToTrain()">
-        <div class="wf-top"><span class="wf-no">3</span><span class="mono">SYNTHESIZE</span><span class="grow"></span><span>${ago(d.stages.stage3.last_run)}</span></div>
-        <h3>训练样本生成</h3>
-        <div class="wf-count">${fmt(win)}<small>SFT 窗口</small></div>
-        <div class="wf-foot">实际准入 ${fmt(admitted)} 步 · 改写挽救 ${fmt(rescued)} 步 · DPO ${fmt(tra["dpo_preference_pairs.jsonl"]||0)} · 诊断 ${fmt(tra["negative_diagnostics.jsonl"]||0)}</div>
-        <div class="wf-enter">进入训练数据，构建 Build →</div>
-      </button>
-    </div>
-    <div class="assay">
-      <div class="stations">
-        <div class="station" style="--c:${COLORS.ore}">
-          <div class="cap"><i></i>原始助手步</div>
-          <div class="big">${fmt(raw)}</div>
-          <div class="sub">${fmt(sessions)} 个会话${sourceText ? ` · ${esc(sourceText)}` : ""}</div>
-        </div>
-        <div class="station" style="--c:${COLORS.gold}">
-          <div class="cap"><i></i>黄金步</div>
-          <div class="big">${fmt(gold)}</div>
-          <div class="sub">${raw ? `折叠与剪枝去掉 ${fmt(cut)} 步，保留 ${(gold/raw*100).toFixed(1)}%` : "尚未提纯"}</div>
-        </div>
-        <div class="station" style="--c:${COLORS.mint}">
-          <div class="cap"><i></i>SFT 单步窗口</div>
-          <div class="big">${fmt(win)}</div>
-          <div class="sub">加权后 ${fmt(d.train?.weighted_steps)}，另有 ${fmt(tra["sft_gold_trajectories_sharegpt.jsonl"] || 0)} 条完整轨迹</div>
-        </div>
-      </div>
-      ${assayBand(raw, gold, win)}
-      <div class="byproducts">
-        <div></div>
-        <div style="grid-column:span 2">剪下来的部分继续沉淀为 DPO 与诊断数据
-          <div class="figs">
-            <span><b>${fmt(tra["dpo_preference_pairs.jsonl"])}</b>DPO 偏好对</span>
-            <span><b>${fmt(tra["negative_diagnostics.jsonl"])}</b>病态诊断</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="grid2">
-      <div class="panel">
-        <div class="panel-h"><h3>项目</h3><span class="hint">按会话数排序</span></div>
-        <table><thead><tr><th>项目</th><th class="n">会话数</th><th class="n">原始步</th><th class="n">训练窗口</th><th>切分</th></tr></thead><tbody>
-        ${(d.projects||[]).map(p => `<tr>
-          <td class="sid">${esc(p.project)}</td>
-          <td class="n">${fmt(p.sessions)}</td>
-          <td class="n">${fmt(p.steps)}</td>
-          <td class="n">${fmt(byProj[p.project])}</td>
-          <td>${split[p.project] ? `<span class="chip ${esc(split[p.project])}">${esc(split[p.project])}</span>` : `<span class="faint">–</span>`}</td>
-        </tr>`).join("") || emptyRow(5, "还没有数据，先运行 stage1")}
-        </tbody></table>
-      </div>
-
-      <div class="panel">
-        <div class="panel-h"><h3>病态行为</h3><span class="hint">诊断库中各类问题的出现次数</span></div>
-        <div class="panel-b"><div class="patho">
-          ${Object.entries(patho).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `
-            <span class="name">${esc(PATHO_ZH[k] || k)}<small>${esc(k)}</small></span>
-            <span class="track"><i style="width:${Math.max(2, Math.round(v/maxp*100))}%"></i></span>
-            <b>${fmt(v)}</b>`).join("") || `<span class="faint">暂无诊断</span>`}
-        </div></div>
-      </div>
-    </div>
-
-    <div class="grid2 even">
-      <div class="panel">
-        <div class="panel-h"><h3>训练样本构成</h3></div>
-        <div class="panel-b">
-          <div class="sub-h">按会话阶段</div>
-          ${segbar(PHASE.map(([k,t,c]) => ({v:byStage[k]||0, c, t})), "thick")}
-          <div class="legend">${PHASE.map(([k,t,c]) => `<span><i style="background:${c}"></i>${t} <b>${fmt(byStage[k]||0)}</b></span>`).join("")}</div>
-          <div class="sub-h">DPO 偏好对来源</div>
-          <div class="row">${Object.entries(dpoSrc).map(([k,v]) => `<span class="chip">${esc(DPO_SRC_ZH[k]||k)} <b>${fmt(v)}</b></span>`).join("") || `<span class="faint">–</span>`}</div>
-          <div class="sub-h">准入时跳过的会话</div>
-          <div class="row">${Object.entries(skipped).map(([k,v]) => `<span class="chip">${esc(SKIP_ZH[k]||k)} <b>${fmt(v)}</b></span>`).join("") || `<span class="faint">–</span>`}</div>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-h"><h3>最近运行</h3></div>
-        <div class="panel-b">
-          <div class="timeline-list">
-            ${stageRows.map(([s, n, t, c]) => `<div class="it" style="--c:${c}">
-              <span class="dot ${t?"on":""}"></span>
-              <span>${n} <span class="faint mono" style="font-size:11px;margin-left:4px">${s}</span></span>
-              <span class="t">${ago(t)}${t?`<small>${esc(stamp(t))}</small>`:""}</span></div>`).join("")}
-          </div>
-          <div class="sub-h">路径</div>
-          <div class="kv">
-            <span class="k">会话目录</span><span class="path">${esc(d.config.sessions_dir)}</span>
-            <span class="k">配置文件</span><span class="path">${esc(d.config.path)}</span>
           </div>
         </div>
       </div>
     </div>`;
-  STATE.poured = true;
-  paintOverviewTaskStrip();
+    return;
+  }
+
+  const dsId = STATE.vds.selectedId || STATE.vds.graph.head_pack || "workspace";
+  const isDraft = dsId === "workspace";
+  const node = isDraft ? null : (STATE.vds.graph.nodes || []).find(n => n.id === dsId);
+  const ws = STATE.vds.graph.workspace || {};
+  const tab = STATE.vds.subTab || "overview";
+  const parentId = isDraft ? ws.head_pack : node?.resolved_parent;
+  const edgeKey = parentId ? `${parentId}->${dsId}` : "";
+  const sessCnt = isDraft ? (ws.counts?.gold_sessions || ws.counts?.raw_sessions || 0) : (node?.sessions_count || 0);
+  const trainCnt = isDraft ? ((ws.counts?.sft_train || 0) + (ws.counts?.dpo_train || 0)) : ((node?.sft_train || 0) + (node?.dpo_train || 0));
+
+  const topBanner = isDraft
+    ? `<div style="padding:10px 18px;background:rgba(217,180,103,.09);border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px">
+        <span class="tag t-running">动态演进草稿 (Working Tree)</span>
+        <span class="muted">变更原因：${esc((ws.reasons || []).map(r => VDS_DIRTY_REASON_ZH[r] || r).join("；") || "存在未打包修改")}</span>
+        <span class="grow"></span>
+        <button type="button" class="ghost slim" onclick="buildWorkspaceFromGraph()">1. 构建 Build</button>
+        <button type="button" class="primary slim" onclick="exportPackage({})">2. 打包生成新数据集</button>
+      </div>`
+    : `<div style="padding:10px 18px;background:rgba(95,185,196,.08);border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px">
+        <span class="cas-chip">${node?.cas_fidelity === "full" ? "CAS 完整不可变快照" : (node?.cas_fidelity === "backfilled" ? "历史 Build 校验回填快照" : "早期独立包 (仅训练切片冻结)")}</span>
+        <span class="muted">训练切片读取自冻结包 <span class="mono">${esc(node?.name || dsId)}</span>${node?.cas_object_count ? `；关联 CAS 对象 ${fmt(node.cas_object_count)} 个` : "（无关联 Build 目录）"}。</span>
+        <span class="grow"></span>
+        ${node?.build_id ? `<span class="mono faint">build:${esc(String(node.build_id).slice(0, 10))}</span>` : ""}
+        ${node?.name ? `<button type="button" class="ghost slim" onclick="openPackDocs(${jsArg(node.name)})">说明</button>` : ""}
+        ${node?.name ? `<button type="button" class="ghost slim" onclick="openPackLengthStats(${jsArg(node.name)})">长度统计</button>` : ""}
+        <button type="button" class="ghost slim" onclick="openPackEval(${jsArg(node?.name || dsId)})">门禁体检</button>
+        ${node?.name ? `<button type="button" class="primary slim" onclick="downloadZip(${jsArg(node.name)})">下载</button>` : ""}
+        ${node?.name ? `<button type="button" class="danger slim" onclick="deletePack(${jsArg(node.name)})">删除</button>` : ""}
+      </div>`;
+
+  host.innerHTML = `<div class="panel">
+    <div class="panel-h">
+      <h3>虚拟数据集条目 · <span class="mono" style="color:var(--gold)">${isDraft ? "Workspace (未打包草稿)" : esc(dsId)}</span></h3>
+      ${parentId ? `<button type="button" class="chip" onclick="selectLineageEdge(${jsArg(edgeKey)})">派生自 ${esc(parentId)} · 查看演进因果</button>` : `<span class="chip">根基线数据集</span>`}
+      <span class="grow"></span>
+      <span class="faint" style="font-size:12px">${isDraft ? "实时可变区" : esc(stamp(node?.generated_at || ""))}</span>
+    </div>
+    ${topBanner}
+    <div class="vds-subtabs">
+      <button type="button" class="${tab === "overview" ? "active" : ""}" onclick="switchVdsSubTab('overview')">1. 概览与门禁体检</button>
+      <button type="button" class="${tab === "train" ? "active" : ""}" onclick="switchVdsSubTab('train')">2. 训练数据<span class="cnt">${fmt(trainCnt)}</span></button>
+      <button type="button" class="${tab === "gold" ? "active" : ""}" onclick="switchVdsSubTab('gold')">3. 黄金数据 (CAS 快照)<span class="cnt">${fmt(sessCnt)}</span></button>
+      <button type="button" class="${tab === "raw" ? "active" : ""}" onclick="switchVdsSubTab('raw')">4. 原始数据 (归属范围)<span class="cnt">${fmt(sessCnt)}</span></button>
+    </div>
+    <div id="vdsSubBody"><div class="panel-b"><div class="loading">正在读取虚拟数据集视图…</div></div></div>
+  </div>`;
+
+  await loadVirtualDatasetSubView(dsId, tab);
+}
+
+function switchVdsSubTab(subTab) {
+  STATE.vds.subTab = subTab;
+  renderVdsDetailHost().catch(err => toast(err.message, "err"));
+}
+
+async function openPackDiffDrawer(beforeId, afterId) {
+  openDrawer(`包间全维度指标对比 · ${beforeId} → ${afterId}`, "Eval Diff");
+  const seq = DRAWER_REQUEST_SEQ;
+  $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-b"><div class="loading">正在对比两版数据集指标…</div></div></div>`;
+  setDrawerFoot("");
+  try {
+    const d = await api(`/api/eval/diff?before=${encodeURIComponent(beforeId)}&after=${encodeURIComponent(afterId)}`);
+    if (seq !== DRAWER_REQUEST_SEQ) return;
+    $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-h"><h3>${esc(beforeId)} → ${esc(afterId)}</h3></div><div class="panel-b">${renderEvalDiffBlock(d)}</div></div>`;
+  } catch (err) {
+    if (seq !== DRAWER_REQUEST_SEQ) return;
+    $("#drawerBody").innerHTML = `<div class="error-box">对比异常：${esc(err.message || err)}</div>`;
+  }
+}
+
+async function buildWorkspaceFromGraph() {
+  try {
+    const r = await api("/api/run", { method: "POST", body: JSON.stringify({ stage: "stage3", force: false }) });
+    toast(r.status === "queued" ? "构建任务已加入排队，可在账本与任务页查看日志" : "已启动草稿构建 Build", "ok");
+    if (r.job_id) watchJob(r.job_id, () => { if (STATE.tab === "overview") loadOverview(); });
+  } catch (err) {
+    toast(err.message, "err");
+  }
+}
+
+async function openCollectDrawer() {
+  openDrawer("采集外部源会话", "从 pi / Cursor 会话目录勾选未入库轨迹");
+  setDrawerFoot("");
+  $("#drawerBody").innerHTML = `<div id="collectDrawerHost"><div class="loading">正在扫描外部会话目录…</div></div>`;
+  await loadCollect("#collectDrawerHost");
+}
+
+function renderVdsBreakdownHtml(bd) {
+  if (!bd) return "";
+  const projs = bd.projects || [];
+  const byStage = bd.by_stage || {};
+  const dpoSrc = bd.dpo_by_source || {};
+  const patho = bd.pathologies || {};
+  const maxp = Math.max(1, ...Object.values(patho));
+  const pathoEntries = Object.entries(patho).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  return `<div class="grid2" style="margin-top:16px">
+    <div class="panel" style="margin-bottom:0;background:var(--ink-0)">
+      <div class="panel-h"><h3>本数据集项目分布与切分</h3><span class="hint">共 ${fmt(projs.length)} 个规范项目组</span></div>
+      <div class="scroll" style="max-height:310px">
+        <table>
+          <thead><tr><th>项目组</th><th>切分</th><th class="n">SFT 样本</th><th class="n">DPO 对</th></tr></thead>
+          <tbody>
+            ${projs.map(p => `<tr>
+              <td class="sid">${esc(p.project)}</td>
+              <td><span class="chip ${esc(p.split)}">${esc(p.split)}</span></td>
+              <td class="n">${fmt(p.sft_rows)}</td>
+              <td class="n">${fmt(p.dpo_rows)}</td>
+            </tr>`).join("") || emptyRow(4, "暂无项目切分数据")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel" style="margin-bottom:0;background:var(--ink-0)">
+      <div class="panel-h"><h3>本数据集样本构成与诊断</h3><span class="hint">随所选数据集版本动态切换</span></div>
+      <div class="panel-b">
+        <div class="sub-h" style="margin-top:0">SFT 会话阶段占比</div>
+        ${segbar(PHASE.map(([k, t, c]) => ({v: byStage[k] || 0, c, t})), "thick")}
+        <div class="legend">${PHASE.map(([k, t, c]) => `<span><i style="background:${c}"></i>${t} <b>${fmt(byStage[k] || 0)}</b></span>`).join("")}</div>
+        <div class="sub-h">DPO 偏好对来源构成</div>
+        <div class="row">${Object.entries(dpoSrc).map(([k, v]) => `<span class="chip">${esc(DPO_SRC_ZH[k] || k)} <b>${fmt(v)}</b></span>`).join("") || `<span class="faint">–</span>`}</div>
+        ${pathoEntries.length ? `<div class="sub-h">本版拦截/诊断的病态分布</div><div class="patho">${pathoEntries.map(([k, v]) => `
+          <span class="name">${esc(PATHO_ZH[k] || k)}</span>
+          <span class="track"><i style="width:${Math.max(3, Math.round(v / maxp * 100))}%"></i></span>
+          <b>${fmt(v)}</b>`).join("")}</div>` : ""}
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadVirtualDatasetSubView(dsId, tab) {
+  const box = $("#vdsSubBody");
+  if (!box) return;
+  try {
+    if (tab === "overview") {
+      const ov = await api(`/api/datasets/${encodeURIComponent(dsId)}`);
+      if (STATE.vds.selectedId && STATE.vds.selectedId !== dsId) return;
+      if (ov.kind === "draft") {
+        const wc = ov.workspace?.counts || {};
+        box.innerHTML = `<div class="panel-b">
+          <div class="vds-kpi-grid">
+            <div class="vds-kpi"><div class="k">预计 SFT 窗口 (Train / Eval)</div><div class="v">${fmt(wc.sft_train)} <span class="faint" style="font-size:14px">/ ${fmt(wc.sft_eval)}</span></div><div class="s">工作区 Stage 3 当前切片</div></div>
+            <div class="vds-kpi"><div class="k">预计 DPO 偏好对 (Train / Eval)</div><div class="v">${fmt(wc.dpo_train)} <span class="faint" style="font-size:14px">/ ${fmt(wc.dpo_eval)}</span></div><div class="s">剪枝 + 折叠 + 压缩改写</div></div>
+            <div class="vds-kpi"><div class="k">项目 / 黄金会话 / 原始会话</div><div class="v">${fmt(wc.projects_count)} <span class="faint" style="font-size:14px">/ ${fmt(wc.gold_sessions)} / ${fmt(wc.raw_sessions)}</span></div><div class="s">未提纯会话 ${fmt(ov.workspace?.unpurified_count || 0)} 条</div></div>
+            <div class="vds-kpi"><div class="k">待打包账本操作</div><div class="v">${fmt((ov.ledger_ops || []).length)} <span class="faint" style="font-size:14px">条</span></div><div class="s">自 ${esc(ov.parent_pack || "初始")} 以来的增量动作</div></div>
+          </div>
+          ${renderVdsBreakdownHtml(ov.breakdown)}
+        </div>`;
+      } else {
+        const edge = ov.incoming_edge;
+        const rpt = (edge?.reports || [])[0];
+        box.innerHTML = `<div class="panel-b">
+          <div class="vds-kpi-grid">
+            <div class="vds-kpi"><div class="k">SFT 训练 / 验证行数 (LF)</div><div class="v">${fmt(ov.sft_train)} <span class="faint" style="font-size:14px">/ ${fmt(ov.sft_eval)}</span></div><div class="s">${esc(ov.format_label || ov.profile || "标准导出")}</div></div>
+            <div class="vds-kpi"><div class="k">DPO 偏好对 (Train / Eval)</div><div class="v">${fmt(ov.dpo_train)} <span class="faint" style="font-size:14px">/ ${fmt(ov.dpo_eval)}</span></div><div class="s">包体积 ${esc(((ov.size_bytes || 0) / 1048576).toFixed(1))} MB</div></div>
+            <div class="vds-kpi"><div class="k">覆盖项目组 / 溯源会话</div><div class="v">${fmt(ov.projects_count)} <span class="faint" style="font-size:14px">款 / ${fmt(ov.sessions_count)} 会话</span></div><div class="s">CAS 归档对象 ${fmt(ov.cas_object_count || 0)} 个</div></div>
+            <div class="vds-kpi"><div class="k">长度闸门与体检</div><div class="v" style="font-size:16.5px;color:${ov.length_gate_ok ? "var(--pos)" : "var(--gold)"}">${ov.length_gate_ok ? "✅ 长度闸门已生效" : "⚠ 打包时跳过长度闸门"}</div><div class="s"><a href="javascript:void(0)" onclick="openPackEval(${jsArg(ov.name)})">点此运行 8 项硬性门禁核验 →</a></div></div>
+          </div>
+          ${rpt ? `<div class="panel" style="margin-bottom:0;background:var(--ink-0)"><div class="panel-h"><h3>生成本包的实测评估报告</h3><span class="grow"></span><button type="button" class="ghost slim" onclick="openReportDrawer(${jsArg(rpt.report_id)})">阅读完整报告 →</button></div><div class="panel-b"><div style="font-weight:600;margin-bottom:4px">${esc(rpt.title)}</div><div class="muted">${esc(rpt.summary || "")}</div></div></div>` : ""}
+          ${renderVdsBreakdownHtml(ov.breakdown)}
+        </div>`;
+      }
+      return;
+    }
+
+    if (tab === "train") {
+      const f = STATE.vds.trainFilter;
+      const qs = new URLSearchParams({ kind: f.kind || "all", split: f.split || "", project: f.project || "", q: f.q || "", offset: String(f.offset || 0), limit: "40" });
+      const res = await api(`/api/datasets/${encodeURIComponent(dsId)}/train?` + qs.toString());
+      window._VDS_LAST_TRAIN_ROWS = res.rows || [];
+      box.innerHTML = `
+        <div class="toolbar">
+          <select id="vdsTrKind"><option value="all"${f.kind==="all"?" selected":""}>SFT + DPO</option><option value="sft"${f.kind==="sft"?" selected":""}>仅 SFT 窗口</option><option value="dpo"${f.kind==="dpo"?" selected":""}>仅 DPO 偏好对</option></select>
+          <select id="vdsTrSplit"><option value=""${!f.split?" selected":""}>Train + Eval</option><option value="train"${f.split==="train"?" selected":""}>仅 Train</option><option value="eval"${f.split==="eval"?" selected":""}>仅 Eval</option></select>
+          <select id="vdsTrProj"><option value="">所有项目 (${(res.projects||[]).length})</option>${(res.projects||[]).map(p => `<option value="${esc(p)}"${f.project===p?" selected":""}>${esc(p)}</option>`).join("")}</select>
+          <input type="text" id="vdsTrQ" class="filter-search" placeholder="搜索样本 ID、会话或目标步文本…" value="${esc(f.q || "")}" />
+          <span class="grow"></span>
+          <span class="count">匹配 <b>${fmt(res.total)}</b> 条冻结切片</span>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>样本 ID</th><th>类型</th><th>切分</th><th>项目组</th><th class="n">权重</th><th class="n">字符数</th><th>冻结样本摘要（点击审阅全文）</th></tr></thead>
+            <tbody>
+              ${(res.rows || []).map((r, idx) => `<tr class="clickable" onclick="openVirtualTrainSampleDrawer(${idx})">
+                <td class="mono">${esc(short(r.sample_id, 34))}</td>
+                <td><span class="chip">${r.kind === "dpo" ? "DPO" : "SFT"}</span></td>
+                <td><span class="chip ${esc(r.split)}">${esc(r.split)}</span></td>
+                <td class="mono faint">${esc(r.project_group || "–")}</td>
+                <td class="n">${esc(String(r.sample_weight ?? 1))}×</td>
+                <td class="n">${fmt(r.approx_chars)}</td>
+                <td class="muted">${esc(short(r.preview || "", 96))}</td>
+              </tr>`).join("") || emptyRow(7, "当前筛选条件下无训练切片")}
+            </tbody>
+          </table>
+        </div>
+        <div class="toolbar bottom">
+          <button type="button" class="slim" ${f.offset <= 0 ? "disabled" : ""} id="vdsTrPrev">上一页</button>
+          <span class="muted" style="font-size:12px">第 ${fmt(Math.floor((f.offset||0)/40)+1)} 页</span>
+          <button type="button" class="slim" ${(f.offset || 0) + 40 >= (res.total || 0) ? "disabled" : ""} id="vdsTrNext">下一页</button>
+        </div>`;
+      const reloadTr = resetOffset => {
+        f.kind = $("#vdsTrKind").value;
+        f.split = $("#vdsTrSplit").value;
+        f.project = $("#vdsTrProj").value;
+        f.q = $("#vdsTrQ").value;
+        if (resetOffset) f.offset = 0;
+        loadVirtualDatasetSubView(dsId, "train");
+      };
+      $("#vdsTrKind").onchange = () => reloadTr(true);
+      $("#vdsTrSplit").onchange = () => reloadTr(true);
+      $("#vdsTrProj").onchange = () => reloadTr(true);
+      $("#vdsTrQ").onkeydown = e => { if (e.key === "Enter") reloadTr(true); };
+      $("#vdsTrPrev").onclick = () => { f.offset = Math.max(0, (f.offset || 0) - 40); reloadTr(false); };
+      $("#vdsTrNext").onclick = () => { f.offset = (f.offset || 0) + 40; reloadTr(false); };
+      return;
+    }
+
+    if (tab === "gold") {
+      const f = STATE.vds.goldFilter;
+      const qs = new URLSearchParams({ project: f.project || "", q: f.q || "" });
+      const res = await api(`/api/datasets/${encodeURIComponent(dsId)}/gold?` + qs.toString());
+      box.innerHTML = `
+        <div class="toolbar">
+          <select id="vdsGoProj"><option value="">所有项目 (${(res.projects||[]).length})</option>${(res.projects||[]).map(p => `<option value="${esc(p)}"${f.project===p?" selected":""}>${esc(p)}</option>`).join("")}</select>
+          <input type="text" id="vdsGoQ" class="filter-search" placeholder="搜索会话 ID、项目或主导模型…" value="${esc(f.q || "")}" />
+          <span class="grow"></span>
+          <span class="count">共 <b>${fmt(res.total)}</b> 条黄金会话（点击查看完整对话回复与 CAS 三态血缘）</span>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>会话 ID</th><th>规范项目组</th><th>主导模型</th><th>切分</th><th class="n">黄金步</th><th class="n">SFT / DPO</th><th>CAS 快照指纹与时间旅行状态</th></tr></thead>
+            <tbody>
+              ${(res.sessions || []).map(s => {
+                const [stTxt, stCls] = VDS_DRIFT_ZH[s.snapshot_status] || [s.snapshot_status, "t-stale"];
+                return `<tr class="clickable" onclick="openDatasetSessionDrawer(${jsArg(dsId)}, ${jsArg(s.session_id)}, 'gold')">
+                  <td class="sid">${esc(String(s.session_id).slice(0, 13))}…</td>
+                  <td class="mono">${esc(s.project_group)}</td>
+                  <td><span class="chip model">${esc(s.dominant_model)}</span></td>
+                  <td><span class="chip ${esc(s.split)}">${esc(s.split)}</span></td>
+                  <td class="n">${fmt(s.gold_steps)}</td>
+                  <td class="n">${fmt(s.sft_windows)} / ${fmt(s.dpo_count)}${(s.sft_windows === 0 && s.dpo_count > 0) ? `<span class="chip" style="margin-left:6px">${s.sft_excluded ? "SFT停用·仅DPO" : "仅DPO"}</span>` : ""}</td>
+                  <td><div class="row" style="gap:6px">${s.cas_gold_sha256 ? `<span class="cas-chip">sha256:${esc(s.cas_gold_sha256.slice(0, 10))}</span>` : ""}<span class="tag ${stCls}">${esc(stTxt)}</span></div></td>
+                </tr>`;
+              }).join("") || emptyRow(7, "当前数据集下无匹配的黄金会话")}
+            </tbody>
+          </table>
+        </div>`;
+      const reloadGo = () => { f.project = $("#vdsGoProj").value; f.q = $("#vdsGoQ").value; loadVirtualDatasetSubView(dsId, "gold"); };
+      $("#vdsGoProj").onchange = reloadGo;
+      $("#vdsGoQ").onkeydown = e => { if (e.key === "Enter") reloadGo(); };
+      return;
+    }
+
+    if (tab === "raw") {
+      const f = STATE.vds.rawFilter;
+      const qs = new URLSearchParams({ project: f.project || "", q: f.q || "" });
+      const res = await api(`/api/datasets/${encodeURIComponent(dsId)}/raw?` + qs.toString());
+      box.innerHTML = `
+        <div class="toolbar">
+          <select id="vdsRaProj"><option value="">所有项目 (${(res.projects||[]).length})</option>${(res.projects||[]).map(p => `<option value="${esc(p)}"${f.project===p?" selected":""}>${esc(p)}</option>`).join("")}</select>
+          <input type="text" id="vdsRaQ" class="filter-search" placeholder="搜索会话 ID、工作目录或模型…" value="${esc(f.q || "")}" />
+          ${dsId === "workspace" ? `<button type="button" class="primary slim" onclick="openCollectDrawer()">从 pi/Cursor 采集新会话</button>` : ""}
+          <span class="grow"></span>
+          <span class="count">归属本数据集的原始会话 <b>${fmt(res.total)}</b> 条</span>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>原始副本会话</th><th>项目组</th><th>主导模型</th><th class="n">助手总步数</th><th class="n">回合 (保留/折叠/剥离)</th><th>原始副本 CAS 指纹</th></tr></thead>
+            <tbody>
+              ${(res.sessions || []).map(s => {
+                const [stTxt, stCls] = VDS_DRIFT_ZH[s.snapshot_status] || [s.snapshot_status, "t-stale"];
+                return `<tr class="clickable" onclick="openDatasetSessionDrawer(${jsArg(dsId)}, ${jsArg(s.session_id)}, 'raw')">
+                  <td class="sid">${esc(String(s.session_id).slice(0, 13))}…<div class="faint mono" style="font-size:11px">${esc(short(s.cwd || "", 44))}</div></td>
+                  <td class="mono">${esc(s.project_group)}</td>
+                  <td><span class="chip model">${esc(s.dominant_model)}</span></td>
+                  <td class="n">${fmt(s.assistant_steps)}</td>
+                  <td class="n">${fmt(s.turns_kept)} / ${fmt(s.turns_folded)} / ${fmt(s.turns_dropped)}</td>
+                  <td><div class="row" style="gap:6px">${s.cas_raw_sha256 ? `<span class="cas-chip">sha256:${esc(s.cas_raw_sha256.slice(0, 10))}</span>` : ""}<span class="tag ${stCls}">${esc(stTxt)}</span></div></td>
+                </tr>`;
+              }).join("") || emptyRow(6, "当前数据集下无原始会话")}
+            </tbody>
+          </table>
+        </div>`;
+      const reloadRa = () => { f.project = $("#vdsRaProj").value; f.q = $("#vdsRaQ").value; loadVirtualDatasetSubView(dsId, "raw"); };
+      $("#vdsRaProj").onchange = reloadRa;
+      $("#vdsRaQ").onkeydown = e => { if (e.key === "Enter") reloadRa(); };
+    }
+  } catch (err) {
+    box.innerHTML = `<div class="panel-b"><div class="error-box">获取快照异常：${esc(err.message || err)}</div></div>`;
+  }
+}
+
+let _VDS_SESSION_CACHE = null;
+let _VDS_SESSION_MODE = "gold";
+
+function switchVdsSessionMode(mode) {
+  if (!_VDS_SESSION_CACHE) return;
+  _VDS_SESSION_MODE = mode;
+  $$("#vdsSessionModeBar button").forEach(b => b.classList.toggle("on", b.dataset.sm === mode));
+  const body = $("#vdsDrawerLineageBody");
+  if (!body) return;
+  const lin = _VDS_SESSION_CACHE;
+  if (mode === "gold") {
+    const gst = lin.gold_stats || {};
+    const headLine = `<div class="gold-summary-line" style="margin-bottom:12px">
+      <span>原始 <b>${fmt(gst.raw_steps ?? (lin.steps || []).length)}</b> 步</span><span>→</span>
+      <span>黄金 <b>${fmt(gst.gold_steps ?? (lin.gold_messages || []).filter(m => m.role === "assistant").length)}</b> 步</span>
+      ${gst.root_prompt ? `<span title="${esc(gst.root_prompt)}">根任务：${esc(short(gst.root_prompt, 110))}</span>` : ""}
+    </div>`;
+    body.innerHTML = `${headLine}${renderMessages(lin.gold_messages || [], lin.turns || [])}`;
+  } else if (mode === "raw") {
+    body.innerHTML = renderMessages(lin.raw_messages || [], lin.turns || []);
+  } else {
+    body.innerHTML = renderLineageHtml(lin);
+    bindLineageEvents(lin, "#vdsDrawerLineageBody");
+  }
+}
+
+async function openDatasetSessionDrawer(datasetId, sid, defaultMode = "gold") {
+  openDrawer(`数据集 [${datasetId}] · 会话 ${String(sid).slice(0, 8)}`, "CAS 时间旅行快照回放");
+  const seq = DRAWER_REQUEST_SEQ;
+  $("#drawerBody").innerHTML = `<div class="loading">正在从 CAS 快照池还原完整会话与血缘…</div>`;
+  setDrawerFoot("");
+  try {
+    const lin = await api(`/api/datasets/${encodeURIComponent(datasetId)}/sessions/${encodeURIComponent(sid)}`);
+    if (seq !== DRAWER_REQUEST_SEQ) return;
+    _VDS_SESSION_CACHE = lin;
+    GOLD_ACTIVE_SID = lin.session_id;
+    const hasGoldMsgs = (lin.gold_messages || []).length > 0;
+    const initMode = (defaultMode === "gold" && !hasGoldMsgs) ? "raw" : defaultMode;
+    _VDS_SESSION_MODE = initMode;
+    const [stTxt, stCls] = VDS_DRIFT_ZH[lin.snapshot_status] || [lin.snapshot_status, "t-done"];
+    const goldAsstCnt = (lin.gold_messages || []).filter(m => m.role === "assistant").length;
+    const rawAsstCnt = (lin.raw_messages || []).filter(m => m.role === "assistant").length;
+    const wu = lin.workspace_usage || {};
+    const sftToggleBtn = wu.in_workspace
+      ? `<button type="button" class="toggle-pill ${wu.sft_excluded ? "is-off" : ""}" title="控制下一版构建是否纳入本会话的 SFT（历史已打包 zip 不受影响）" onclick="toggleVdsSessionSft(${jsArg(datasetId)}, ${jsArg(lin.session_id)}, ${wu.sft_excluded ? "true" : "false"})"><i></i>${wu.sft_excluded ? "工作区 SFT 已停用（仅留 DPO）· 点此恢复" : "停用本会话 SFT（仅留 DPO）"}</button>`
+      : "";
+    const topBar = `<div class="panel" style="background:var(--ink-0);margin-bottom:14px"><div class="panel-b" style="padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px">
+        <div class="seg-ctl" id="vdsSessionModeBar">
+          <button type="button" data-sm="gold" class="${initMode === "gold" ? "on" : ""}" ${hasGoldMsgs ? "" : "disabled"} onclick="switchVdsSessionMode('gold')">黄金对话与最终回复 <span class="num">${fmt(goldAsstCnt)}</span></button>
+          <button type="button" data-sm="lineage" class="${initMode === "lineage" ? "on" : ""}" onclick="switchVdsSessionMode('lineage')">三态血缘 Diff <span class="num">${fmt((lin.steps || []).length)}</span></button>
+          <button type="button" data-sm="raw" class="${initMode === "raw" ? "on" : ""}" onclick="switchVdsSessionMode('raw')">原始对话 <span class="num">${fmt(rawAsstCnt)}</span></button>
+        </div>
+        ${sftToggleBtn}
+        <span class="grow"></span>
+        <span class="tag ${stCls}">${esc(stTxt)}</span>
+        ${lin.cas_files?.gold_file ? `<span class="cas-chip">gold:${esc(lin.cas_files.gold_file.slice(0, 10))}</span>` : ""}
+        ${lin.cas_files?.raw_file ? `<span class="cas-chip">raw:${esc(lin.cas_files.raw_file.slice(0, 10))}</span>` : ""}
+      </div></div>`;
+    $("#drawerSub").textContent = `${lin.meta?.project_group || ""} · ${lin.meta?.dominant_model || ""} · DPO ${fmt(lin.dpo_count || 0)} 对`;
+    $("#drawerBody").innerHTML = `${topBar}<div id="vdsDrawerLineageBody"></div>`;
+    switchVdsSessionMode(initMode);
+    if (wu.in_workspace) {
+      RAW_DRAWER.sid = lin.session_id;
+      RAW_DRAWER.kind = "gold";
+      RAW_DRAWER.adopted = true;
+      renderDrawerFoot("gold", lin.session_id, {});
+    }
+  } catch (err) {
+    if (seq !== DRAWER_REQUEST_SEQ) return;
+    $("#drawerBody").innerHTML = `<div class="error-box">获取快照异常：${esc(err.message || err)}</div>`;
+  }
+}
+
+async function toggleVdsSessionSft(datasetId, sid, currentlyExcluded) {
+  const nextAction = currentlyExcluded ? "auto" : "exclude";
+  const reason = currentlyExcluded
+    ? "恢复本会话 SFT 纳入工作区草稿"
+    : "停用本会话全部 SFT，仅保留其 DPO 偏好对";
+  try {
+    await api("/api/dataset/draft/scopes", {
+      method: "PUT",
+      body: JSON.stringify({ updates: [{ scope: "session_sft", id: sid, action: nextAction, reason }] }),
+    });
+    toast(currentlyExcluded ? "已在工作区恢复该会话 SFT（已记入账本）" : "已在工作区停用该会话 SFT、仅留 DPO（下次构建打包生效）", "ok");
+    await openDatasetSessionDrawer(datasetId, sid, _VDS_SESSION_MODE);
+    if (STATE.tab === "overview") await loadOverview();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+}
+
+function openVirtualTrainSampleDrawer(idx) {
+  const row = (window._VDS_LAST_TRAIN_ROWS || [])[idx];
+  if (!row) return;
+  openDrawer(`冻结训练样本 · ${row.kind.toUpperCase()}`, `${row.sample_id} · ${row.split.toUpperCase()}`);
+  setDrawerFoot("");
+  const raw = row.raw_row || {};
+  if (row.kind === "dpo") {
+    $("#drawerBody").innerHTML = renderGoldSampleDetail(raw, "dpo");
+  } else {
+    $("#drawerBody").innerHTML = renderGoldSampleDetail(raw, "sft");
+  }
 }
 
 function renderEvalDiffBlock(diff) {
@@ -2598,7 +3014,9 @@ async function collectChosen(analyze) {
     watchJob(job_id);
   } catch (e) { toast(e.message, "err"); }
 }
-async function loadCollect() {
+async function loadCollect(hostSel = "#collectDrawerHost") {
+  const host = $(hostSel);
+  if (!host) return;
   const src = STATE.raw.pickSource || "pi";
   const q = STATE.raw.pickQ || "";
   const filt = STATE.raw.pickFilter || "";
@@ -2606,7 +3024,7 @@ async function loadCollect() {
   const ids = new Set(STATE.raw.pickIds || []);
   const rows = filterPickRows(d.sessions || [], filt);
   const selection = ids.size ? `已选 ${ids.size} 条，一次最多 12 条` : "勾选会话后可批量采集，一次最多 12 条";
-  $("#view-raw").innerHTML = `
+  host.innerHTML = `
     <div class="panel workspace-panel">
       <div class="toolbar">
         <div class="seg-ctl" id="pickSource" aria-label="会话来源">
@@ -2615,7 +3033,6 @@ async function loadCollect() {
         </div>
         <div class="filter-search"><input type="text" id="pickSearch" placeholder="搜索标题、项目或编号，回车确认" value="${esc(q)}"></div>
         <span class="grow"></span>
-        <button id="pickBack" class="ghost">返回原始库</button>
       </div>
       <div class="workspace-summary"><span>源目录 <b class="num">${fmt(d.total)}</b> 条</span><span>已加入原始库 <b class="num">${fmt(d.adopted||0)}</b> 条</span>${filt ? `<span>当前显示 <b class="num">${fmt(rows.length)}</b> 条</span>` : ""}</div>
     </div>
@@ -2644,11 +3061,10 @@ async function loadCollect() {
     STATE.raw.pickOn = "";
     STATE.raw.pickFilter = "";
     STATE.raw.pickOpen = [];
-    loadCollect();
+    loadCollect(hostSel);
   });
-  $$("#pickFilter button").forEach(b => b.onclick = () => { STATE.raw.pickFilter = b.dataset.v; loadCollect(); });
-  $("#pickSearch").onkeydown = e => { if (e.key === "Enter") { STATE.raw.pickQ = e.target.value; loadCollect(); } };
-  $("#pickBack").onclick = () => { STATE.raw.mode = "library"; loadRaw(); };
+  $$("#pickFilter button").forEach(b => b.onclick = () => { STATE.raw.pickFilter = b.dataset.v; loadCollect(hostSel); });
+  $("#pickSearch").onkeydown = e => { if (e.key === "Enter") { STATE.raw.pickQ = e.target.value; loadCollect(hostSel); } };
   $("#pickIngest").onclick = () => collectChosen(false);
   $("#pickGo").onclick = () => collectChosen(true);
   bindPickGroups();
@@ -2662,132 +3078,12 @@ async function loadCollect() {
   });
   if (STATE.raw.pickOn && rows.some(s => s.id === STATE.raw.pickOn)) openPickPreview(STATE.raw.pickOn);
 }
-async function analyzeSession(sid) {
-  const inDrawer = $("#drawer").classList.contains("open") && RAW_DRAWER.sid === sid;
-  startAnalyzeJob(sid, inDrawer);
-}
-async function loadRaw() {
-  if (STATE.raw.mode === "pick") return loadCollect();
-  const f = STATE.raw;
-  const query = new URLSearchParams({project:f.project||"", model:f.model||"", adopted:f.adopted||"", q:f.q||""});
-  const d = await api(`/api/raw/sessions?${query}`);
-  if (!STATE.overview) await refreshMeta().catch(() => {});
-  const projects = [...new Set((STATE.overview?.projects||[]).map(p=>p.project))];
-  const aud = d.audit || {}, sk = aud.skipped || {};
-  $("#view-raw").innerHTML = `
-    <div class="metric-strip">
-      <div class="metric"><span class="metric-label">源目录会话</span><b class="metric-value">${fmt(sum(aud.folder_stats||{}))}</b><span class="metric-note">扫描到的全部会话</span></div>
-      <div class="metric"><span class="metric-label">进入原始库</span><b class="metric-value">${fmt(d.pool ?? d.total)}</b><span class="metric-note">符合工作区准入规则</span></div>
-      <div class="metric"><span class="metric-label">已分析</span><b class="metric-value">${fmt(d.adopted||0)}</b><span class="metric-note">已生成黄金与 DPO</span></div>
-      <div class="metric accent"><span class="metric-label">待分析</span><b class="metric-value">${fmt(Math.max(0, (d.pool ?? d.total) - (d.adopted||0)))}</b><span class="metric-note">可单条分析或采集时分析</span></div>
-    </div>
-    ${aud.replay_mode ? `<div class="banner">源会话目录当前不可达，正在使用 <span class="mono">01_raw</span> 不可变副本重放。可以重新分析已有会话，但不会采集新会话。</div>` : ""}
-    <div class="panel workspace-panel">
-      <div class="panel-h"><h3>原始会话</h3><span class="hint">点击会话查看对话与回合清洗；分析操作在抽屉底部</span><span class="grow"></span><button id="rawPick" class="primary">采集会话</button></div>
-      <div class="toolbar">
-        <select id="rawAdopted" aria-label="按分析状态筛选"><option value="">全部状态</option><option value="yes" ${f.adopted==="yes"?"selected":""}>已分析</option><option value="no" ${f.adopted==="no"?"selected":""}>未分析</option></select>
-        <select id="rawProject" aria-label="按项目筛选"><option value="">全部项目</option>
-          ${projects.map(p=>`<option value="${esc(p)}" ${f.project===p?"selected":""}>${esc(p)}</option>`).join("")}
-        </select>
-        <select id="rawModel" aria-label="按主导模型筛选"><option value="">全部模型</option>
-          ${(d.source_models||[]).map(m=>`<option value="${esc(m)}" ${f.model===m?"selected":""}>${esc(m)}</option>`).join("")}</select>
-        <div class="filter-search"><input type="text" id="rawSearch" placeholder="搜索会话、根任务或目录，回车确认" value="${esc(f.q)}"></div>
-        <span class="grow"></span><span class="count">当前 <b>${d.total}</b> 条</span>
-        <button id="rawReload" class="ghost">刷新</button>
-      </div>
-      <div class="scroll"><table><thead><tr>
-        <th>会话 / 项目</th><th>分析状态</th><th>主导模型</th><th class="n" title="助手步数 / 其中干净步数">步数 / 干净</th><th class="n" title="保留回合 / 总回合">回合</th><th>根任务</th><th></th>
-      </tr></thead><tbody>
-      ${d.sessions.map(s => `<tr class="clickable" data-sid="${esc(s.session_id)}" tabindex="0">
-        <td><div class="table-session"><span class="sid">${esc(s.session_id.slice(0,8))}${s.origin==="cursor"?` <span class="chip">Cursor</span>`:""}</span><span class="session-sub" title="${esc(s.project_group||"")}">${esc(s.project_group||"未分组")}</span></div></td>
-        <td><div class="status-stack">${adoptCell(s)}</div></td>
-        <td class="muted" style="font-size:12px;white-space:nowrap" title="${esc(Object.entries(s.models||{}).map(([m,c])=>`${m}：${c} 步`).join("\n"))}">${(() => {
-          const ms = Object.entries(s.models||{}).sort((a,b) => b[1]-a[1]);
-          return ms.length ? `${esc(short(ms[0][0], 20))}${ms.length > 1 ? ` <span class="faint">+${ms.length-1}</span>` : ""}` : '<span class="faint">–</span>';
-        })()}</td>
-        <td class="n">${fmt(s.stats?.assistant_steps)}<span class="faint"> / ${fmt(s.stats?.clean_steps)}</span></td>
-        <td class="n">${s.stats?.turns_kept ?? "–"}<span class="faint"> / ${s.stats?.turns_total ?? "–"}</span></td>
-        <td class="muted"><div class="clip">${esc(short(s.stats?.root_prompt, 140))}</div></td>
-        <td class="table-action"><button class="slim" data-analyze="${esc(s.session_id)}">${s.adopted ? "重新分析" : "分析"}</button></td>
-      </tr>`).join("") || emptyRow(7, f.adopted || f.model || f.project || f.q ? "没有符合当前筛选的会话" : "原始库还没有会话。点击右上角「采集会话」开始。")}
-      </tbody></table></div>
-    </div>`;
-  $("#rawAdopted").onchange = e => { STATE.raw.adopted = e.target.value; loadRaw(); };
-  $("#rawProject").onchange = e => { STATE.raw.project = e.target.value; loadRaw(); };
-  $("#rawModel").onchange = e => { STATE.raw.model = e.target.value; loadRaw(); };
-  $("#rawReload").onclick = loadRaw;
-  $("#rawPick").onclick = () => { STATE.raw.mode = "pick"; loadCollect(); };
-  $("#rawSearch").onkeydown = e => { if (e.key === "Enter") { STATE.raw.q = e.target.value; loadRaw(); } };
-  $$("#view-raw [data-analyze]").forEach(b => b.onclick = e => { e.stopPropagation(); analyzeSession(b.dataset.analyze); });
-  bindRows("#view-raw", tr => openRaw(tr.dataset.sid));
-}
 
 function bindRows(scope, fn) {
   $$(scope + " tr.clickable").forEach(tr => {
     tr.onclick = e => { if (e.target.closest("button")) return; fn(tr); };
     tr.onkeydown = e => { if (e.key === "Enter" && e.target === tr) fn(tr); };
   });
-}
-
-async function openRaw(sid) {
-  RAW_DRAWER.sid = sid;
-  RAW_DRAWER.kind = "raw";
-  openDrawer(`原始会话 ${sid.slice(0,8)}`, "stage1 视图，已应用回合过滤");
-  const seq = DRAWER_REQUEST_SEQ;
-  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
-  let d;
-  try {
-    d = await api(`/api/raw/session/${sid}`);
-  } catch (err) {
-    if (seq !== DRAWER_REQUEST_SEQ) return;
-    $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
-    toast(String(err.message || err), "err");
-    return;
-  }
-  if (seq !== DRAWER_REQUEST_SEQ) return;
-  const meta = d.meta || {}, st = meta.stats || {};
-  RAW_DRAWER.label = meta.label || "pending";
-  $("#drawerSub").innerHTML = `<span class="faint">${esc(meta.project_group || "未分组")}</span>`;
-  $("#drawerBody").innerHTML = `
-    <div class="panel"><div class="panel-h"><h3>会话信息</h3><span class="grow"></span><button type="button" class="ghost slim" onclick="openSessionLineageDrawer(${jsArg(sid)})">查看三态血缘与审计 →</button></div><div class="panel-b kv">
-      <span class="k">会话 ID</span><span class="mono">${esc(sid)}</span>
-      <span class="k">项目</span><span class="mono">${esc(meta.project_group)}</span>
-      <span class="k">工作目录</span><span class="path">${esc(meta.cwd)}</span>
-      <span class="k">模型</span><span class="row" style="gap:6px">${Object.entries(meta.models||{}).map(([m,c])=>`<span class="chip">${esc(m)} <b>${fmt(c)}</b></span>`).join("") || "–"}</span>
-      <span class="k">步数</span><span><span class="num">${fmt(st.assistant_steps)}</span> 步，其中干净 <span class="num">${fmt(st.clean_steps)}</span>，质量均分 <span class="num">${fmt(st.quality_avg)}</span></span>
-      <span class="k">回合</span><span>保留 <span class="num">${st.turns_kept}</span> / 共 <span class="num">${st.turns_total}</span>
-        ${Object.entries(st.dropped||{}).map(([k,v])=>`<span class="chip" style="margin-left:6px">丢弃 ${esc(k)} <b>${fmt(v)}</b></span>`).join("")}</span>
-      <span class="k">根任务</span><span>${esc(st.root_prompt || "未识别")}</span>
-      <span class="k">内化约束</span><span>${(st.constraints||[]).map(c=>`<div>${esc(c)}</div>`).join("") || "–"}</span>
-    </div></div>
-    <div class="panel"><div class="panel-h"><h3>逐回合清洗决策</h3><span class="hint">人工分类优先于模型与规则；修改后自动重算 Stage 1 → 3</span>
-      <span class="grow"></span><button class="ghost" onclick="classifyOne('${sid}')">让模型重新分类</button>
-      <button class="ghost" onclick="resetTurns('${sid}')">清除人工覆盖</button></div><div class="panel-b">
-      <div class="turn-editor">${(d.turns||[]).map(t => {
-        const action = t.action || (t.dropped ? "dropped" : t.kind==="continuation"||t.kind==="correction" ? "folded" : "kept");
-        const actionZh = action==="dropped" ? "已剥离" : action==="folded"||action==="internalized" ? "已折叠" : "保留";
-        const cls = action==="dropped" ? "dropped" : action==="folded"||action==="internalized" ? "folded" : "";
-        const ac = action==="dropped" ? "drop" : action==="folded"||action==="internalized" ? "fold" : "keep";
-        return `<div class="turn-edit ${cls}" id="turn-edit-${t.turn_index}">
-          <span class="turn-no">#${t.turn_index}</span>
-          <div><div class="turn-text">${esc(t.text || t.text_preview || "")}</div>
-            <div class="turn-meta">${fmt(t.assistant_steps)} 个助手步骤 · ${esc(t.source==="manual"?"人工":t.source==="model"?"模型":"规则")} · ${esc(t.reason||"")}</div></div>
-          <select name="turn-kind-${t.turn_index}" aria-label="回合 #${t.turn_index} 分类" onchange="saveTurnKind('${sid}',${t.turn_index},this.value)">
-            ${[["root","根任务"],["task","实质任务"],["continuation","续接折叠"],["correction","纠偏内化"],["setup","环境准备"],["noise","噪音"]]
-              .map(([v,n])=>`<option value="${v}" ${t.kind===v?"selected":""}>${n}</option>`).join("")}
-          </select>
-          <span class="turn-action ${ac}">${actionZh}${t.popped_await_msg?" · 去掉等待语":""}</span>
-        </div>`;
-      }).join("") || `<div class="empty">没有可标注回合</div>`}</div>
-    </div></div>
-    ${renderMessages(d.messages||[], d.turns)}`;
-  let adopted = false;
-  try { await api(`/api/raw/session/${sid}/gold`); adopted = true; } catch { adopted = false; }
-  RAW_DRAWER.adopted = adopted;
-  RAW_DRAWER.projectGroup = meta.project_group || "";
-  RAW_DRAWER.label = meta.label || "pending";
-  $("#drawerSub").innerHTML = `<span class="faint">${esc(meta.project_group || "未分组")}</span>`;
-  renderDrawerFoot("raw", sid, meta);
 }
 
 function buildRawAnalyzeFootBody(sid) {
@@ -2825,8 +3121,8 @@ function renderSessionActionsFoot(kind, sid) {
       ${buildRawAnalyzeFootBody(sid)}
       ${!busy ? `<button type="button" class="primary slim" id="rawAnalyzeBtn">${analyzeLabel}</button>` : ""}
       ${kind === "gold"
-        ? `<button type="button" class="ghost slim" id="rawOpenRawBtn">原始数据</button><button type="button" class="ghost slim" id="drawerJsonBtn">标注 JSON</button>`
-        : RAW_DRAWER.adopted ? `<button type="button" class="ghost slim" id="rawViewGoldBtn">黄金数据</button>` : ""}
+        ? `<button type="button" class="ghost slim" id="drawerJsonBtn">快照 JSON</button>`
+        : RAW_DRAWER.adopted ? `<button type="button" class="ghost slim" id="rawViewGoldBtn">黄金对话</button>` : ""}
       ${!busy ? sessionDeleteButton(sid) : ""}
     </div>`;
 }
@@ -2887,29 +3183,14 @@ async function requestSessionDelete(sid) {
 }
 
 function onDrawerFootClick(e) {
-  const tb = e.target.closest("[data-draft-toggle]");
-  if (tb && tb.dataset.draftToggle) {
-    setDraftDecisions([{
-      sample_id: tb.dataset.draftToggle,
-      action: tb.dataset.draftDecision || "exclude",
-      reason: "控制台切换",
-    }]).catch(err => toast(err.message || String(err), "err"));
-    return;
-  }
   const db = e.target.closest("#sessionDeleteBtn");
   if (db && RAW_DRAWER.sid) { requestSessionDelete(RAW_DRAWER.sid); return; }
   const ab = e.target.closest("#rawAnalyzeBtn");
   if (ab && RAW_DRAWER.sid) { startAnalyzeJob(RAW_DRAWER.sid, true); return; }
   const gb = e.target.closest("#rawViewGoldBtn");
-  if (gb && RAW_DRAWER.sid) {
-    if (RAW_DRAWER.kind === "gold") return;
-    closeDrawer(); setTab("gold"); openGold(RAW_DRAWER.sid);
-    return;
-  }
-  const rb = e.target.closest("#rawOpenRawBtn");
-  if (rb && RAW_DRAWER.sid) { closeDrawer(); setTab("raw"); openRaw(RAW_DRAWER.sid); return; }
+  if (gb && _VDS_SESSION_CACHE) { switchVdsSessionMode("gold"); return; }
   const jb = e.target.closest("#drawerJsonBtn");
-  if (jb && STATE.drawerData) { showJson(STATE.drawerData.annotation); return; }
+  if (jb && (_VDS_SESSION_CACHE || STATE.drawerData)) { showJson(_VDS_SESSION_CACHE || STATE.drawerData); return; }
 }
 function paintSessionDrawerFoot() {
   if (!RAW_DRAWER.sid || !$("#drawer").classList.contains("open")) return;
@@ -2935,10 +3216,9 @@ async function startAnalyzeJob(sid, stayInDrawer = false) {
       stopRawAnalyzeTimer();
       if (j.status === "done") {
         RAW_DRAWER.adopted = true;
-        loadRaw().catch(() => {});
-        refreshMeta().catch(() => {});
+        if (STATE.tab === "overview") loadOverview().catch(() => {});
         if (RAW_DRAWER.sid === sid && $("#drawer").classList.contains("open")) {
-          openRaw(sid).catch(() => {});
+          openDatasetSessionDrawer(STATE.vds.selectedId || "workspace", sid, "gold").catch(() => {});
         }
       }
       if (!JOB_ACTIVE(j.status)) {
@@ -2959,32 +3239,8 @@ async function startAnalyzeJob(sid, stayInDrawer = false) {
     }
   } catch (e) { toast(e.message, "err"); }
 }
-async function saveTurnKind(sid, idx, kind) {
-  try {
-    toast(`正在按「${TURN_KIND_ZH[kind]||kind}」重算回合流…`);
-    await api(`/api/raw/session/${sid}/turns`, {method:"PUT", body:JSON.stringify({turns:{[idx]:{kind}},recompute_downstream:true})});
-    toast(`回合 #${idx} 已改为${TURN_KIND_ZH[kind]||kind}，下游已同步`, "ok");
-    openRaw(sid); refreshMeta().catch(()=>{});
-  } catch(e) { toast(e.message,"err"); }
-}
-async function resetTurns(sid) {
-  try {
-    await api(`/api/raw/session/${sid}/turns`, {method:"PUT", body:JSON.stringify({reset:true,recompute_downstream:true})});
-    toast("已清除人工覆盖并重算","ok"); openRaw(sid);
-  } catch(e) { toast(e.message,"err"); }
-}
-async function classifyOne(sid) {
-  try {
-    const {job_id}=await api(`/api/raw/session/${sid}/classify`,{method:"POST"});
-    toast("已提交模型回合分类","ok"); watchJob(job_id,()=>openRaw(sid));
-  } catch(e) { toast(e.message,"err"); }
-}
 
-/* ------------------------------ 黄金数据 / 人工复核 ------------------------------ */
-function effCtl(cur, counts) {
-  return `<div class="seg-ctl" id="goldEff">${[["","全部",counts.all],["queue","待复核",counts.queue],["pass","已通过",counts.pass],["block","不入库",counts.block],["unreviewed","未评审",counts.unreviewed]]
-    .map(([v,t,n]) => `<button data-v="${v}" class="${cur===v?"on":""}">${t}${n?` <span class="num">${n}</span>`:""}</button>`).join("")}</div>`;
-}
+/* ------------------------------ 血缘与差异计算 ------------------------------ */
 function lcsDiff(a, b) {
   const n = a.length, m = b.length;
   if (n * m > 250000) return null;
@@ -3123,203 +3379,17 @@ function cheapGist(a, b) {
   return "有改动";
 }
 
-function goldSessionCategory(s) {
-  if (s.usage_category) return s.usage_category;
-  if (s.dataset_excluded || s.sft_excluded || s.dpo_excluded) return "disabled";
-  const sp = (s.lineage && s.lineage.split) || s.split || "train";
-  return sp === "eval" ? "eval" : "train";
-}
+const GOLD_VIEW = {sid: "", tab: "gold", cache: {}, selected: null};
+const LINEAGE_STATE_ZH = {kept:"原样保留", rewritten:"改写压缩", pruned:"弯路剪枝", folded:"状态折叠", excluded:"应急排除"};
 
-const GOLD_CATEGORY_META = {
-  train:    { title: "训练（train）", sub: "正常纳入训练集", cls: "cat-train" },
-  eval:     { title: "评估（eval）",  sub: "留出用于验证集评估", cls: "cat-eval" },
-  disabled: { title: "已停用",        sub: "整会话停用或 SFT / DPO 已停用", cls: "cat-disabled" },
-};
-
-async function loadGold() {
-  const f = STATE.gold;
-  const query = new URLSearchParams({project:f.project||"", model:f.model||"", output:f.output||"", category:f.category||"", q:f.q||""});
-  const d = await api(`/api/gold/sessions?${query}`);
-  const rows = d.sessions;
-  const catCounts = d.category_counts || {};
-  if (!STATE.overview) await refreshMeta().catch(() => {});
-  const projects = [...new Set((STATE.overview?.projects||[]).map(p=>p.project))];
-  STATE.gold.ids = rows.map(s => s.session_id);
-  const groupedCounts = { train: 0, eval: 0, disabled: 0 };
-  for (const s of rows) {
-    const c = goldSessionCategory(s);
-    groupedCounts[c] = (groupedCounts[c] || 0) + 1;
-  }
-  let lastCat = "";
-  const renderGoldRow = s => {
-    const cat = goldSessionCategory(s);
-    let sepHtml = "";
-    if (cat !== lastCat) {
-      lastCat = cat;
-      const cm = GOLD_CATEGORY_META[cat] || GOLD_CATEGORY_META.train;
-      const cnt = groupedCounts[cat] || 0;
-      sepHtml = `<tr class="group-sep-row ${cm.cls}"><td colspan="6"><div class="group-sep-inner"><i class="group-dot"></i><span>${esc(cm.title)}</span><span class="chip">${fmt(cnt)} 条</span><span class="faint" style="font-weight:400">${esc(cm.sub)}</span></div></td></tr>`;
-    }
-    const lin = s.lineage || {};
-    const sftInto = lin.train_written
-      ? `<span class="num" style="color:var(--mint)">${fmt(lin.sft_windows)}</span> 个窗口${lin.sft_full ? " · 含完整轨迹" : ""}`
-      : `<span class="faint">尚未生成训练集</span>`;
-    const dpoInto = lin.train_written
-      ? `<span class="num">${fmt(lin.dpo_train)}</span> 对`
-      : `<span class="faint">尚未生成训练集</span>`;
-    const parts = lin.dpo_parts;
-    const cand = lin.dpo_candidates;
-    const partTxt = parts
-      ? `入集：剪枝 ${fmt(parts.pruned)} · 来源步 ${fmt(parts.negative)} · 复核 ${fmt(parts.review)}`
-        + (cand && ((cand.pruned||0)+(cand.negative||0)+(cand.review||0)) > ((parts.pruned||0)+(parts.negative||0)+(parts.review||0))
-          ? `（候选 ${fmt((cand.pruned||0)+(cand.negative||0)+(cand.review||0))}）` : "")
-      : "来源绑定当前会话";
-    const sessOff = !!s.dataset_excluded;
-    const sftOff = !sessOff && !!s.sft_excluded;
-    const dpoOff = !sessOff && !!s.dpo_excluded;
-    const sftBadge = sessOff
-      ? `<span class="usage-badge sess-off" title="整会话已停用"><i></i>整会话停用</span>`
-      : (sftOff ? `<span class="usage-badge sft-off" title="本会话 SFT 已停用，不进入训练集"><i></i>SFT 停用</span>` : "");
-    const dpoBadge = sessOff
-      ? `<span class="usage-badge sess-off" title="整会话已停用"><i></i>整会话停用</span>`
-      : (dpoOff ? `<span class="usage-badge dpo-off" title="本会话 DPO 已停用，不进入训练集"><i></i>DPO 停用</span>` : "");
-    return `${sepHtml}<tr class="clickable" data-sid="${esc(s.session_id)}" tabindex="0">
-    <td><div class="table-session"><span class="sid">${esc(s.session_id.slice(0,8))}</span><span class="session-sub" title="${esc(s.project_group||"")}">${esc(s.project_group||"未分组")}</span></div></td>
-    <td class="muted" style="font-size:12px">${esc(s.dominant_model || "未知")}</td>
-    <td><div class="col-dest${sftOff || sessOff ? " is-off" : ""}"><div class="table-progress"><span class="num">${fmt(lin.gold_steps)} 步</span><span class="arrow">→</span>${sftInto}</div>${sftBadge}</div></td>
-    <td><div class="col-dest${dpoOff || sessOff ? " is-off" : ""}"><div class="table-progress"><span class="num">${fmt(lin.dpo_made)} 对</span><span class="arrow">→</span>${dpoInto}</div><div class="table-detail">${esc(partTxt)}</div>${dpoBadge}</div></td>
-    <td><select data-gold-split="${esc(s.session_id)}" aria-label="训练切分">
-      <option value="train" ${lin.split==="train"?"selected":""}>train</option>
-      <option value="eval" ${lin.split==="eval"?"selected":""}>eval</option></select>
-      ${sessOff && s.exclusion_scope === "project" ? `<span class="usage-badge sess-off" style="margin-left:6px" title="项目层停用"><i></i>项目停用</span>` : ""}</td>
-    <td class="table-action">${s.dataset_excluded && s.exclusion_scope === "project"
-      ? `<span class="toggle-pill is-locked" title="项目已停用，请在训练数据页恢复项目"><i></i>项目停用</span>`
-      : `<button type="button" class="toggle-pill ${s.dataset_excluded ? "is-off" : ""}" data-gold-usage="${esc(s.session_id)}" data-gold-usage-action="${s.dataset_excluded ? "auto" : "exclude"}" title="${s.dataset_excluded ? "恢复使用该会话" : "标记不使用该会话（停用）"}"><i></i>${s.dataset_excluded ? "已停用 · 恢复" : "停用"}</button>`}
-      <button class="ghost slim" data-gold-open="${esc(s.session_id)}">查看血缘</button></td>
-  </tr>`;
-  };
-  $("#view-gold").innerHTML = `
-    <div class="panel workspace-panel">
-      <div class="panel-h"><h3>黄金会话</h3><span class="hint">按「训练 → 评估 → 已停用」分类排序；点击会话查看血缘与步级排除</span><span class="grow"></span><button class="ghost" onclick="jumpToTrain()">去训练数据</button></div>
-      <div class="toolbar">
-        <select id="goldCategory" aria-label="按类型筛选">
-          <option value="" ${!f.category?"selected":""}>全部类型</option>
-          <option value="train" ${f.category==="train"?"selected":""}>训练 train${catCounts.train != null ? ` (${catCounts.train})` : ""}</option>
-          <option value="eval" ${f.category==="eval"?"selected":""}>评估 eval${catCounts.eval != null ? ` (${catCounts.eval})` : ""}</option>
-          <option value="disabled" ${f.category==="disabled"?"selected":""}>已停用${catCounts.disabled != null ? ` (${catCounts.disabled})` : ""}</option>
-        </select>
-        <select id="goldOutput" aria-label="按训练产物筛选"><option value="">全部产物</option><option value="sft" ${f.output==="sft"?"selected":""}>有 SFT</option><option value="dpo" ${f.output==="dpo"?"selected":""}>有 DPO</option><option value="unwritten" ${f.output==="unwritten"?"selected":""}>尚未生成</option></select>
-        <select id="goldProject" aria-label="按项目筛选"><option value="">全部项目</option>
-          ${projects.map(p=>`<option value="${esc(p)}" ${f.project===p?"selected":""}>${esc(p)}</option>`).join("")}</select>
-        <select id="goldModel" aria-label="按主导模型筛选"><option value="">全部模型</option>
-          ${(d.source_models||[]).map(m=>`<option value="${esc(m)}" ${f.model===m?"selected":""}>${esc(m)}</option>`).join("")}</select>
-        <div class="filter-search"><input type="text" id="goldSearch" placeholder="搜索会话或根任务，回车确认" value="${esc(f.q)}"></div>
-        <span class="grow"></span>
-        <span class="count">当前 <b>${rows.length}</b>${rows.length !== d.total ? ` / ${d.total}` : ""} 条</span>
-        <button id="goldReload" class="ghost">刷新</button>
-      </div>
-      <div class="scroll"><table><thead><tr>
-        <th>会话 / 项目</th><th>主导模型</th><th>SFT 去向</th><th>DPO 去向</th><th>训练切分</th><th></th>
-      </tr></thead><tbody>
-      ${rows.map(renderGoldRow).join("") || emptyRow(6, f.category || f.output || f.model || f.project || f.q ? "没有符合当前筛选的黄金会话" : "还没有黄金数据。请先在原始数据页分析会话。")}
-      </tbody></table></div>
-    </div>`;
-  $("#goldCategory").onchange = e => { STATE.gold.category = e.target.value; loadGold(); };
-  $("#goldOutput").onchange = e => { STATE.gold.output = e.target.value; loadGold(); };
-  $("#goldProject").onchange = e => { STATE.gold.project = e.target.value; loadGold(); };
-  $("#goldModel").onchange = e => { STATE.gold.model = e.target.value; loadGold(); };
-  $("#goldSearch").onkeydown = e => { if (e.key==="Enter"){ STATE.gold.q = e.target.value; loadGold(); } };
-  $("#goldReload").onclick = loadGold;
-  $$("#view-gold [data-gold-open]").forEach(b => b.onclick = e => { e.stopPropagation(); openGold(b.dataset.goldOpen); });
-  $$("#view-gold [data-gold-usage]").forEach(b => b.onclick = e => {
-    e.stopPropagation();
-    goldSetUsage(b.dataset.goldUsage, b.dataset.goldUsageAction).catch(err => toast(err.message, "err"));
-  });
-  $$("#view-gold [data-gold-split]").forEach(sel => {
-    sel.onclick = e => e.stopPropagation();
-    sel.onchange = e => { e.stopPropagation(); goldSetSessionSplit(sel.dataset.goldSplit, sel.value).catch(err => toast(err.message, "err")); };
-  });
-  bindRows("#view-gold", tr => openGold(tr.dataset.sid));
-  if (STATE.pendingGold) {
-    const sid = STATE.pendingGold;
-    STATE.pendingGold = "";
-    openGold(sid);
-  }
-}
-
-async function goldSetUsage(sid, action) {
-  await api("/api/dataset/draft/scopes", {method: "PUT", body: JSON.stringify({
-    updates: [{scope: "session", id: sid, action, reason: action === "exclude" ? "黄金数据页标记不使用" : ""}],
-  })});
-  toast(action === "exclude" ? "已标记不使用，这条会话的切片不会进入训练数据" : "已恢复使用", "ok");
-  loadGold();
-  if (GOLD_VIEW.sid === sid) openGold(sid);
-  refreshMeta().catch(() => {});
-}
-async function goldSetKindUsage(sid, kind, action) {
-  const scope = kind === "dpo" ? "session_dpo" : "session_sft";
-  const label = kind === "dpo" ? "DPO" : "SFT";
-  await api("/api/dataset/draft/scopes", {method: "PUT", body: JSON.stringify({
-    updates: [{
-      scope, id: sid, action,
-      reason: action === "exclude" ? `黄金数据页停用本会话全部 ${label}` : "",
-    }],
-  })});
-  toast(action === "exclude" ? `已停用本会话全部 ${label}` : `已恢复本会话 ${label}`, "ok");
-  loadGold();
-  if (GOLD_VIEW.sid === sid) {
-    GOLD_VIEW.cache = {};
-    await openGold(sid);
-    if (kind === "sft" || kind === "dpo") setGoldView(kind);
-  }
-  refreshMeta().catch(() => {});
-}
-async function goldSetSampleDecision(sampleId, action, kind) {
-  if (!sampleId) return;
-  const sid = GOLD_VIEW.sid || STATE.drawerData?.record?.session_id;
-  await api("/api/dataset/draft/decisions", {method: "PUT", body: JSON.stringify({
-    decisions: [{
-      sample_id: sampleId,
-      action,
-      reason: action === "exclude" ? (kind === "dpo" ? "黄金页停用 DPO 偏好对" : "黄金页停用 SFT 窗口") : "",
-    }],
-  })});
-  toast(action === "exclude" ? "已停用该样本" : "已恢复该样本", "ok");
-  if (sid && GOLD_VIEW.sid === sid) {
-    const keepSelected = GOLD_VIEW.selected;
-    GOLD_VIEW.cache = {};
-    if (kind === "sft" || kind === "dpo") {
-      await loadGoldDataset(kind);
-      if (keepSelected != null && GOLD_VIEW.cache[kind]?.rows?.some(r => r.index === keepSelected)) {
-        selectGoldSample(kind, keepSelected);
-      }
-    }
-  }
-  loadGold();
-  refreshMeta().catch(() => {});
-}
-function goldKindExcluded(d, kind) {
-  if (!d) return false;
-  if (d.dataset_excluded) return true;
-  return kind === "dpo" ? !!d.dpo_excluded : !!d.sft_excluded;
-}
-function goldKindOwnExcluded(d, kind) {
-  if (!d || d.dataset_excluded) return false;
-  const scope = kind === "dpo" ? d.dpo_exclusion_scope : d.sft_exclusion_scope;
-  return (kind === "dpo" ? d.dpo_excluded : d.sft_excluded) && (scope === (kind === "dpo" ? "session_dpo" : "session_sft"));
-}
-async function goldSetSessionSplit(sid, split) {
-  await api("/api/dataset/draft/split", {method: "PUT", body: JSON.stringify({session_assignments: {[sid]: split}})});
-  toast(`会话已改为 ${split}，它的切片一并变更`, "ok");
-  loadGold();
-}
-async function goldSetStepGate(mid, step) {
-  const sid = STATE.drawerData?.record?.session_id || STATE.drawerData?.session_id || GOLD_ACTIVE_SID;
+async function goldSetStepGate(mid, step, explicitSid = "") {
+  const sid = explicitSid || _VDS_SESSION_CACHE?.session_id || STATE.drawerData?.record?.session_id || STATE.drawerData?.session_id || GOLD_ACTIVE_SID;
   if (!sid || !mid) return;
-  const items = (STATE.drawerData?.annotation?.human_review?.items) || {};
-  const msgObj = (STATE.drawerData?.record?.messages || []).find(m => m && m.id === mid)
-    || (GOLD_VIEW.cache.lineage?.steps || []).find(s => s && s.msg_id === mid);
-  const currentlyExcluded = Boolean(msgObj?.excluded || items[mid]?.step === "exclude");
+  const activeSteps = (_VDS_SESSION_CACHE?.session_id === sid ? _VDS_SESSION_CACHE.steps : null)
+    || (GOLD_VIEW.sid === sid ? GOLD_VIEW.cache.lineage?.steps : null)
+    || [];
+  const msgObj = activeSteps.find(s => s && s.msg_id === mid);
+  const currentlyExcluded = Boolean(msgObj?.excluded);
   const nextAction = step === "keep" ? "keep" : (currentlyExcluded ? "keep" : "exclude");
   try {
     await api(`/api/gold/session/${encodeURIComponent(sid)}/step-gate`, {
@@ -3327,132 +3397,19 @@ async function goldSetStepGate(mid, step) {
       body: JSON.stringify({ msg_id: mid, action: nextAction, reason: "" }),
     });
     toast(nextAction === "exclude" ? "已排除该步（生成训练集时不计入，已记入账本）" : "已取消排除并记入账本", "ok");
-    if (GOLD_VIEW.tab === "lineage" && GOLD_VIEW.sid === sid) {
-      delete GOLD_VIEW.cache.lineage;
-      await loadGoldLineage();
-    } else if (STATE.drawerData?.record) {
-      openGold(sid);
+    if (_VDS_SESSION_CACHE && _VDS_SESSION_CACHE.session_id === sid) {
+      await openDatasetSessionDrawer(_VDS_SESSION_CACHE.dataset_id || "workspace", sid, "lineage");
     } else {
-      openSessionLineageDrawer(sid);
+      await openSessionLineageDrawer(sid);
     }
-    refreshMeta().catch(() => {});
+    if (STATE.tab === "overview") loadOverview().catch(() => {});
   } catch (e) { toast(e.message, "err"); }
-}
-function renderGoldStepGate(messages, annotation) {
-  const items = (annotation?.human_review?.items) || {};
-  const asst = (messages || []).filter(m => m && m.role === "assistant" && m.id);
-  if (!asst.length) return "";
-  const rows = asst.map((m, i) => {
-    const excluded = Boolean(m.excluded || items[m.id]?.step === "exclude");
-    const hint = short(m.thinking || m.text || "", 72);
-    return `<tr>
-      <td class="n">${i + 1}</td>
-      <td class="mono faint">${esc(String(m.id).slice(0, 8))}</td>
-      <td class="muted">${esc(hint || "—")}</td>
-      <td>${excluded ? `<span class="lb no">已排除</span>` : `<span class="faint">保留</span>`}</td>
-      <td style="text-align:right"><button type="button" class="toggle-pill ${excluded ? "is-off" : ""}" data-gold-mid="${esc(m.id)}"><i></i>${excluded ? "已排除 · 恢复" : "排除此步"}</button></td>
-    </tr>`;
-  }).join("");
-  return `<details class="panel gold-gate"><summary class="panel-h"><h3>步级排除</h3>
-    <span class="hint">${asst.length} 步 · 排除后不进入 SFT，血缘仍保留</span></summary>
-    <div class="panel-b scroll" style="max-height:260px;padding-top:0"><table><thead><tr>
-      <th class="n">#</th><th>步</th><th>摘要</th><th>状态</th><th></th>
-    </tr></thead><tbody>${rows}</tbody></table></div></details>`;
-}
-
-const GOLD_VIEW = {sid: "", tab: "gold", cache: {}, selected: null};
-const LINEAGE_STATE_ZH = {kept:"原样保留", rewritten:"改写压缩", pruned:"弯路剪枝", folded:"状态折叠", excluded:"应急排除"};
-
-function renderGoldNav(d) {
-  const rec = d.record || {}, st = rec.stats || {}, lin = d.lineage || {};
-  const sftCount = lin.train_written ? fmt(lin.sft_windows) : "—";
-  const dpoCount = lin.train_written ? fmt(lin.dpo_train) : fmt(lin.dpo_made ?? (d.dpo || []).length);
-  const sftOff = goldKindExcluded(d, "sft");
-  const dpoOff = goldKindExcluded(d, "dpo");
-  const dpoLabel = lin.train_written ? "DPO 入集" : "DPO 候选";
-  const dpoUnit = lin.train_written ? "对" : "候选";
-  return `<div class="gold-view-nav" role="tablist" aria-label="黄金会话数据视图">
-    <button type="button" class="gold-view-tab on" data-gold-view="gold" role="tab" aria-selected="true">黄金会话 <span class="num">${fmt(lin.gold_steps ?? st.gold_steps)}</span><small>步</small></button>
-    <button type="button" class="gold-view-tab" data-gold-view="lineage" role="tab" aria-selected="false">三态血缘 Diff <span class="num">${fmt(lin.raw_steps ?? st.raw_steps)}</span><small>原步</small></button>
-    <button type="button" class="gold-view-tab" data-gold-view="sft" role="tab" aria-selected="false">SFT 样本 <span class="num">${sftCount}</span><small>窗口</small>${sftOff ? `<span class="chip" style="margin-left:4px">停用</span>` : ""}</button>
-    <button type="button" class="gold-view-tab" data-gold-view="dpo" role="tab" aria-selected="false">${dpoLabel} <span class="num">${dpoCount}</span><small>${dpoUnit}</small>${dpoOff ? `<span class="chip" style="margin-left:4px">停用</span>` : ""}</button>
-  </div>`;
-}
-
-function renderGoldMain(d) {
-  const rec = d.record || {}, st = rec.stats || {}, ann = d.annotation || {}, lin = d.lineage || {};
-  const mrep = ann.model_report || rec.model_report || null;
-  const verdictZh = {trainable:"可训练", needs_human:"需再看", discard:"不建议训练"};
-  return `<div class="gold-summary-line">
-      <span>原始 <b>${fmt(lin.raw_steps ?? st.raw_steps)}</b> 步</span><span>→</span><span>黄金 <b>${fmt(lin.gold_steps ?? st.gold_steps)}</b> 步</span>
-      <span>折叠 ${fmt(st.folded)} · 剪枝 ${fmt(st.pruned_detours)} · 思维链压缩 ${fmt(st.thinking_compressed)}</span>
-      ${lin.split ? `<span class="chip ${esc(lin.split)}">${esc(lin.split)}</span>` : ""}
-      <span title="${esc(st.root_prompt || "")}">根任务：${esc(short(st.root_prompt || "–", 120))}</span>
-    </div>
-    ${mrep ? `<details class="panel gold-quality"><summary class="panel-h"><h3>模型质量报告</h3>
-      <span class="hint">${esc(mrep.model || "")} · ${fmt(mrep.audited_steps)}/${fmt(mrep.total_steps)} 步 · 置信度 ${fmt(mrep.confidence)}</span><span class="grow"></span>
-      <span class="chip ${mrep.verdict === "trainable" ? "train" : mrep.verdict === "discard" ? "neg" : ""}">${esc(verdictZh[mrep.verdict] || mrep.verdict || "")}</span>
-    </summary><div class="panel-b quality-body">
-      <div class="muted" style="margin-bottom:10px">${esc(mrep.reason || "")}</div>
-      ${(mrep.problems || []).length ? `<div class="path-chips" style="margin-bottom:10px">${mrep.problems.map(x => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
-      ${(mrep.highlights || []).length ? `<div class="row" style="gap:6px;flex-wrap:wrap"><span class="faint" style="font-size:11.5px">高光步</span>
-        ${mrep.highlights.map(h => `<span class="chip" title="${esc(h.why)}">${esc(String(h.msg_id).slice(0, 8))} ×${h.weight}</span>`).join("")}</div>` : ""}
-    </div></details>` : ""}
-    ${renderGoldStepGate(rec.messages || [], ann)}
-    ${d.pruned?.length ? `<details class="panel gold-gate"><summary class="panel-h"><h3>剪掉的弯路</h3><span class="hint">${d.pruned.length} 处 · 已沉淀为 DPO</span></summary>
-      <div class="panel-b scroll" style="max-height:240px;padding-top:4px;padding-bottom:4px">
-      ${d.pruned.map(p => `<div class="pruned-item"><div class="row" style="gap:8px"><span class="lb prune">${esc(p.reason)}</span>
-        <span class="mono faint" style="font-size:11px">${esc(p.dropped_msg_id || "")}</span></div>
-        <div class="muted" style="white-space:pre-wrap;font-size:12.5px;margin-top:6px">${esc(short(p.rejected_thinking, 240))}</div></div>`).join("")}
-    </div></details>` : ""}
-    ${renderMessages(rec.messages || [])}`;
 }
 
 function bindGoldStepGates() {
   $$("#drawerBody [data-gold-mid]").forEach(btn => {
-    btn.onclick = () => goldSetStepGate(btn.getAttribute("data-gold-mid"), "exclude");
+    btn.onclick = () => goldSetStepGate(btn.getAttribute("data-gold-mid"), "exclude", btn.getAttribute("data-gold-sid") || "");
   });
-}
-
-function setGoldView(view) {
-  if (!["gold", "lineage", "sft", "dpo"].includes(view) || !STATE.drawerData?.record) return;
-  GOLD_VIEW.tab = view;
-  GOLD_VIEW.selected = null;
-  $$("#drawerBody [data-gold-view]").forEach(btn => {
-    const on = btn.dataset.goldView === view;
-    btn.classList.toggle("on", on);
-    btn.setAttribute("aria-selected", String(on));
-  });
-  if (view === "gold") {
-    $("#goldViewBody").innerHTML = renderGoldMain(STATE.drawerData);
-    bindGoldStepGates();
-  } else if (view === "lineage") {
-    loadGoldLineage();
-  } else {
-    loadGoldDataset(view);
-  }
-}
-
-async function loadGoldLineage() {
-  const sid = GOLD_VIEW.sid || STATE.drawerData?.record?.session_id || STATE.drawerData?.session_id;
-  if (!sid) return;
-  const body = $("#goldViewBody");
-  if (!body) return;
-  if (GOLD_VIEW.cache.lineage) {
-    paintGoldLineage(GOLD_VIEW.cache.lineage);
-    return;
-  }
-  body.innerHTML = `<div class="loading">读取三态血缘（Raw → Gold → SFT/DPO）…</div>`;
-  try {
-    const linData = await api(`/api/sessions/${encodeURIComponent(sid)}/lineage`);
-    if (GOLD_VIEW.sid !== sid || GOLD_VIEW.tab !== "lineage") return;
-    GOLD_VIEW.cache.lineage = linData;
-    paintGoldLineage(linData);
-  } catch (e) {
-    if (GOLD_VIEW.sid === sid && GOLD_VIEW.tab === "lineage") {
-      body.innerHTML = `<div class="error-box"><b>读取血缘失败</b><div class="muted" style="margin:6px 0 12px">${esc(e.message || e)}</div><button onclick="setGoldView('lineage')">重试</button></div>`;
-    }
-  }
 }
 
 function renderLineageHtml(linData) {
@@ -3491,13 +3448,14 @@ function renderLineageHtml(linData) {
       ${shown.length ? shown.map(s => {
         const callsTxt = (s.tool_calls || []).map(c => `${c.name}${c.args_preview ? `(${short(c.args_preview, 40)})` : ""}`).join(", ") || "STOP (无工具)";
         const gist = short(oneLine(s.gold_thinking || s.raw_thinking || s.text || "（无文本）"), 110);
-        const gateBtn = s.in_gold ? `<button type="button" class="toggle-pill ${s.excluded ? "is-off" : ""}" data-gold-mid="${esc(s.msg_id)}" onclick="event.stopPropagation()"><i></i>${s.excluded ? "已排除 · 恢复" : "排除此步"}</button>` : "";
+        const gateBtn = (!linData.readonly && s.in_gold) ? `<button type="button" class="toggle-pill ${s.excluded ? "is-off" : ""}" data-gold-sid="${esc(linData.session_id || '')}" data-gold-mid="${esc(s.msg_id)}" onclick="event.stopPropagation()"><i></i>${s.excluded ? "已排除 · 恢复" : "排除此步"}</button>` : "";
         return `<details class="lineage-step" data-ls-mid="${esc(s.msg_id)}">
           <summary>
             <span class="num faint">#${s.step_index + 1}</span>
             <span class="ls-state ls-${esc(s.state)}">${esc(LINEAGE_STATE_ZH[s.state] || s.state)}</span>
             <span class="mono faint">${esc(String(s.msg_id).slice(0, 8))}</span>
             ${s.highlight_weight ? `<span class="chip model">×${esc(s.highlight_weight)}</span>` : ""}
+            ${s.text && String(s.text).trim() ? `<span class="chip train">含对外回复</span>` : ""}
             <span class="muted" style="flex:1;min-width:180px">${esc(gist)}</span>
             <span class="mono faint" style="font-size:11px">${esc(short(callsTxt, 68))}</span>
             ${gateBtn}
@@ -3541,13 +3499,18 @@ function bindLineageEvents(linData, containerSelector = "#goldViewBody") {
       if (!slot || slot.dataset.rendered) return;
       const st = stepMap[det.dataset.lsMid];
       if (!st) return;
+      let thinkHtml = "";
       if (st.state === "pruned") {
-        slot.innerHTML = `<div class="diff-cap">被剪除的原始思考 (Rejected Thinking)</div><pre class="diff">${esc(st.raw_thinking || st.text || "（空）")}</pre>`;
+        thinkHtml = `<div class="diff-cap">被剪除的原始思考 (Rejected Thinking)</div><pre class="diff">${esc(st.raw_thinking || st.text || "（空）")}</pre>`;
       } else if (st.changed || (st.raw_thinking && st.gold_thinking && st.raw_thinking !== st.gold_thinking)) {
-        slot.innerHTML = buildDiff(st.raw_thinking || "", st.gold_thinking || "", ["原始思考 (Raw)", "黄金思考 (Gold)"]).html;
+        thinkHtml = buildDiff(st.raw_thinking || "", st.gold_thinking || "", ["原始思考 (Raw)", "黄金思考 (Gold)"]).html;
       } else {
-        slot.innerHTML = `<pre class="diff">${esc(st.gold_thinking || st.raw_thinking || st.text || "（无思考内容）")}</pre>`;
+        thinkHtml = `<pre class="diff">${esc(st.gold_thinking || st.raw_thinking || "（无思考内容）")}</pre>`;
       }
+      const replyHtml = (st.text && String(st.text).trim())
+        ? `<div style="margin-top:10px"><div class="diff-cap">助手对外回复内容 (${chars(String(st.text).length)})</div><div class="bubble reply" style="margin:6px 0 0"><div class="md">${md(st.text)}</div></div></div>`
+        : "";
+      slot.innerHTML = thinkHtml + replyHtml;
       slot.dataset.rendered = "1";
     };
   });
@@ -3579,7 +3542,7 @@ async function openSessionLineageDrawer(sid) {
     $("#drawerBody").innerHTML = `<div id="goldViewBody">${renderLineageHtml(linData)}</div>`;
     bindLineageEvents(linData, "#goldViewBody");
     if (linData.meta?.has_gold) {
-      setDrawerFoot(`<button type="button" onclick="openGold('${esc(fullSid)}')">打开完整黄金会话视图</button>`);
+      setDrawerFoot(`<button type="button" onclick="openDatasetSessionDrawer(STATE.vds.selectedId||'workspace','${esc(fullSid)}','gold')">查看黄金对话与最终回复</button>`);
     }
   } catch (e) {
     if (seq !== DRAWER_REQUEST_SEQ) return;
@@ -3588,192 +3551,15 @@ async function openSessionLineageDrawer(sid) {
   }
 }
 
-function goldDatasetName(kind) {
-  return kind === "sft" ? "sft_step_windows_sharegpt.jsonl" : "dpo_preference_pairs.jsonl";
-}
-
-function goldPairPreview(row) {
-  const text = v => v == null ? "" : typeof v === "string" ? v : v.value || "";
-  const c = splitThinkBody(text(row.chosen)), r = splitThinkBody(text(row.rejected));
-  return {
-    chosen_think: short(thinkDisplayText(c), 220),
-    rejected_think: short(thinkDisplayText(r), 220),
-    chosen_len: text(row.chosen).length,
-    rejected_len: text(row.rejected).length,
-  };
-}
-
-async function loadGoldDataset(kind) {
-  const d = STATE.drawerData;
-  const sid = d?.record?.session_id;
-  if (!sid) return;
-  const body = $("#goldViewBody");
-  const lin = d.lineage || {};
-  if (kind === "sft" && !lin.train_written) {
-    body.innerHTML = `<div class="gold-dataset-empty"><div><h3>SFT 窗口要等构建后才有</h3><p>黄金会话正文在「黄金会话」标签。点下方会先评估待复核 DPO，再合成训练集；完成后可在此逐条看窗口。</p><button class="primary" onclick="runStage('stage3',false)">评估并构建训练集</button></div></div>`;
-    return;
-  }
-  if (GOLD_VIEW.cache[kind]) { paintGoldDataset(kind); return; }
-  body.innerHTML = `<div class="loading">读取${kind === "sft" ? " SFT 样本" : " DPO 偏好对"}…</div>`;
-  try {
-    let rows, total;
-    if (kind === "dpo" && !lin.train_written) {
-      const kindOff = goldKindExcluded(d, "dpo");
-      const scope = d.dataset_excluded
-        ? (d.exclusion_scope || "session")
-        : (d.dpo_exclusion_scope || "session_dpo");
-      rows = (d.dpo || []).map((row, index) => {
-        const sample_id = row.sample_id || `dpo::${sid}::${index}`;
-        return {
-          index, sample_id,
-          metadata: row.metadata || {session_id: sid}, preview: goldPairPreview(row), _full: row,
-          decision: kindOff ? "exclude" : "auto",
-          decision_scope: kindOff ? scope : "",
-          included: !kindOff,
-        };
-      });
-      total = rows.length;
-    } else {
-      const name = goldDatasetName(kind);
-      const result = await api(`/api/train/dataset/${name}?offset=0&limit=500&q=${encodeURIComponent(sid)}`);
-      rows = result.rows || [];
-      total = result.total || 0;
-    }
-    if (GOLD_VIEW.sid !== sid || GOLD_VIEW.tab !== kind) return;
-    GOLD_VIEW.cache[kind] = {rows, total, fileName: goldDatasetName(kind)};
-    const countEl = document.querySelector(`[data-gold-view="${kind}"] .num`);
-    if (countEl) countEl.textContent = fmt(total);
-    paintGoldDataset(kind);
-  } catch (e) {
-    if (GOLD_VIEW.sid === sid && GOLD_VIEW.tab === kind) {
-      body.innerHTML = `<div class="error-box"><b>读取失败</b><div class="muted" style="margin:6px 0 12px">${esc(e.message)}</div><button onclick="setGoldView('${kind}')">重试</button></div>`;
-    }
-  }
-}
-
-function paintGoldDataset(kind) {
-  const data = GOLD_VIEW.cache[kind];
-  const body = $("#goldViewBody");
-  if (!data || !body) return;
-  const d = STATE.drawerData || {};
-  const lin = d.lineage || {};
-  const dpoCand = kind === "dpo" && !lin.train_written;
-  const title = kind === "sft" ? "SFT 单步窗口" : (dpoCand ? "DPO 候选（尚未入集）" : "DPO 入集偏好对");
-  const sid = GOLD_VIEW.sid || d.record?.session_id || "";
-  const kindOff = goldKindExcluded(d, kind);
-  const ownKind = goldKindOwnExcluded(d, kind);
-  const sessOff = !!d.dataset_excluded;
-  const kindLabel = kind === "dpo" ? "DPO" : "SFT";
-  let kindBtn = "";
-  if (sessOff) {
-    kindBtn = `<span class="toggle-pill is-locked"><i></i>${d.exclusion_scope === "project" ? "项目已停用" : "会话已整份停用"}</span>`;
-  } else if (ownKind) {
-    kindBtn = `<button type="button" class="toggle-pill is-off" data-gold-kind-usage="${esc(kind)}" data-gold-kind-action="auto" title="恢复本会话${kind === "dpo" ? " DPO" : " SFT"}"><i></i>已停用 · 恢复全部</button>`;
-  } else if (!kindOff) {
-    kindBtn = `<button type="button" class="toggle-pill" data-gold-kind-usage="${esc(kind)}" data-gold-kind-action="exclude" title="停用本会话全部${kind === "dpo" ? " DPO" : " SFT"}"><i></i>全部停用</button>`;
-  } else {
-    kindBtn = `<span class="toggle-pill is-locked"><i></i>上层已停用</span>`;
-  }
-  if (!data.rows.length) {
-    body.innerHTML = `<div class="gold-dataset-empty"><div><h3>没有可显示的${title}</h3><p>${kind === "sft" ? "当前会话未产生 SFT 窗口，可查看质量报告和步级排除原因。" : "当前会话没有 DPO 偏好对。"}</p>${kindBtn ? `<div style="margin-top:10px">${kindBtn}</div>` : ""}</div></div>`;
-    $$("#goldViewBody [data-gold-kind-usage]").forEach(btn => {
-      btn.onclick = () => goldSetKindUsage(sid, btn.dataset.goldKindUsage, btn.dataset.goldKindAction).catch(e => toast(e.message, "err"));
-    });
-    return;
-  }
-  const candNote = dpoCand
-    ? `<div class="note" style="margin:0 0 10px">以下是 Stage 2 留下的候选偏好对，尚未写入训练集。需要入集时点「评估并构建训练集」（会先评估再合成）。</div>
-       <div style="margin-bottom:12px"><button type="button" class="primary slim" onclick="runStage('stage3',false)">评估并构建训练集</button></div>`
-    : "";
-  const sortedRows = data.rows.map((row, origIdx) => ({row, origIdx})).sort((a, b) => {
-    const aOff = (a.row.decision === "exclude" || a.row.included === false) ? 1 : 0;
-    const bOff = (b.row.decision === "exclude" || b.row.included === false) ? 1 : 0;
-    return aOff - bOff || a.origIdx - b.origIdx;
-  });
-  body.innerHTML = `${candNote}<div class="gold-dataset">
-    <aside class="gold-sample-list">
-      <div class="gold-sample-list-h"><b>${title}</b><span>${fmt(data.total)} 条</span><span class="grow"></span>${kindBtn}</div>
-      <div class="gold-sample-scroll">${sortedRows.map(({row, origIdx}) => {
-        const p = row.preview || {}, m = row.metadata || {};
-        const gist = kind === "sft" ? (p.think || p.target || p.user || "无内容摘要") : (p.chosen_think || "无 chosen 摘要");
-        const sub = kind === "sft" ? `${m.stage || "未标阶段"} · 权重 ${fmt(m.sample_weight)}` : (DPO_SRC_ZH[m.source] || m.source || "偏好对");
-        const excluded = row.decision === "exclude" || row.included === false;
-        const scope = row.decision_scope || "";
-        const sampleScoped = excluded && (!scope || scope === "sample");
-        const layerNote = excluded && scope && scope !== "sample"
-          ? `<span class="sample-sub">在${scope === "project" ? "项目" : scope === "session" ? "会话" : scope === "session_sft" ? "会话 SFT" : scope === "session_dpo" ? "会话 DPO" : "上层"}停用</span>`
-          : "";
-        const toggle = (!kindOff && row.sample_id && (sampleScoped || !excluded))
-          ? `<span class="sample-toggle-slot"><button type="button" class="toggle-pill ${sampleScoped ? "is-off" : ""}" data-gold-sample-toggle="${esc(row.sample_id)}" data-gold-sample-action="${sampleScoped ? "auto" : "exclude"}" title="${sampleScoped ? "恢复该样本入集" : "停用该样本（不进入训练集）"}"><i></i>${sampleScoped ? "已停用 · 恢复" : "停用"}</button></span>`
-          : (excluded ? `<span class="sample-toggle-slot"><span class="toggle-pill is-locked" title="上层已停用"><i></i>已停用</span></span>` : "");
-        return `<div class="gold-sample-item-wrap ${excluded ? "off" : ""}" data-sample-wrap="${row.index}">
-          <button type="button" class="gold-sample-item" data-sample-index="${row.index}"><span class="sample-top"><span class="sample-no">#${origIdx + 1}</span><span class="chip ${m.split || ""}">${esc(m.split || "—")}</span></span><span class="sample-gist">${esc(short(gist, 150))}</span><span class="sample-sub">${esc(sub)}</span>${layerNote}</button>
-          ${toggle}
-        </div>`;
-      }).join("")}</div>
-    </aside>
-    <div class="gold-sample-detail" id="goldSampleDetail"><div class="gold-dataset-empty"><p>选择左侧样本查看完整内容</p></div></div>
-  </div>`;
-  $$("#goldViewBody [data-sample-index]").forEach(btn => {
-    btn.onclick = () => selectGoldSample(kind, Number(btn.dataset.sampleIndex));
-  });
-  $$("#goldViewBody [data-gold-kind-usage]").forEach(btn => {
-    btn.onclick = e => {
-      e.stopPropagation();
-      goldSetKindUsage(sid, btn.dataset.goldKindUsage, btn.dataset.goldKindAction).catch(err => toast(err.message, "err"));
-    };
-  });
-  $$("#goldViewBody [data-gold-sample-toggle]").forEach(btn => {
-    btn.onclick = e => {
-      e.stopPropagation();
-      goldSetSampleDecision(btn.dataset.goldSampleToggle, btn.dataset.goldSampleAction, kind).catch(err => toast(err.message, "err"));
-    };
-  });
-  selectGoldSample(kind, sortedRows[0].row.index);
-}
-
-async function selectGoldSample(kind, index) {
-  const data = GOLD_VIEW.cache[kind];
-  const row = data?.rows.find(x => x.index === index);
-  if (!row) return;
-  GOLD_VIEW.selected = index;
-  $$("#goldViewBody [data-sample-index]").forEach(btn => btn.classList.toggle("on", Number(btn.dataset.sampleIndex) === index));
-  $$("#goldViewBody [data-sample-wrap]").forEach(w => w.classList.toggle("on", Number(w.dataset.sampleWrap) === index));
-  const detail = $("#goldSampleDetail");
-  detail.innerHTML = `<div class="loading">读取样本…</div>`;
-  const sid = GOLD_VIEW.sid;
-  try {
-    const full = row._full || await api(`/api/train/dataset/${data.fileName}/${index}`);
-    if (GOLD_VIEW.sid !== sid || GOLD_VIEW.tab !== kind || GOLD_VIEW.selected !== index) return;
-    detail.innerHTML = renderGoldSampleDetail(full, kind);
-    $$("#goldSampleDetail [data-gold-sample-toggle]").forEach(btn => {
-      btn.onclick = e => {
-        e.stopPropagation();
-        goldSetSampleDecision(btn.dataset.goldSampleToggle, btn.dataset.goldSampleAction, kind).catch(err => toast(err.message, "err"));
-      };
-    });
-  } catch (e) { detail.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
-}
-
 function renderGoldSampleDetail(row, kind) {
-  const listRow = GOLD_VIEW.cache[kind]?.rows?.find(x => x.index === GOLD_VIEW.selected);
   const meta = row.metadata || {};
-  const sampleId = row.sample_id || listRow?.sample_id || meta.sample_id || "";
-  const d = STATE.drawerData || {};
-  const kindOff = goldKindExcluded(d, kind);
-  const excluded = listRow ? (listRow.decision === "exclude" || listRow.included === false) : false;
-  const scope = listRow?.decision_scope || "";
-  const sampleScoped = excluded && (!scope || scope === "sample");
-  const detailToggle = (!kindOff && sampleId && listRow && (sampleScoped || !excluded))
-    ? `<span class="grow"></span><button type="button" class="toggle-pill ${sampleScoped ? "is-off" : ""}" data-gold-sample-toggle="${esc(sampleId)}" data-gold-sample-action="${sampleScoped ? "auto" : "exclude"}"><i></i>${sampleScoped ? "已停用 · 恢复样本" : "停用该样本"}</button>`
-    : (excluded ? `<span class="grow"></span><span class="toggle-pill is-locked"><i></i>已停用</span>` : "");
+  const sampleId = row.sample_id || meta.sample_id || "";
   const head = `<div class="sample-meta-line">
     ${meta.stage ? `<span class="chip">${esc(PHASE.find(x => x[0] === meta.stage)?.[1] || meta.stage)}</span>` : ""}
     ${meta.source ? `<span class="chip">${esc(DPO_SRC_ZH[meta.source] || meta.source)}</span>` : ""}
     ${meta.split ? `<span class="chip ${esc(meta.split)}">${esc(meta.split)}</span>` : ""}
     ${meta.sample_weight != null ? `<span>权重 ${fmt(meta.sample_weight)}</span>` : ""}
     <span class="mono" title="${esc(sampleId)}">${esc(sampleId)}</span>
-    ${detailToggle}
   </div>`;
   if (kind === "dpo") {
     const pref = v => v == null ? "" : typeof v === "string" ? v : v.value || "";
@@ -3782,40 +3568,8 @@ function renderGoldSampleDetail(row, kind) {
       <div class="note" style="margin-bottom:12px">下方是触发时的上下文；Chosen / Rejected 见上方对照。</div>
       ${renderMessages(convToMsgs(row.conversations || row.messages))}`;
   }
-  return `${head}<div class="note" style="margin-bottom:12px">单步训练窗口：历史 thinking 已按规则剥离，最后一条助手步为训练目标。</div>
+  return `${head}<div class="note" style="margin-bottom:12px">单步训练窗口：最后一条助手步为训练目标。</div>
     ${renderMessages(convToMsgs(row.conversations || row.messages))}`;
-}
-
-async function openGold(sid) {
-  GOLD_ACTIVE_SID = sid;
-  RAW_DRAWER.sid = sid;
-  RAW_DRAWER.kind = "gold";
-  RAW_DRAWER.feedback = null;
-  openDrawer(`黄金会话 ${sid.slice(0, 8)}`, "");
-  const seq = DRAWER_REQUEST_SEQ;
-  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
-  let d;
-  try {
-    d = await api(`/api/gold/session/${sid}`);
-  } catch (err) {
-    if (seq !== DRAWER_REQUEST_SEQ) return;
-    $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
-    toast(String(err.message || err), "err");
-    return;
-  }
-  if (seq !== DRAWER_REQUEST_SEQ) return;
-  if (GOLD_ACTIVE_SID !== sid) return;
-  const rec = d.record;
-  RAW_DRAWER.label = rec.label || "pending";
-  RAW_DRAWER.projectGroup = rec.project_group || "";
-  STATE.drawerData = d;
-  Object.assign(GOLD_VIEW, {sid, tab: "gold", cache: {}, selected: null});
-  $("#drawerSub").innerHTML = `<span class="chip model">${esc(rec.dominant_model || "未知模型")}</span><span class="faint" style="margin-left:6px">${esc(rec.project_group || "未分组")}</span>`;
-  $("#drawerBody").innerHTML = `${renderGoldNav(d)}<div id="goldViewBody">${renderGoldMain(d)}</div>`;
-  $$("#drawerBody [data-gold-view]").forEach(btn => { btn.onclick = () => setGoldView(btn.dataset.goldView); });
-  bindGoldStepGates();
-  RAW_DRAWER.adopted = true;
-  renderDrawerFoot("gold", sid, { label: rec.label });
 }
 
 /* ------------------------------ 消息渲染 ------------------------------ */
@@ -4139,719 +3893,6 @@ function jumpTurn(ti) {
   else toast(`回合 #${ti} 在消息流中没有独立的提问，已被折叠进相邻回合或剥离`);
 }
 
-/* ------------------------------ 训练数据 ------------------------------ */
-function datasetKind(name) {
-  if (name.includes("dpo")) return "dpo";
-  if (name.includes("diagnostic")) return "diagnostic";
-  if (name.includes("trajectories")) return "trajectory";
-  return "sft";
-}
-const DS_KIND_ZH = {sft:"SFT 单步",trajectory:"完整轨迹",dpo:"DPO 偏好",diagnostic:"病态诊断"};
-const DRAFT_KIND_ZH = {sft:"SFT", trajectory:"轨迹", dpo:"DPO 偏好对", diagnostic:"诊断"};
-function trainRequestCurrent(request) {
-  return request.id === TRAIN_REQUEST_SEQ && STATE.train.workspace === request.workspace;
-}
-function replanNeedsSave(preview, current) {
-  if (Object.keys(preview.changes || {}).length) return true;
-  const plan = preview.split_plan || {};
-  const base = preview.base_plan || current || {};
-  if (Number(plan.eval_ratio) !== Number(base.eval_ratio)) return true;
-  if (Number(plan.seed) !== Number(base.seed)) return true;
-  return false;
-}
-function syncDraftSelection() {
-  const sel = new Set(STATE.train.selectedIds || []);
-  $$("#view-train [data-draft-row]").forEach(row => {
-    row.classList.toggle("on", sel.has(row.dataset.sampleId));
-  });
-}
-async function setDraftDecisions(updates) {
-  await api("/api/dataset/draft/decisions", {method:"PUT", body: JSON.stringify({decisions: updates})});
-  syncDraftSelection();
-  await loadTrainDraft();
-}
-function treeCountsText(c) {
-  c = c || {};
-  return `候选 ${fmt(c.candidates || 0)} · 纳入 ${fmt(c.included || 0)} · 停用 ${fmt(c.excluded || 0)} · 门控未过 ${fmt(c.gate_excluded || 0)}`;
-}
-/** 分组 → 会话 → 轨迹 → SFT/DPO：展开时若唯一子节点只有一行，继续向下展开。 */
-function treeSingletonChildKey(key) {
-  const groups = (STATE.train.treeData && STATE.train.treeData.groups) || [];
-  if (key.startsWith("g:")) {
-    const group = groups.find(g => g.key === key.slice(2));
-    const sessions = (group && group.sessions) || [];
-    return sessions.length === 1 ? "s:" + sessions[0].session_id : null;
-  }
-  if (key.startsWith("s:")) {
-    const sid = key.slice(2);
-    let session = null;
-    for (const g of groups) {
-      session = (g.sessions || []).find(n => n.session_id === sid) || null;
-      if (session) break;
-    }
-    const trajs = (session && session.trajectories) || [];
-    if (trajs.length !== 1) return null;
-    const tid = trajs[0].trajectory_id || (`traj::${sid}`);
-    return "t:" + tid;
-  }
-  if (key.startsWith("t:")) {
-    const tid = key.slice(2);
-    let traj = null;
-    let sid = "";
-    for (const g of groups) {
-      for (const n of g.sessions || []) {
-        const hit = (n.trajectories || []).find(tr => (tr.trajectory_id || (`traj::${n.session_id}`)) === tid);
-        if (hit) { traj = hit; sid = n.session_id; break; }
-      }
-      if (traj) break;
-    }
-    if (!traj) return null;
-    const kindsSrc = (traj.kinds && traj.kinds.length)
-      ? traj.kinds
-      : [
-          {kind: "sft", samples: (traj.samples || []).filter(r => r.kind === "sft")},
-          {kind: "dpo", samples: (traj.samples || []).filter(r => r.kind === "dpo")},
-        ];
-    if (kindsSrc.length !== 1) return null;
-    return "k:" + (traj.trajectory_id || (`traj::${sid}`)) + ":" + (kindsSrc[0].kind || "sft");
-  }
-  return null;
-}
-function treeSmartExpand(key) {
-  const tf = STATE.train;
-  if (!tf.expanded) tf.expanded = {};
-  let cur = key;
-  const seen = new Set();
-  while (cur && !seen.has(cur)) {
-    seen.add(cur);
-    tf.expanded[cur] = true;
-    cur = treeSingletonChildKey(cur);
-  }
-}
-function treeSampleDecisionBits(r) {
-  const scopeZh = {project: "项目层", session: "会话层", sample: "样本层"};
-  const p = r.preview || {};
-  const bits = [];
-  if (r.kind === "dpo") {
-    if (p.same_action) bits.push("同动作");
-    if (p.rejected_gist) bits.push(`<span class="bad">坏思考 ${esc(p.rejected_gist)}</span>`);
-    if (p.chosen_gist) bits.push(`<span class="good">好思考 ${esc(p.chosen_gist)}</span>`);
-    if (p.same_action && p.rejected_think_len != null && p.chosen_think_len != null) {
-      bits.push(`${fmt(p.rejected_think_len)}→${fmt(p.chosen_think_len)}字`);
-    }
-    const patho = (p.pathologies || []).map(x => PATHO_ZH[String(x).split(":")[0]] || x).filter(Boolean);
-    if (patho.length) bits.push(esc(patho.slice(0, 2).join("·")));
-    else if (p.source_reason) bits.push(esc(short(String(p.source_reason).replace(/,/g, "·"), 24)));
-  } else {
-    if (p.target_gist || p.user_gist) bits.push(esc(p.target_gist || p.user_gist));
-    if (r.sample_weight != null && Number(r.sample_weight) !== 1) bits.push(`权重 ${esc(String(r.sample_weight))}`);
-    if (r.quality_score != null) bits.push(`质量 ${esc(String(r.quality_score))}`);
-  }
-  let status = "";
-  if (!r.included) {
-    if (r.decision === "exclude" && r.decision_scope && r.decision_scope !== "sample") status = `在${scopeZh[r.decision_scope] || "上层"}停用`;
-    else if ((r.decision_reason || "").trim()) status = String(r.decision_reason).trim();
-    else if (DPO_GATE_ZH[r.gate_status]) status = DPO_GATE_ZH[r.gate_status];
-    else status = "已停用";
-  } else if (r.kind === "dpo" && r.gate_status === "swap") {
-    status = "已对调";
-  }
-  return {meta: bits.join(" · "), status};
-}
-function treeSampleHtml(r) {
-  const off = !r.included;
-  const phase = PHASE.find(x => x[0] === r.stage);
-  const label = (r.title || "").trim()
-    || (r.kind === "dpo" ? (DPO_SRC_ZH[r.stage] || "偏好对") : "")
-    || (phase ? phase[1] : "")
-    || (r.kind === "trajectory" ? "完整轨迹" : "")
-    || short(r.sample_id, 36);
-  const bits = treeSampleDecisionBits(r);
-  const tip = [r.sample_id, bits.status, (r.preview && (r.preview.chosen_gist || r.preview.target_gist)) || ""].filter(Boolean).join("\n");
-  const canRestore = r.decision === "exclude" && (!r.decision_scope || r.decision_scope === "sample");
-  const toggle = canRestore
-    ? `<button type="button" class="tree-action on" data-sample-toggle="${esc(r.sample_id)}" data-sample-action="auto">恢复</button>`
-    : (r.included
-      ? `<button type="button" class="tree-action off" data-sample-toggle="${esc(r.sample_id)}" data-sample-action="exclude">停用</button>`
-      : "");
-  return `<div class="tree-sample ${off ? "off" : ""}" data-sample-open="${esc(r.sample_id)}" title="${esc(tip)}">
-    ${toggle}
-    <span class="tree-sample-label">${esc(label)}</span>
-    ${bits.meta ? `<span class="tree-sample-meta">${bits.meta}</span>` : `<span class="grow"></span>`}
-    ${bits.status ? `<span class="tree-sample-status" title="${esc(bits.status)}">${esc(bits.status)}</span>` : ""}
-  </div>`;
-}
-function treeKindHtml(bucket, trajId, opts) {
-  const tf = STATE.train;
-  const kind = bucket.kind || "sft";
-  const key = "k:" + trajId + ":" + kind;
-  const open = !!(tf.expanded && tf.expanded[key]);
-  const q = opts && opts.passQuery ? "" : (tf.q || "").trim().toLowerCase();
-  let samples = bucket.samples || [];
-  if (q) {
-    samples = samples.filter(r => (
-      r.sample_id + " " + r.kind + " " + kind + " " + (r.title || "") + " " + (r.decision_reason || "") + " " + (r.gate_status || "")
-    ).toLowerCase().includes(q));
-  }
-  const kindHit = !q || (kind + " " + (DRAFT_KIND_ZH[kind] || "")).toLowerCase().includes(q);
-  if (q && !samples.length && !kindHit) return "";
-  const c = bucket.counts || {};
-  return `<div class="tree-kind">
-    <div class="tree-kind-head">
-      <button type="button" class="tree-toggle" data-tree-toggle="${esc(key)}" aria-label="展开${esc(DRAFT_KIND_ZH[kind] || kind)}">${open ? "−" : "+"}</button>
-      <span class="chip">${esc(DRAFT_KIND_ZH[kind] || kind)}</span>
-      <span class="tree-counts">${fmt((c.candidates != null ? c.candidates : samples.length) || 0)} 条 · 纳入 ${fmt(c.included || 0)}</span>
-    </div>
-    ${open ? `<div class="tree-samples">${samples.map(treeSampleHtml).join("") || `<div class="faint" style="padding:6px 8px">暂无${esc(DRAFT_KIND_ZH[kind] || kind)}样本</div>`}</div>` : ""}
-  </div>`;
-}
-function treeTrajectoryHtml(traj, sessionId, opts) {
-  const tf = STATE.train;
-  const tid = traj.trajectory_id || (`traj::${sessionId}`);
-  const key = "t:" + tid;
-  const open = !!(tf.expanded && tf.expanded[key]);
-  const sample = traj.sample || null;
-  const passQuery = !!(opts && opts.passQuery);
-  const q = passQuery ? "" : (tf.q || "").trim().toLowerCase();
-  const kindOpts = passQuery || (q && ((tid + " trajectory 轨迹").toLowerCase().includes(q)
-    || (sample && (sample.sample_id + " " + (sample.kind || "")).toLowerCase().includes(q))))
-    ? {passQuery: true} : null;
-  const kindsSrc = (traj.kinds && traj.kinds.length)
-    ? traj.kinds
-    : [
-        {kind: "sft", counts: {candidates: 0, included: 0}, samples: (traj.samples || []).filter(r => r.kind === "sft")},
-        {kind: "dpo", counts: {candidates: 0, included: 0}, samples: (traj.samples || []).filter(r => r.kind === "dpo")},
-      ];
-  const kinds = kindsSrc.map(b => treeKindHtml(b, tid, kindOpts)).filter(Boolean);
-  const trajHit = !q || (tid + " trajectory 轨迹").toLowerCase().includes(q)
-    || (sample && (sample.sample_id + " " + (sample.kind || "")).toLowerCase().includes(q));
-  if (q && !kinds.length && !trajHit) return "";
-  const byKind = Object.fromEntries(kindsSrc.map(b => [b.kind, b.counts || {}]));
-  const sftTotal = (byKind.sft && byKind.sft.candidates != null) ? byKind.sft.candidates : (traj.counts || {}).sft || 0;
-  const sftUsed = (byKind.sft && byKind.sft.included != null) ? byKind.sft.included : 0;
-  const dpoTotal = (byKind.dpo && byKind.dpo.candidates != null) ? byKind.dpo.candidates : (traj.counts || {}).dpo || 0;
-  const dpoUsed = (byKind.dpo && byKind.dpo.included != null) ? byKind.dpo.included : 0;
-  const off = sample && !sample.included;
-  let usage = "";
-  if (sample) {
-    if (sample.decision === "exclude" && (!sample.decision_scope || sample.decision_scope === "sample")) {
-      usage = `<button type="button" class="toggle-pill is-off" data-sample-toggle="${esc(sample.sample_id)}" data-sample-action="auto"><i></i>已停用 · 恢复轨迹</button>`;
-    } else if (sample.included) {
-      usage = `<button type="button" class="toggle-pill" data-sample-toggle="${esc(sample.sample_id)}" data-sample-action="exclude"><i></i>停用轨迹</button>`;
-    } else if (sample.decision === "exclude" && sample.decision_scope && sample.decision_scope !== "sample") {
-      usage = `<span class="toggle-pill is-locked"><i></i>在上层停用</span>`;
-    }
-  }
-  const status = sample
-    ? `<span class="chip ${sample.included ? "train" : ""}">${sample.included ? "纳入" : "停用"}</span>
-       <span class="chip ${esc(sample.split || "")}">${esc(sample.split || "–")}</span>`
-    : `<span class="faint" style="font-size:11px">未生成完整轨迹</span>`;
-  const openAttr = sample ? `data-sample-open="${esc(sample.sample_id)}"` : "";
-  return `<div class="tree-trajectory ${off ? "off" : ""}">
-    <div class="tree-trajectory-head ${sample ? "clickable" : ""}" ${openAttr} title="${esc(tid)}">
-      <button type="button" class="tree-toggle" data-tree-toggle="${esc(key)}" aria-label="展开轨迹">${open ? "−" : "+"}</button>
-      <span class="chip">${esc(DRAFT_KIND_ZH.trajectory)}</span>
-      <span class="mono" style="font-size:12px">${esc(short(tid, 36))}</span>
-      ${status}
-      <span class="tree-counts">SFT ${fmt(sftTotal)} 条 · 纳入 ${fmt(sftUsed)} · DPO ${fmt(dpoTotal)} 条 · 纳入 ${fmt(dpoUsed)}</span>
-      <span class="grow"></span>${usage}
-    </div>
-    ${open ? `<div class="tree-kinds">${kinds.join("") || `<div class="faint" style="padding:6px 8px">这条轨迹还没有拆出 SFT / DPO</div>`}</div>` : ""}
-  </div>`;
-}
-function treeSessionHtml(node, groupBy) {
-  const tf = STATE.train;
-  const key = "s:" + node.session_id;
-  const open = !!(tf.expanded && tf.expanded[key]);
-  let usage = "";
-  if (node.excluded && node.exclusion_scope === "project") {
-    usage = `<span class="toggle-pill is-locked"><i></i>项目已停用</span>`;
-  } else if (node.own_excluded || (node.excluded && node.exclusion_scope === "session")) {
-    usage = `<button type="button" class="toggle-pill is-off" data-scope-toggle="session" data-scope-id="${esc(node.session_id)}" data-scope-action="auto"><i></i>已停用 · 恢复会话</button>`;
-  } else if (!node.excluded) {
-    usage = `<button type="button" class="toggle-pill" data-scope-toggle="session" data-scope-id="${esc(node.session_id)}" data-scope-action="exclude"><i></i>停用会话</button>`;
-  }
-  const splitCtl = `<select data-session-split="${esc(node.session_id)}" aria-label="会话切分">
-      <option value="train" ${node.split==="train"?"selected":""}>train</option>
-      <option value="eval" ${node.split==="eval"?"selected":""}>eval</option></select>
-    ${node.split_source === "session"
-      ? `<button type="button" class="ghost slim" data-session-split-inherit="${esc(node.session_id)}">随上层</button>`
-      : `<span class="faint" style="font-size:11px">随${groupBy === "project" ? "项目" : "上层"}</span>`}`;
-  const q = (tf.q || "").trim().toLowerCase();
-  const sessionHit = !q || (node.session_id + " " + node.project_group).toLowerCase().includes(q);
-  const trajectories = (node.trajectories || [])
-    .map(t => treeTrajectoryHtml(t, node.session_id, sessionHit && q ? {passQuery: true} : null))
-    .filter(Boolean);
-  if (q && !trajectories.length && !sessionHit) return "";
-  const kindBadges = [
-    node.excluded ? `<span class="usage-badge sess-off"><i></i>整会话停用</span>` : "",
-    !node.excluded && node.sft_excluded ? `<span class="usage-badge sft-off"><i></i>SFT 停用</span>` : "",
-    !node.excluded && node.dpo_excluded ? `<span class="usage-badge dpo-off"><i></i>DPO 停用</span>` : "",
-  ].filter(Boolean).join("");
-  return `<div class="tree-session">
-    <div class="tree-session-head">
-      <button type="button" class="tree-toggle" data-tree-toggle="${esc(key)}" aria-label="展开会话">${open ? "−" : "+"}</button>
-      <span class="mono" style="font-size:12px">${esc(node.session_id.slice(0, 8))}</span>
-      <span class="faint">${esc(node.project_group || "")}</span>
-      ${node.effective_state ? `<span class="chip">${esc(node.effective_state)}</span>` : ""}
-      ${kindBadges}
-      <span class="tree-counts">${treeCountsText(node.counts)}</span>
-      <span class="grow"></span>${splitCtl}${usage}
-    </div>
-    ${open ? `<div class="tree-children">${trajectories.join("") || `<div class="faint" style="padding:6px 8px">没有轨迹</div>`}</div>` : ""}
-  </div>`;
-}
-function treeGroupHtml(g) {
-  const tf = STATE.train;
-  const key = "g:" + g.key;
-  const open = !!(tf.expanded && tf.expanded[key]);
-  const isProject = tf.groupBy === "project";
-  const off = isProject && g.own_excluded;
-  const usage = !isProject ? "" : (off
-    ? `<button type="button" class="toggle-pill is-off" data-scope-toggle="project" data-scope-id="${esc(g.key)}" data-scope-action="auto"><i></i>已停用 · 恢复项目</button>`
-    : `<button type="button" class="toggle-pill" data-scope-toggle="project" data-scope-id="${esc(g.key)}" data-scope-action="exclude"><i></i>停用项目</button>`);
-  const splitCtl = !isProject ? "" : `<select data-project-split="${esc(g.key)}" aria-label="项目切分">
-      <option value="train" ${g.split==="train"?"selected":""}>train</option>
-      <option value="eval" ${g.split==="eval"?"selected":""}>eval</option></select>`;
-  const sessions = g.sessions.map(n => treeSessionHtml(n, tf.groupBy)).join("");
-  if ((tf.q || "").trim() && !sessions) return "";
-  return `<div class="tree-node ${off ? "off" : ""}">
-    <div class="tree-head">
-      <button type="button" class="tree-toggle" data-tree-toggle="${esc(key)}" aria-label="展开分组">${open ? "−" : "+"}</button>
-      <span class="tree-title">${esc(g.title)}</span>
-      <span class="faint">${fmt(g.sessions.length)} 个黄金会话</span>
-      <span class="tree-counts">${treeCountsText(g.counts)}</span>
-      <span class="grow"></span>${splitCtl}${usage}
-    </div>
-    ${open ? `<div class="tree-children">${sessions || `<div class="faint">没有会话</div>`}</div>` : ""}
-  </div>`;
-}
-function renderTrainTree() {
-  const host = $("#trainTreeBody");
-  if (!host || !STATE.train.treeData) return;
-  const groups = STATE.train.treeData.groups || [];
-  host.innerHTML = groups.map(treeGroupHtml).join("") || `<div class="empty">没有黄金会话。请先在黄金数据页完成分析。</div>`;
-  bindTrainTree(host);
-}
-async function setScopeDecision(scope, id, action) {
-  const label = scope === "project" ? "项目" : "会话";
-  await api("/api/dataset/draft/scopes", {method: "PUT", body: JSON.stringify({
-    updates: [{scope, id, action, reason: action === "exclude" ? `控制台在${label}层停用` : ""}],
-  })});
-  toast(action === "exclude" ? `已停用${label}，下面的切片不会进入训练集` : `已恢复${label}`, "ok");
-  await loadTrainDraft();
-}
-async function setSessionSplit(sessionId, split) {
-  const body = split === "inherit"
-    ? {session_assignments: {[sessionId]: "inherit"}}
-    : {session_assignments: {[sessionId]: split}};
-  await api("/api/dataset/draft/split", {method: "PUT", body: JSON.stringify(body)});
-  toast(split === "inherit" ? "会话切分已随上层" : `会话已改为 ${split}，下面的切片一并变更`, "ok");
-  await loadTrainDraft();
-}
-async function setProjectSplit(project, split) {
-  await api("/api/dataset/draft/split", {method: "PUT", body: JSON.stringify({assignments: {[project]: split}})});
-  toast(`项目已改为 ${split}，没有单独设置的会话一并变更`, "ok");
-  await loadTrainDraft();
-}
-function bindTrainTree(host) {
-  host.querySelectorAll("[data-tree-toggle]").forEach(btn => {
-    btn.onclick = () => {
-      const key = btn.dataset.treeToggle;
-      if (!STATE.train.expanded) STATE.train.expanded = {};
-      if (STATE.train.expanded[key]) STATE.train.expanded[key] = false;
-      else treeSmartExpand(key);
-      renderTrainTree();
-    };
-  });
-  host.querySelectorAll("[data-scope-toggle]").forEach(btn => {
-    btn.onclick = () => setScopeDecision(btn.dataset.scopeToggle, btn.dataset.scopeId, btn.dataset.scopeAction)
-      .catch(e => toast(e.message, "err"));
-  });
-  host.querySelectorAll("[data-project-split]").forEach(sel => {
-    sel.onclick = e => e.stopPropagation();
-    sel.onchange = () => setProjectSplit(sel.dataset.projectSplit, sel.value).catch(e => toast(e.message, "err"));
-  });
-  host.querySelectorAll("[data-session-split]").forEach(sel => {
-    sel.onclick = e => e.stopPropagation();
-    sel.onchange = () => setSessionSplit(sel.dataset.sessionSplit, sel.value).catch(e => toast(e.message, "err"));
-  });
-  host.querySelectorAll("[data-session-split-inherit]").forEach(btn => {
-    btn.onclick = () => setSessionSplit(btn.dataset.sessionSplitInherit, "inherit").catch(e => toast(e.message, "err"));
-  });
-  host.querySelectorAll("[data-sample-toggle]").forEach(btn => {
-    btn.onclick = e => {
-      e.stopPropagation();
-      setDraftDecisions([{
-        sample_id: btn.dataset.sampleToggle,
-        action: btn.dataset.sampleAction,
-        reason: btn.dataset.sampleAction === "exclude" ? "控制台在样本层停用" : "",
-      }]).catch(err => toast(err.message, "err"));
-    };
-  });
-  host.querySelectorAll("[data-sample-open]").forEach(el => {
-    el.onclick = e => {
-      if (e.target.closest("button") || e.target.closest("select")) return;
-      openDraftSample(el.dataset.sampleOpen);
-    };
-  });
-}
-function buildWorkspace(lastBuild, builds) {
-  const lb = lastBuild || {};
-  const list = (builds || []).map(b => `<button type="button" class="ghost mono" data-build-open="${esc(b.build_id)}">${esc(b.build_id.slice(0, 12))}… · ${fmt((b.counts && b.counts.rows) || 0)} 条</button>`).join(" ");
-  const next = lb.build_id
-    ? `<button type="button" class="primary" onclick="jumpToRuns()">去交付打包</button>`
-    : `<span class="faint">构建完成后，再到交付页打 zip</span>`;
-  return `<div id="draftBuild" class="workspace-panel">
-    <div class="panel-h"><h3>不可变 Build</h3><span class="hint">构建只固化数据；打包 zip 在交付页</span></div>
-    <div class="panel-b">
-      <div class="kv"><span class="k">最新 build_id</span><span class="mono">${esc(lb.build_id || "尚未构建")}</span>
-      <span class="k">plan_hash</span><span class="mono faint">${esc(lb.plan_hash || "—")}</span></div>
-      <div class="toolbar" style="margin-top:10px"><button type="button" class="ghost" id="draftBuildReload">刷新 Build 列表</button>${list || `<span class="faint">暂无历史 Build</span>`}<span class="grow"></span>${next}</div>
-    </div></div>`;
-}
-async function loadTrainBuilds() {
-  const d = await api("/api/dataset/builds");
-  STATE.train.builds = d.builds || [];
-  const host = $("#draftBuild");
-  if (host) host.outerHTML = buildWorkspace(STATE.train.lastBuild, STATE.train.builds);
-  $$("#view-train [data-build-open]").forEach(btn => { btn.onclick = () => openBuildDetail(btn.dataset.buildOpen); });
-  const reload = $("#draftBuildReload");
-  if (reload) reload.onclick = () => loadTrainBuilds().catch(e => toast(e.message, "err"));
-}
-function inferDraftSampleKind(row, sampleId) {
-  if (row && row.kind) return row.kind;
-  const id = String(sampleId || (row && row.sample_id) || "");
-  if (row && row.chosen != null && row.rejected != null) return "dpo";
-  if (/^dpo(_neg|_review)?::/i.test(id) || id.startsWith("dpo")) return "dpo";
-  if (id.startsWith("traj::")) return "trajectory";
-  return "sft";
-}
-async function openDraftSample(sampleId) {
-  openDrawer("草稿样本", short(sampleId, 32));
-  const seq = DRAWER_REQUEST_SEQ;
-  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
-  let row;
-  try {
-    row = await api(`/api/dataset/draft/sample?sample_id=${encodeURIComponent(sampleId)}`);
-  } catch (err) {
-    if (seq !== DRAWER_REQUEST_SEQ) return;
-    $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
-    return;
-  }
-  if (seq !== DRAWER_REQUEST_SEQ) return;
-  STATE.drawerData = row;
-  const draft = row._draft || {};
-  const kind = inferDraftSampleKind(row, sampleId);
-  $("#drawerBody").innerHTML = renderTrainDetail(row, kind === "trajectory" ? "trajectory" : kind, draft.build_file || "");
-  const layerOff = !draft.included && draft.decision_scope && draft.decision_scope !== "sample";
-  setDrawerFoot(layerOff
-    ? `<span class="faint">这条样本在${draft.decision_scope === "project" ? "项目" : "会话"}层停用，先在上层恢复</span>
-    <button onclick="showJson(STATE.drawerData)">查看 JSON</button>`
-    : `<button type="button" data-draft-toggle="${esc(sampleId)}" data-draft-decision="${esc(draft.included ? "exclude" : "auto")}">${draft.included ? "停用此样本" : "恢复纳入"}</button>
-    <button onclick="showJson(STATE.drawerData)">查看 JSON</button>`);
-}
-async function openBuildDetail(buildId) {
-  openDrawer("Build 详情", buildId.slice(0, 16));
-  const seq = DRAWER_REQUEST_SEQ;
-  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
-  let manifest;
-  try {
-    manifest = await api(`/api/dataset/builds/${encodeURIComponent(buildId)}`);
-  } catch (err) {
-    if (seq !== DRAWER_REQUEST_SEQ) return;
-    $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
-    return;
-  }
-  if (seq !== DRAWER_REQUEST_SEQ) return;
-  STATE.drawerData = manifest;
-  const files = (manifest.files || []).map(f => `<li class="mono">${esc(f.path || f.name || JSON.stringify(f))}</li>`).join("");
-  $("#drawerBody").innerHTML = `<div class="panel"><div class="panel-b kv">
-    <span class="k">build_id</span><span class="mono">${esc(manifest.build_id)}</span>
-    <span class="k">plan_hash</span><span class="mono">${esc(manifest.plan_hash || "")}</span>
-    <span class="k">created_at</span><span>${esc(manifest.created_at || "")}</span></div>
-    <ul>${files || "<li class=\"faint\">无文件清单</li>"}</ul></div>`;
-  setDrawerFoot(`<button onclick="showJson(STATE.drawerData)">查看 JSON</button>`);
-}
-async function openTrainHistorySample(name, idx) {
-  openDrawer(`样本 #${idx}`, name);
-  const seq = DRAWER_REQUEST_SEQ;
-  $("#drawerBody").innerHTML = `<div class="loading">加载中…</div>`;
-  let row;
-  try {
-    row = await api(`/api/train/dataset/${encodeURIComponent(name)}/${idx}`);
-  } catch (err) {
-    if (seq !== DRAWER_REQUEST_SEQ) return;
-    $("#drawerBody").innerHTML = `<div class="empty">加载失败：${esc(err.message || err)}</div>`;
-    return;
-  }
-  if (seq !== DRAWER_REQUEST_SEQ) return;
-  STATE.drawerData = row;
-  $("#drawerBody").innerHTML = renderTrainDetail(row, datasetKind(name), name);
-  setDrawerFoot(`<button onclick="showJson(STATE.drawerData)">查看原始 JSON</button>`);
-}
-async function loadTrainDraft() {
-  const request = {id: ++TRAIN_REQUEST_SEQ, workspace: "draft"};
-  STATE.train.workspace = "draft";
-  const tf = STATE.train;
-  let tree;
-  try {
-    tree = await api("/api/dataset/draft/tree?group_by=" + encodeURIComponent(tf.groupBy || "project"));
-  } catch (e) {
-    if (!trainRequestCurrent(request)) return;
-    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>无法加载训练数据</h3><p>${esc(e.message)}</p><button class="primary" onclick="runStage('stage3',false)">评估并构建训练集</button></div></div>`;
-    return;
-  }
-  if (!trainRequestCurrent(request)) return;
-  document.body.classList.toggle("dirty", !!tree.dirty);
-  STATE.train.splitPlan = tree.split_plan || {};
-  STATE.train.lastBuild = tree.last_build || null;
-  STATE.train.treeData = tree;
-  if (!tf.expanded) {
-    tf.expanded = {};
-    const first = (tree.groups || [])[0];
-    if (first) treeSmartExpand("g:" + first.key);
-  }
-  const summary = tree.summary || {};
-  const pending = summary.pending_evaluations || 0;
-  $("#view-train").innerHTML = `
-    <div class="train-tree-shell">
-      <div class="train-plan train-draft-status">
-        <b>训练数据</b>
-        <span class="faint">${treeCountsText(summary)}</span>
-        <span class="chip ${pending ? "warn" : ""}">待复核 ${fmt(pending)}</span>
-        ${tree.dirty ? `<span class="chip warn">有未生成的修改</span>` : `<span class="chip train">与最新 Build 一致</span>`}
-        <span class="grow"></span>
-        <button type="button" class="ghost" id="trainTabFiles" data-train-tab="files">历史文件</button>
-        <button type="button" class="ghost" onclick="runStage('dataset_evaluate',false)">仅 DPO 评估</button>
-        <button type="button" class="primary" onclick="runStage('stage3',false)" title="会先评估待复核 DPO，再合成 SFT/DPO 训练集">评估并构建</button>
-      </div>
-      <section class="panel workspace-panel">
-        <div class="panel-h"><h3>黄金会话 → 轨迹 → SFT / DPO</h3>
-          <span class="hint">只有一行子节点时会继续展开；轨迹下再点开 SFT 或 DPO 看切片；上层停用或改切分会向下生效</span><span class="grow"></span>
-          <div class="seg-ctl" role="group" aria-label="分组方式">
-            <button type="button" data-group-by="project" class="${tf.groupBy !== "split" ? "on" : ""}">按项目</button>
-            <button type="button" data-group-by="split" class="${tf.groupBy === "split" ? "on" : ""}">按 train / eval</button>
-          </div>
-        </div>
-        <div class="toolbar">
-          <div class="filter-search"><input type="text" id="dsSearch" placeholder="搜索会话或样本，回车确认" value="${esc(tf.q || "")}"></div>
-          <span class="grow"></span>
-          <button type="button" class="ghost" id="dsReload">刷新</button>
-        </div>
-        <div class="panel-b" id="trainTreeBody"></div>
-      </section>
-      ${buildWorkspace(tree.last_build, STATE.train.builds)}
-    </div>`;
-  renderTrainTree();
-  loadTrainBuilds().catch(() => {});
-  $$("#view-train [data-group-by]").forEach(btn => {
-    btn.onclick = () => { tf.groupBy = btn.dataset.groupBy; tf.expanded = null; loadTrainDraft(); };
-  });
-  $("#dsSearch").onkeydown = e => { if (e.key === "Enter") { tf.q = e.target.value; renderTrainTree(); } };
-  $("#dsReload").onclick = () => loadTrainDraft();
-  $("#trainTabFiles")?.addEventListener("click", () => loadTrainFiles());
-}
-async function loadTrain() { return loadTrainDraft(); }
-async function loadTrainFiles() {
-  const request = {id: ++TRAIN_REQUEST_SEQ, workspace: "files"};
-  STATE.train.workspace = "files";
-  const d = await api("/api/train/datasets");
-  if (!trainRequestCurrent(request)) return;
-  const files = d.datasets || [];
-  if (!files.length) {
-    $("#view-train").innerHTML = `<div class="panel"><div class="empty"><h3>还没有训练文件</h3><p>点「评估并构建」后会在此列出 jsonl（会先评估待复核 DPO）。</p></div></div>`;
-    return;
-  }
-  const tf = STATE.train;
-  if (!files.some(x => x.name === tf.name)) tf.name = files[0].name;
-  const query = new URLSearchParams({offset: tf.offset, limit: 50, q: tf.q || "", project: tf.project || "", stage: tf.stage || "", split: tf.split || ""});
-  const rows = await api(`/api/train/dataset/${encodeURIComponent(tf.name)}?${query}`);
-  if (!trainRequestCurrent(request)) return;
-  STATE.datasetInfo = d.dataset_info;
-  STATE.trainFiles = files;
-  const end = Math.min(rows.offset + rows.rows.length, rows.total);
-  const kind = datasetKind(tf.name);
-  const projects = Object.keys(d.stats?.split || {});
-  $("#view-train").innerHTML = `
-    <div class="train-shell">
-    ${renderTrainPlan(files)}
-    ${renderDatasetIndex(files)}
-    <div class="train-main">
-      <div class="train-now"><b class="mono">${esc(tf.name)}</b></div>
-      <div class="train-from" id="trainRel">${esc(trainRelText(tf.name))}</div>
-      <div class="toolbar">
-        <button type="button" class="ghost" onclick="loadTrainDraft()">返回草稿</button>
-        <select id="dsProject" aria-label="按项目筛选"><option value="">全部项目</option>${projects.map(p => `<option value="${esc(p)}" ${tf.project === p ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>
-        <select id="dsSplit" aria-label="按训练切分筛选"><option value="">全部切分</option><option value="train" ${tf.split === "train" ? "selected" : ""}>train</option><option value="eval" ${tf.split === "eval" ? "selected" : ""}>eval</option></select>
-        <div class="filter-search"><input type="text" id="dsSearch" placeholder="搜索样本" value="${esc(tf.q || "")}"></div>
-        <span class="grow"></span>
-        <button type="button" class="ghost" id="dsReload">刷新</button>
-      </div>
-      <div class="scroll"><table><thead><tr>${trainTableHead(kind)}</tr></thead><tbody>
-      ${rows.rows.map(r => trainRow(r, kind)).join("") || emptyRow(trainTableCols(kind), "空")}
-      </tbody></table></div>
-      <div class="toolbar bottom">
-        <span class="count"><b>${rows.total ? fmt(rows.offset + 1) : 0}–${fmt(end)}</b>，共 ${fmt(rows.total)} 条</span>
-        <span class="grow"></span>
-        <button type="button" id="dsPrev" ${rows.offset <= 0 ? "disabled" : ""}>上一页</button>
-        <button type="button" id="dsNext" ${end >= rows.total ? "disabled" : ""}>下一页</button>
-      </div>
-    </div></div>`;
-  applyTrainList();
-  $("#dsFile")?.addEventListener("input", e => { tf.fileq = e.target.value; applyTrainList(); });
-  $$("#view-train .ds-open").forEach(c => c.onclick = () => { tf.name = c.dataset.name; tf.offset = 0; loadTrainFiles(); });
-  $("#dsProject").onchange = e => { tf.project = e.target.value; tf.offset = 0; loadTrainFiles(); };
-  $("#dsSplit").onchange = e => { tf.split = e.target.value; tf.offset = 0; loadTrainFiles(); };
-  $("#dsSearch").onkeydown = e => { if (e.key === "Enter") { tf.q = e.target.value; tf.offset = 0; loadTrainFiles(); } };
-  $("#dsReload").onclick = () => loadTrainFiles();
-  $("#dsPrev").onclick = () => { tf.offset = Math.max(0, tf.offset - 50); loadTrainFiles(); };
-  $("#dsNext").onclick = () => { tf.offset += 50; loadTrainFiles(); };
-  bindRows("#view-train tbody tr.clickable", tr => openTrainHistorySample(tf.name, tr.dataset.idx));
-}
-
-/* 每份文件从哪来。编号对得上的才写成「来自某文件」，对不上的只写制作方式。 */
-const TRAIN_YAML = {
-  "sft.train.lf.jsonl": "train_sft.yaml 读取",
-  "sft.eval.lf.jsonl": "train_sft.yaml 读取",
-  "dpo.train.lf.jsonl": "train_dpo.yaml 读取",
-  "dpo.eval.lf.jsonl": "train_dpo.yaml 读取",
-};
-const TRAIN_FAMILIES = [["sft","单步 SFT"],["traj","完整轨迹"],["dpo","DPO"],["diag","病态诊断"]];
-function dsFamily(name) {
-  if (name.includes("diagnostic")) return "diag";
-  if (name.includes("dpo")) return "dpo";
-  if (name.includes("traject")) return "traj";
-  return "sft";
-}
-function dsRelation(name) {
-  const yaml = TRAIN_YAML[name] || "";
-  const family = dsFamily(name);
-  if (name.endsWith(".lf.jsonl")) {
-    return {family, from: name.replace(/\.lf\.jsonl$/, ".jsonl"), how: "同一批样本。连续的工具结果已合并，训练框架读的是这一份", yaml};
-  }
-  if (name.endsWith(".v2w.jsonl")) {
-    return {family, from: name.replace(/\.v2w\.jsonl$/, ".v2.jsonl"), how: "从修订稿裁短窗口的一版", yaml};
-  }
-  if (name.endsWith(".v2.jsonl")) {
-    return {family, from: name.replace(/\.v2\.jsonl$/, ".jsonl"), how: "修订稿。在合成稿上改过，重跑 stage3 不会写回这里", yaml};
-  }
-  if (name.startsWith("dpo_w.")) {
-    const sp = name.includes(".eval.") ? "eval" : "train";
-    return {family, from: `dpo.${sp}.jsonl`, how: "上机 DPO 的窗口裁剪版，条数和原文件不完全相同", yaml};
-  }
-  if (/^(sft|dpo)\.(train|eval)\.jsonl$/.test(name)) {
-    return {family, from: "发布包", how: "发布时用的短名字。sample_id 已重写，不能按编号对回修订稿", yaml};
-  }
-  if (name.includes("openai")) {
-    return {family, from: name.replace("openai", "sharegpt"), how: "同一批单步样本的 OpenAI 写法", yaml};
-  }
-  if (/\.(train|eval)\.jsonl$/.test(name)) {
-    const src = name.replace(/\.(train|eval)\.jsonl$/, ".jsonl");
-    const sp = name.includes(".eval.") ? "验证" : "训练";
-    return {family, from: src, how: `按项目整包切出的${sp}部分`, yaml};
-  }
-  if (family === "diag") return {family, from: "黄金会话里的病态步", how: "只供查看。勾选后才会加入生成", yaml};
-  if (family === "dpo") return {family, from: "黄金偏好对", how: "stage3 从剪枝、复核改写和来源会话的病态步合成，训练和验证混在这一份", yaml};
-  if (family === "traj") return {family, from: "黄金会话", how: "stage3 保留的整段轨迹", yaml};
-  return {family, from: "黄金会话", how: "stage3 切成单步窗口，训练和验证混在这一份", yaml};
-}
-function trainRelText(name) {
-  const rel = dsRelation(name);
-  return `来自 ${rel.from}。${rel.how}${rel.yaml ? "。" + rel.yaml : ""}`;
-}
-function dsRank(name) {
-  if (name.endsWith(".lf.jsonl")) return 50;
-  if (name.startsWith("dpo_w.")) return 45;
-  if (/^(sft|dpo)\.(train|eval)\.jsonl$/.test(name)) return 40;
-  if (name.includes(".v2w.")) return 30;
-  if (name.includes(".v2.")) return 20;
-  if (/\.(train|eval)\.jsonl$/.test(name)) return 10;
-  return 0;
-}
-function applyTrainList() {
-  const tf = STATE.train;
-  const n = (tf.fileq || "").trim().toLowerCase();
-  $$("#view-train .ds-row").forEach(row => {
-    const name = row.dataset.name;
-    const blob = `${name} ${row.dataset.from || ""}`.toLowerCase();
-    const qmiss = !!n && !blob.includes(n);
-    row.classList.toggle("ds-hide", qmiss);
-  });
-  $$("#view-train .ds-group").forEach(g => {
-    g.classList.toggle("ds-hide", !g.querySelector(".ds-row:not(.ds-hide)"));
-  });
-  const empty = $("#dsEmpty");
-  if (empty) empty.classList.toggle("ds-hide", !!$("#view-train .ds-row:not(.ds-hide)"));
-}
-function renderTrainPlan(list) {
-  const picked = list || [];
-  const sum = pred => picked.filter(x => pred(x.name)).reduce((a, x) => a + (Number(x.rows) || 0), 0);
-  const sftN = sum(n => dsFamily(n) === "sft" || dsFamily(n) === "traj");
-  const dpoN = sum(n => dsFamily(n) === "dpo");
-  return `<div class="train-plan" id="trainPlan">
-    <b>历史文件 ${picked.length} 份</b>
-    <span class="faint">SFT ${fmt(sftN)} 条 · DPO ${fmt(dpoN)} 条 · 从左侧列表打开</span>
-    <span class="grow"></span>
-  </div>`;
-}
-function renderDatasetIndex(list) {
-  const rowHtml = x => {
-    const rel = dsRelation(x.name);
-    const on = x.name === STATE.train.name;
-    return `<div class="ds-row ${on ? "on" : ""}" data-name="${esc(x.name)}" data-from="${esc(rel.from)}">
-      <button type="button" class="ds-open" data-name="${esc(x.name)}" title="${esc(x.name + "\n" + trainRelText(x.name))}">
-        <span class="ds-file mono">${esc(x.name.replace(/\.jsonl$/, ""))}</span>
-        <span class="ds-from">来自 ${esc(rel.from)}</span>
-      </button>
-      <b class="ds-num">${x.rows == null ? "—" : fmt(x.rows)}</b>
-    </div>`;
-  };
-  const groups = TRAIN_FAMILIES.map(([id, title]) => {
-    const rs = list.filter(x => dsFamily(x.name) === id).slice().sort((a, b) => dsRank(a.name) - dsRank(b.name) || a.name.localeCompare(b.name));
-    if (!rs.length) return "";
-    return `<div class="ds-group" data-family="${id}"><div class="ds-group-h">${esc(title)}</div>${rs.map(rowHtml).join("")}</div>`;
-  }).join("");
-  return `<aside class="train-rail">
-    <div class="train-rail-h">
-      <input id="dsFile" type="text" placeholder="筛选文件名或来源" value="${esc(STATE.train.fileq || "")}">
-    </div>
-    <div class="train-rail-scroll">
-      ${groups}
-      <div id="dsEmpty" class="empty ds-hide"><h3>没有匹配的文件</h3></div>
-    </div></aside>`;
-}
-
-function trainTableHead(kind) {
-  if (kind === "dpo") return `<th class="n">#</th><th>样本</th><th>来源</th><th>chosen</th><th>rejected</th><th>切分</th>`;
-  if (kind === "diagnostic") return `<th class="n">#</th><th>样本</th><th>模型</th><th>病态</th><th>目标</th><th>切分</th>`;
-  return `<th class="n">#</th><th>样本</th><th>阶段</th><th class="n">权重</th><th>提问</th><th>思考 / 目标</th><th>切分</th>`;
-}
-function trainTableCols(kind) {
-  return kind === "dpo" || kind === "diagnostic" ? 6 : 7;
-}
-function trainRow(r,kind) {
-  const m=r.metadata||{}, p=r.preview||{};
-  const fromGold = m.session_id ? `黄金会话 ${m.session_id.slice(0,8)}` : "";
-  const base=`<td class="n faint">${r.index}</td>
-    <td><div class="mono muted" style="font-size:11px" title="${esc(r.sample_id)}">${esc(short(r.sample_id,28))}</div><div class="sid faint">${esc(m.project_group||"")}</div>${fromGold?`<div class="ds-from">${esc(fromGold)}</div>`:""}</td>`;
-  if(kind==="dpo") return `<tr class="clickable" data-idx="${r.index}" tabindex="0">${base}
-    <td><span class="chip">${esc(DPO_SRC_ZH[m.source]||m.source||"–")}</span><div class="faint" style="margin-top:3px">${esc(m.reason||"")}</div></td>
-    <td><div class="clip" style="-webkit-line-clamp:2;color:#cbe4c2">${esc(p.chosen_think||"")}</div><span class="faint num">${fmt(p.chosen_len)} 字</span></td>
-    <td><div class="clip" style="-webkit-line-clamp:2;color:#e9a497">${esc(p.rejected_think||"")}</div><span class="faint num">${fmt(p.rejected_len)} 字</span></td>
-    <td><span class="chip ${m.split||""}">${esc(m.split||"–")}</span></td></tr>`;
-  if(kind==="diagnostic") return `<tr class="clickable" data-idx="${r.index}" tabindex="0">${base}
-    <td><div>${esc(m.model||"unknown")}</div><span class="num faint">${fmt(m.quality_score)}</span></td>
-    <td><div class="path-chips">${(m.pathologies||p.pathologies||[]).map(x=>`<span>${esc(PATHO_ZH[String(x).split(":")[0]]||x)}</span>`).join("")}</div></td>
-    <td><div class="clip" style="-webkit-line-clamp:2">${esc(p.target||"")}</div><div class="faint mono">${esc((p.tools||[]).join(", "))}</div></td>
-    <td><span class="chip ${m.split||""}">${esc(m.split||"–")}</span></td></tr>`;
-  const ph=PHASE.find(x=>x[0]===m.stage);
-  return `<tr class="clickable" data-idx="${r.index}" tabindex="0">${base}
-    <td>${ph?`<span class="tag" style="--c:${ph[2]}">${ph[1]}</span>`:esc(m.stage || (kind==="trajectory" ? "完整轨迹" : "–"))}</td>
-    <td class="n">${fmt(m.sample_weight)}</td><td><div class="clip" style="-webkit-line-clamp:2">${esc(p.user||"")}</div></td>
-    <td><div class="clip" style="-webkit-line-clamp:2;color:#d3cdbd">${esc(p.think||p.target||"")}</div><div class="faint mono">${esc((p.tools||[]).join(" · "))}</div></td>
-    <td><span class="chip ${m.split||""}">${esc(m.split||"–")}</span></td></tr>`;
-}
 /* ShareGPT/OpenAI 训练样本 -> 黄金数据内部消息结构，复用 renderMessages 流式对话视图 */
 function convToMsgs(list) {
   const msgs = [];
@@ -4893,55 +3934,6 @@ function convToMsgs(list) {
   }
   return msgs;
 }
-
-function renderTrainDetail(row,kind,fileName) {
-  const meta=row.metadata||row;
-  const draft=row._draft||{};
-  const rel = dsRelation(fileName || "");
-  const sid = meta.session_id || "";
-  const sampleId = row.sample_id || meta.sample_id || "";
-  const also = (row._lineage && row._lineage.same_sample) || [];
-  const lines = [];
-  if (sid) lines.push(`<div class="origin-line"><span class="k">黄金会话</span><button type="button" class="ghost" id="jumpGold" data-sid="${esc(sid)}">${esc(sid)}</button></div>`);
-  if (meta.project_group) lines.push(`<div class="origin-line"><span class="k">项目</span><span>${esc(meta.project_group)}</span></div>`);
-  if (meta.split) lines.push(`<div class="origin-line"><span class="k">切分</span><span>${esc(meta.split)}</span></div>`);
-  if (draft.title || row.title) lines.push(`<div class="origin-line"><span class="k">样本</span><span>${esc(draft.title || row.title)}</span></div>`);
-  else if (meta.source) lines.push(`<div class="origin-line"><span class="k">来源</span><span>${esc(DPO_SRC_ZH[meta.source] || meta.source)}</span></div>`);
-  if (meta.reason) lines.push(`<div class="origin-line"><span class="k">生成理由</span><span>${esc(meta.reason)}</span></div>`);
-  if (draft.gate_status || draft.decision_reason || draft.decision === "exclude") {
-    const gateZh = DPO_GATE_ZH[draft.gate_status] || draft.gate_status || "";
-    const status = draft.included === false
-      ? (draft.decision === "exclude" ? "人工停用" : (gateZh || "停用"))
-      : (gateZh && gateZh !== "通过" ? gateZh : "");
-    const review = [status, draft.decision_reason].filter(Boolean).join(" · ");
-    if (review) lines.push(`<div class="origin-line"><span class="k">审核</span><span>${esc(review)}</span></div>`);
-  }
-  if (meta.stage) {
-    const ph = PHASE.find(x => x[0] === meta.stage);
-    lines.push(`<div class="origin-line"><span class="k">阶段</span><span>${esc(ph ? ph[1] : meta.stage)}</span></div>`);
-  }
-  lines.push(`<div class="origin-line"><span class="k">这份文件</span><span>来自 ${esc(rel.from)}。${esc(rel.how)}</span></div>`);
-  if (also.length) lines.push(`<div class="origin-line"><span class="k">同一编号</span><span class="origin-files">${also.map(f=>`<button type="button" class="ghost jump-file" data-name="${esc(f)}" data-q="${esc(sampleId)}">${esc(f.replace(/\.jsonl$/,""))}</button>`).join("")}</span></div>`);
-  else if (sampleId) lines.push(`<div class="origin-line"><span class="k">同一编号</span><span class="faint">其他文件里没有这个 sample_id</span></div>`);
-  const metaPanel=`<div class="panel"><div class="panel-h"><h3>这条从哪来</h3></div><div class="panel-b">${lines.join("")}</div></div>`;
-  if(kind==="dpo"){
-    const pref = v => (v == null ? "" : typeof v === "string" ? v : (v.value || ""));
-    const chosen=pref(row.chosen), rejected=pref(row.rejected);
-    const sameActionHint = !!(draft.preview && draft.preview.same_action)
-      || !!(row.preview && row.preview.same_action);
-    return `${metaPanel}${renderDpoPreferenceCard(chosen, rejected, {sameAction: sameActionHint || undefined})}
-      <div class="note" style="margin:10px 0">下方是触发时的上下文对话；Chosen / Rejected 目标回复见上方对照，不在对话流里。</div>
-      ${renderMessages(convToMsgs(row.conversations || row.messages))}`;
-  }
-  if(kind==="diagnostic") return `${metaPanel}<div class="panel"><div class="panel-h"><h3>病态思考原文</h3></div>
-    <div class="panel-b"><div class="path-chips" style="margin-bottom:10px">${(row.pathologies||[]).map(x=>`<span>${esc(PATHO_ZH[String(x).split(":")[0]]||x)}</span>`).join("")}</div>
-    <div class="think-full">${esc(row.thinking||row.thinking_preview||"")}</div></div></div>
-    <div class="panel"><div class="panel-h"><h3>工具动作</h3></div><div class="panel-b mono">${esc((row.tool_calls||[]).join("\n")||"无")}</div></div>`;
-  return `${metaPanel}<div class="note" style="margin-bottom:10px">与黄金数据相同的对话视图 · 历史 thinking 已剥离，窗口内最后一条助手步为训练目标（计算 loss）</div>
-    ${renderMessages(convToMsgs(row.conversations || row.messages))}`;
-}
-
-
 
 /* ------------------------------ 配置 ------------------------------ */
 const CFG = {mode:"form", yaml:"", parsed:{}, path:"", models:[], ruamel:true,
@@ -5289,168 +4281,7 @@ async function loadConfig() {
   };
 }
 
-/* ------------------------------ 运行（Master-Detail 轨道） ------------------------------ */
-const RB_STATUS = {
-  done:    ["已完成", "done"],
-  running: ["正在做", "run"],
-  ready:   ["待执行", "ready"],
-  todo:    ["未开始", "todo"],
-  warn:    ["需处理", "warn"],
-};
-const RW_UI = { selectedPhase: null, openStep: null };
-
-function rwPhaseState(p) {
-  if (p.steps.some(s => s.status === "running")) return "run";
-  if (p.steps.some(s => s.status === "warn")) return "warn";
-  if (p.done >= p.total && p.total > 0) return "done";
-  return "todo";
-}
-
-function rwDefaultPhase(rb) {
-  if (rb.job && rb.job.progress?.id) {
-    const ph = (rb.phases || []).find(p => p.steps.some(s => s.id === rb.job.progress.id));
-    if (ph) return ph.id;
-  }
-  if (rb.next?.phase) return rb.next.phase;
-  if (rb.deliverable?.zip_path) return "delivery";
-  return (rb.phases?.[0] && rb.phases[0].id) || "stage1";
-}
-
-function selectRwPhase(id) {
-  RW_UI.selectedPhase = id;
-  RW_UI.openStep = null;
-  if (STATE.runbook) renderRunsView(STATE.runbook, STATE.runHist || { runs: [] });
-}
-
-function toggleRwStep(id) {
-  RW_UI.openStep = RW_UI.openStep === id ? null : id;
-  if (STATE.runbook) renderRunsView(STATE.runbook, STATE.runHist || { runs: [] });
-}
-
-function jumpToGold(eff="queue") {
-  STATE.gold.model = "";
-  STATE.gold.output = "";
-  STATE.gold.project = "";
-  STATE.gold.q = "";
-  STATE.gold.eff = eff;
-  setTab("gold");
-}
-
-function jumpToRaw() {
-  STATE.raw.model = "";
-  STATE.raw.adopted = "";
-  STATE.raw.project = "";
-  STATE.raw.q = "";
-  setTab("raw");
-}
-
-function jumpToTrain(dsName="") {
-  if (dsName) STATE.train.name = dsName;
-  STATE.train.offset = 0;
-  setTab("train");
-}
-
-function jumpToRuns() {
-  setTab("runs");
-}
-
-function rwStepActions(s) {
-  const acts = [];
-  if (s.phase === "stage1") {
-    if (s.status !== "done") acts.push(`<button class="primary" onclick="event.stopPropagation();runStage('stage1',false)">运行 Stage 1</button>`);
-    acts.push(`<button class="ghost" onclick="event.stopPropagation();jumpToRaw()">查看原始会话</button>`);
-  } else if (s.phase === "stage2") {
-    if (s.status === "warn" || s.status === "ready") {
-      acts.push(`<button class="primary" onclick="event.stopPropagation();runStage('stage2',false)">运行 Stage 2 补齐</button>`);
-    }
-    acts.push(`<button onclick="event.stopPropagation();jumpToGold('')">去黄金数据页查看</button>`);
-  } else if (s.phase === "stage3") {
-    if (s.id === "s3.package") {
-      acts.push(`<button class="primary" onclick="event.stopPropagation();exportPackage()"${PACK.running ? " disabled" : ""}>${PACK.running ? "打包中…" : "生成交付 zip"}</button>`);
-    } else if (s.status === "warn" || s.status === "ready") {
-      acts.push(`<button class="primary" onclick="event.stopPropagation();runStage('stage3',false)">评估并构建</button>`);
-    }
-    if (s.id === "s3.dpo_review") {
-      acts.push(`<button onclick="event.stopPropagation();jumpToTrain('dpo_preference_pairs.jsonl')">查看 DPO 样本</button>`);
-    } else if (s.id === "s3.handoff") {
-      acts.push(`<button onclick="event.stopPropagation();openHandoff()">查看 handoff.md</button>`);
-    } else {
-      acts.push(`<button class="ghost" onclick="event.stopPropagation();jumpToTrain()">查看训练数据</button>`);
-    }
-  }
-  return acts.join("");
-}
-
-function rwInlineJump(s) {
-  if (s.status !== "warn" && s.status !== "ready") return "";
-  if (s.phase === "stage2") {
-    return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();runStage('stage2',false)">续跑补齐 →</button>
-      <button class="ghost" style="padding:3px 8px;font-size:11.5px" onclick="event.stopPropagation();jumpToGold('')">查看 →</button>`;
-  }
-  if (s.id === "s3.dpo_review") {
-    return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();runStage('stage3',false)">续跑 →</button>`;
-  }
-  if (s.id === "s3.package") {
-    return `<button style="padding:3px 10px;font-size:11.5px" onclick="event.stopPropagation();exportPackage()"${PACK.running ? " disabled" : ""}>${PACK.running ? "打包中…" : "打包 →"}</button>`;
-  }
-  return "";
-}
-
-function rwStageAction(phaseId, rb) {
-  if (phaseId === "stage1") return `<button onclick="jumpToRaw()">查看原始数据</button><button onclick="runStage('stage1',false)">运行 Stage 1</button>`;
-  if (phaseId === "stage2") return `<button onclick="jumpToGold('')">查看黄金数据</button><button onclick="runStage('stage2',false)">运行 Stage 2</button>`;
-  if (phaseId === "stage3") return `<button onclick="jumpToTrain()">查看训练集</button><button onclick="runStage('stage3',false)">评估并构建</button>`;
-  return "";
-}
-
-function rwRenderStageDetail(p, rb) {
-  const focusId = rb.job?.progress?.id || rb.next?.id;
-  const openId = RW_UI.openStep !== null ? RW_UI.openStep : focusId;
-  return `<div class="rw-stage">
-    <div class="rw-stage-h">
-      <div>
-        <h2>${esc(p.name)}</h2>
-        <p>${esc(p.desc || "")} · 已完成 ${p.done}/${p.total} 步</p>
-      </div>
-      <div class="rw-stage-acts">${rwStageAction(p.id, rb)}</div>
-    </div>
-    <div>
-      ${p.steps.map(s => {
-        const [stxt, scls] = RB_STATUS[s.status] || RB_STATUS.todo;
-        const isFocus = s.id === focusId;
-        const isOpen = s.id === openId;
-        const mark = s.status === "done" ? "✓" : s.status === "running" ? "▶" : s.status === "warn" ? "!" : "·";
-        const jumpBtn = rwInlineJump(s);
-        return `<div class="rw-step ${scls} ${isFocus ? "focus" : ""} ${isOpen ? "open" : ""}">
-          <div class="rw-step-row" onclick="toggleRwStep('${s.id}')">
-            <span class="rs-mark">${mark}</span>
-            <span class="rs-title">
-              <span class="rs-label">${esc(s.label)}</span>
-              <span class="rb-owner o-${s.owner === "模型" ? "m" : s.owner === "人工" ? "h" : "p"}">${esc(s.owner)}</span>
-              ${isFocus ? `<span class="tag t-pending" style="font-size:10.5px;padding:0 6px">${s.status === "running" ? "正在执行" : "当前待办"}</span>` : ""}
-            </span>
-            <span class="rs-val">${esc(s.value || stxt)}</span>
-            <span class="row" style="gap:6px;flex-wrap:nowrap">
-              <span class="faint" style="font-size:11px">${esc(stxt)}</span>
-              ${jumpBtn}
-            </span>
-            <span class="rs-chev">▶</span>
-          </div>
-          <div class="rw-step-detail">
-            <div>${esc(s.detail || "")}</div>
-            <div class="rs-meta">
-              ${s.output ? `<span>产出：${esc(s.output)}</span>` : ""}
-              ${s.hint ? `<span>状态：${esc(s.hint)}</span>` : ""}
-              <span>步骤 ID：${esc(s.id)}</span>
-            </div>
-            <div class="rs-acts">${rwStepActions(s)}</div>
-          </div>
-        </div>`;
-      }).join("")}
-    </div>
-  </div>`;
-}
-
+/* ------------------------------ 交付包动作与门禁抽屉 ------------------------------ */
 function exportProfileList(rb) {
   return (rb && rb.export_profiles) || [];
 }
@@ -5467,233 +4298,6 @@ function selectExportProfile(id) {
   PACK.profile = id;
   PACK.profileChosen = true;
   try { localStorage.setItem("gt.exportProfile", id); } catch (_) {}
-  if (STATE.runbook) renderRunsView(STATE.runbook);
-}
-function packProfileOptionsHtml(rb, selectedId) {
-  const profiles = exportProfileList(rb);
-  const cur = selectedId || currentExportProfile(rb);
-  return profiles.map(p =>
-    `<option value="${esc(p.id)}"${p.id === cur ? " selected" : ""}>${esc(p.label || p.id)}</option>`
-  ).join("");
-}
-
-function rwRenderDeliveryDetail(rb) {
-  const del = rb.deliverable || {};
-  if (del.zip_name) window.__lastZipName = del.zip_name;
-  const busy = !!PACK.running;
-  const dis = busy ? " disabled" : "";
-  const packs = (STATE.packHist && STATE.packHist.packs) || [];
-  const status = PACK.running
-    ? `<span class="chip warn" id="packStatus">打包中 · <b id="packElapsed">${PACK.elapsed}</b>s</span>`
-    : (PACK.error ? `<span class="chip bad">上次失败：${esc(PACK.error)}</span>` : "");
-  const newBar = `<section class="panel" id="packStatusPanel">
-    <div class="delivery-new-bar">
-      <div class="grow">
-        <b>用当前 Build 新建交付包</b>
-        <div class="faint" style="margin-top:4px;font-size:12px">历史包见下方。下载时可另选格式；若该 Build 还没有对应格式包，会先打包再下载。</div>
-      </div>
-      <label class="faint" style="font-size:12px">格式
-        <select id="deliveryNewProfile"${dis}>${packProfileOptionsHtml(rb)}</select>
-      </label>
-      <button class="primary" type="button" onclick="exportPackage()"${dis}>${busy ? "打包中…" : "新建包"}</button>
-      ${status}
-    </div>
-  </section>`;
-  return `<div class="delivery-workspace">${newBar}
-  <section class="panel delivery-history">
-    <div class="panel-h"><h3>历史交付包</h3><span class="hint">共 ${fmt(packs.length)} 份</span><span class="grow"></span><button type="button" class="ghost slim" onclick="openPackEval('latest')">当前最新 Build 体检</button></div>
-    ${packHistHtml(rb)}
-  </section>
-  ${packDiffPanelHtml(rb)}
-  </div>`;
-}
-function packTok(n) {
-  const v = Number(n) || 0;
-  if (v < 1000) return String(v);
-  const k = v / 1000;
-  return (k >= 10 ? Math.round(k) : Math.round(k * 10) / 10) + "k";
-}
-function packTokMark(n) {
-  const v = Number(n) || 0;
-  if (v <= 0) return "0";
-  if (v >= 1e8) return "16k+";
-  return Math.round(v / 1024) + "k";
-}
-function packLenRulerTicks(bins) {
-  const n = Math.max(1, bins.length);
-  const edges = [{ i: 0, lo: 0, label: "0", edge: "start" }];
-  bins.forEach((b, idx) => {
-    const hi = Number(b.hi);
-    if (!Number.isFinite(hi) || hi >= 1e8) return;
-    edges.push({ i: idx + 1, lo: hi, label: packTokMark(hi), edge: "" });
-  });
-  if (bins.length) {
-    const last = bins[bins.length - 1];
-    if (Number(last.hi) >= 1e8) edges.push({ i: n, lo: Number(last.lo) || 0, label: "16k+", edge: "end" });
-  }
-  const want = new Set([0, 2048, 4096, 8192, 10240, 12288, 16384]);
-  const picks = [];
-  const seen = new Set();
-  for (const e of edges) {
-    const key = e.edge === "end" ? "end" : e.lo;
-    if (seen.has(key)) continue;
-    const keep = e.edge === "start" || e.edge === "end" || want.has(e.lo);
-    if (!keep) continue;
-    seen.add(key);
-    picks.push({
-      ...e,
-      cut: e.lo === 10240,
-      cls: [e.edge, e.lo === 10240 ? "cut" : ""].filter(Boolean).join(" "),
-    });
-  }
-  if (!picks.some(t => t.cut)) {
-    const cutIdx = bins.findIndex(b => (b.lo || 0) >= 10240);
-    if (cutIdx >= 0) picks.push({ i: cutIdx, lo: 10240, label: "10k", cut: true, cls: "cut" });
-  }
-  picks.sort((a, b) => a.i - b.i || a.lo - b.lo);
-  return { n, ticks: picks, cutIdx: bins.findIndex(b => (b.lo || 0) >= 10240) };
-}
-function packLenLinePoints(bins, { w = 100, h = 56, padY = 4 } = {}) {
-  const n = Math.max(1, bins.length);
-  const maxC = Math.max(1, ...bins.map(b => b.count || 0));
-  return bins.map((b, i) => {
-    const x = n === 1 ? w / 2 : (i / (n - 1)) * w;
-    const y = h - padY - ((b.count || 0) / maxC) * (h - padY * 2);
-    return [x, y];
-  });
-}
-function packLenPoly(points) {
-  return points.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
-}
-function packLenArea(points, h = 56) {
-  if (!points.length) return "";
-  const first = points[0], last = points[points.length - 1];
-  return `${first[0].toFixed(2)},${h} ${packLenPoly(points)} ${last[0].toFixed(2)},${h}`;
-}
-function packLenSparkHtml(p) {
-  const len = p.length;
-  const sft = len && len.sft;
-  const dpo = len && len.dpo;
-  const rulerBins = (sft && sft.bins) || (dpo && dpo.bins) || [];
-  if (!rulerBins.length) {
-    return `<div class="pack-len"><div class="pack-len-empty">—</div></div>`;
-  }
-  const { n, ticks, cutIdx } = packLenRulerTicks(rulerBins);
-  const w = 100, h = 56;
-  const sftPts = sft && sft.bins && sft.bins.length ? packLenLinePoints(sft.bins, { w, h }) : [];
-  const dpoPts = dpo && dpo.bins && dpo.bins.length ? packLenLinePoints(dpo.bins, { w, h }) : [];
-  const cutX = cutIdx >= 0 && n > 1 ? ((cutIdx / (n - 1)) * w).toFixed(2) : null;
-  const gridLines = ticks
-    .filter(t => t.i > 0 && t.i < n)
-    .map(t => {
-      const x = n > 1 ? ((t.i / (n - 1)) * w).toFixed(2) : "0";
-      const cls = t.cut ? "grid-cut" : "grid-v";
-      return `<line class="${cls}" x1="${x}" y1="0" x2="${x}" y2="${h}" />`;
-    }).join("");
-  const cutLine = cutX != null && !ticks.some(t => t.cut)
-    ? `<line class="grid-cut" x1="${cutX}" y1="0" x2="${cutX}" y2="${h}" />`
-    : "";
-  const svg = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
-      ${gridLines}${cutLine}
-      ${sftPts.length ? `<polygon class="area-sft" points="${packLenArea(sftPts, h)}" />` : ""}
-      ${dpoPts.length ? `<polygon class="area-dpo" points="${packLenArea(dpoPts, h)}" />` : ""}
-      ${sftPts.length ? `<polyline class="line-sft" points="${packLenPoly(sftPts)}" />` : ""}
-      ${dpoPts.length ? `<polyline class="line-dpo" points="${packLenPoly(dpoPts)}" />` : ""}
-    </svg>`;
-  const ruler = ticks.map(t =>
-    `<span class="${esc(t.cls)}" style="--i:${t.i}" title="${esc(t.label)}">${esc(t.label)}</span>`
-  ).join("");
-  const legend = [
-    sftPts.length ? `<span class="sft"><i></i>SFT</span>` : "",
-    dpoPts.length ? `<span class="dpo"><i></i>DPO</span>` : "",
-  ].join("");
-  const aria = [
-    sft ? `SFT 中位 ${packTok(sft.p50)}` : "",
-    dpo ? `DPO 中位 ${packTok(dpo.p50)}` : "",
-    "点击查看详情",
-  ].filter(Boolean).join("，");
-  return `<div class="pack-len">
-    <div class="pack-len-chart" role="button" tabindex="0" aria-label="${esc(aria)}"
-      onclick="openPackLengthStats('${esc(p.name)}')"
-      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openPackLengthStats('${esc(p.name)}')}">
-      <div class="pack-len-legend">${legend}</div>
-      <div class="pack-len-plot">${svg}</div>
-      <div class="pack-len-ruler" style="--n:${n}" aria-hidden="true">${ruler}</div>
-    </div>
-  </div>`;
-}
-function packHistHtml(rb) {
-  const packs = (STATE.packHist && STATE.packHist.packs) || [];
-  if (!packs.length) {
-    return `<div class="empty" style="padding:24px 16px"><h3>还没有交付包</h3><p>先在训练数据页构建训练集，再回这里用当前 Build 新建包。</p></div>`;
-  }
-  const cell = n => n == null ? "—" : fmt(n);
-  return `<div class="delivery-pack-list">${packs.map(p => {
-    const mb = p.size_bytes ? (p.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "—";
-    const buildShort = p.build_id ? String(p.build_id).slice(0, 8) : "—";
-    const profile = p.profile || currentExportProfile(rb || STATE.runbook || {});
-    return `<article class="delivery-pack-card">
-      <div class="pack-info">
-        <div class="pack-name mono" title="${esc(p.name)}">${esc(p.name)}</div>
-        <div class="pack-meta">${esc(p.format_label || p.profile || "未记录格式")} · ${esc(buildShort)} · ${esc(stamp(p.generated_at) || "")} · ${mb}</div>
-        <div class="pack-counts">
-          <span class="chip-n">SFT <b>${cell(p.sft_train)}</b><span class="faint">/${cell(p.sft_eval)}</span></span>
-          <span class="chip-n">DPO <b>${cell(p.dpo_train)}</b><span class="faint">/${cell(p.dpo_eval)}</span></span>
-        </div>
-      </div>
-      ${packLenSparkHtml(p)}
-      <div class="delivery-pack-actions">
-        <button class="ghost slim" type="button" onclick="openPackEval(${jsArg(p.name)})">体检</button>
-        <button class="ghost slim" type="button" onclick="openPackDocs('${esc(p.name)}')">说明</button>
-        <select data-pack-profile="${esc(p.name)}" aria-label="下载格式">${packProfileOptionsHtml(rb || STATE.runbook || {}, profile)}</select>
-        <button class="slim" type="button" onclick="downloadPackWithFormat('${esc(p.name)}','${esc(p.build_id || "")}')">下载</button>
-        <button class="danger slim" type="button" onclick="deletePack('${esc(p.name)}')">删除</button>
-      </div>
-    </article>`;
-  }).join("")}</div>`;
-}
-
-function packDiffPanelHtml() {
-  const packs = (STATE.packHist && STATE.packHist.packs) || [];
-  const opts = [
-    { val: "latest", label: "当前最新 Build (latest)" },
-    ...packs.map(p => ({ val: p.name, label: `${p.name}${p.package_hash ? ` (${p.package_hash})` : ""}` })),
-  ];
-  if (opts.length < 2) return "";
-  const pd = STATE.packDiff || {};
-  const beforeCur = pd.before || (packs[1] ? packs[1].name : opts[0].val);
-  const afterCur = pd.after || (packs[0] ? packs[0].name : opts[1].val);
-  return `<section class="panel delivery-diff-panel">
-    <div class="panel-h"><h3>包间指标对比 (Pack Diff)</h3><span class="hint">对比两版交付包或 Build 的规模、门禁、早停率与长度分布</span></div>
-    <div class="toolbar">
-      <label class="faint" style="font-size:12px">对比前 (Before)
-        <select id="packDiffBefore">${opts.map(o => `<option value="${esc(o.val)}"${o.val === beforeCur ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>
-      </label>
-      <span class="muted">→</span>
-      <label class="faint" style="font-size:12px">对比后 (After)
-        <select id="packDiffAfter">${opts.map(o => `<option value="${esc(o.val)}"${o.val === afterCur ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>
-      </label>
-      <button type="button" class="slim" onclick="runPackDiff()"${pd.loading ? " disabled" : ""}>${pd.loading ? "对比中…" : "运行对比"}</button>
-    </div>
-    <div class="panel-b" id="packDiffResult">
-      ${pd.error ? `<div class="error-box">${esc(pd.error)}</div>` : pd.data ? renderEvalDiffBlock(pd.data) : `<div class="faint" style="font-size:12.5px">选择旧包与新包后点击「运行对比」，即可查看全维度指标增减表。</div>`}
-    </div>
-  </section>`;
-}
-
-async function runPackDiff() {
-  const bEl = $("#packDiffBefore"), aEl = $("#packDiffAfter");
-  if (!bEl || !aEl) return;
-  const before = bEl.value, after = aEl.value;
-  Object.assign(STATE.packDiff, { before, after, loading: true, error: "" });
-  if (STATE.runbook) renderRunsView(STATE.runbook);
-  try {
-    const res = await api(`/api/eval/diff?before=${encodeURIComponent(before)}&after=${encodeURIComponent(after)}`);
-    Object.assign(STATE.packDiff, { data: res, loading: false, error: "" });
-  } catch (e) {
-    Object.assign(STATE.packDiff, { data: null, loading: false, error: String(e.message || e) });
-  }
-  if (STATE.tab === "runs" && STATE.runbook) renderRunsView(STATE.runbook);
 }
 
 async function openPackEval(target) {
@@ -5747,27 +4351,6 @@ async function openPackEval(target) {
   }
 }
 
-function renderRunsView(rb) {
-  STATE.runbook = rb;
-  STATE.delivery = rb.deliverable || {};
-  $("#view-runs").innerHTML = rwRenderDeliveryDetail(rb);
-}
-
-async function loadRuns() {
-  const seq = ++RUNS_REQUEST_SEQ;
-  try {
-    const [rb, packs] = await Promise.all([
-      api("/api/runbook"), api("/api/export/history"),
-    ]);
-    if (seq !== RUNS_REQUEST_SEQ) return;
-    STATE.packHist = packs || {packs:[]};
-    renderRunsView(rb);
-  } catch (e) {
-    if (seq !== RUNS_REQUEST_SEQ) return;
-    $("#view-runs").innerHTML = `<div class="panel"><div class="empty">${esc(e.message)}</div></div>`;
-  }
-}
-
 function stopPackTimer() {
   if (PACK.timer) { clearInterval(PACK.timer); PACK.timer = null; }
 }
@@ -5814,7 +4397,6 @@ async function exportPackage(opts) {
   PACK.result = null;
   setPackButtonsDisabled(true);
   startPackTimer();
-  if (STATE.tab === "runs") loadRuns().catch(() => {});
   try {
     const body = { profile };
     if (opts.buildId) body.build_id = opts.buildId;
@@ -5842,7 +4424,8 @@ async function exportPackage(opts) {
         PACK.result = null;
       }
       setPackButtonsDisabled(false);
-      if (STATE.tab === "runs") loadRuns();
+      STATE.vds.selectedId = "";
+      if (STATE.tab === "overview") loadOverview();
     });
   } catch (e) {
     stopPackTimer();
@@ -5851,7 +4434,6 @@ async function exportPackage(opts) {
     PACK.result = null;
     setPackButtonsDisabled(false);
     toast(PACK.error, "err");
-    if (STATE.tab === "runs") loadRuns();
   }
 }
 
@@ -5860,22 +4442,6 @@ function downloadZip(name) {
   const picked = name || window.__lastZipName || "";
   if (picked) q.set("name", picked);
   window.location.href = "/api/export/download?" + q.toString();
-}
-
-async function downloadPackWithFormat(name, buildId) {
-  const sel = document.querySelector(`select[data-pack-profile="${CSS.escape(name)}"]`);
-  const profile = (sel && sel.value) || currentExportProfile(STATE.runbook || {});
-  const pack = ((STATE.packHist && STATE.packHist.packs) || []).find(p => p.name === name);
-  if (pack && pack.profile && pack.profile === profile) {
-    downloadZip(name);
-    return;
-  }
-  if (!buildId) {
-    toast("这个包没有 build_id，无法按其它格式重打；请直接下载原包或用当前 Build 新建", "err");
-    return;
-  }
-  toast(`将按 ${profile} 重新打包后再下载`, "ok");
-  await exportPackage({ profile, buildId, downloadAfter: true });
 }
 
 async function deletePack(name) {
@@ -5888,7 +4454,8 @@ async function deletePack(name) {
   try {
     await api("/api/export/pack?name=" + encodeURIComponent(name), { method: "DELETE" });
     toast(`已删除 ${name}`, "ok");
-    if (STATE.tab === "runs") loadRuns();
+    STATE.vds.selectedId = "";
+    if (STATE.tab === "overview") loadOverview();
   } catch (e) {
     toast(e.message || "删除失败", "err");
   }
@@ -5976,28 +4543,11 @@ async function runStage(stage, force) {
 }
 
 let JOB_TIMER = null, JOB_ID = null, JOB_LINES = [], JOB_META = null;
-function paintJob() {
-  const el = $("#jobConsole"); if (!el) return;
-  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
-  el.innerHTML = JOB_LINES.length ? "" : `<span class="faint">启动任意阶段后，日志会实时出现在这里。</span>`;
-  for (const line of JOB_LINES) {
-    const d = document.createElement("div");
-    d.textContent = line;
-    if (/失败|error|Traceback/i.test(line)) d.className = "err";
-    else if (/完成/.test(line)) d.className = "ok";
-    el.appendChild(d);
-  }
-  if (atBottom) el.scrollTop = el.scrollHeight;
-  const st = JOB_META;
-  const stEl = $("#jobStatus");
-  if (stEl && st) stEl.innerHTML = `${runTag(st.status)} <span class="mono faint" style="margin-left:8px">${esc(st.stage)}${st.force?"，全量":""}，作业 ${esc(st.id)}</span>`;
-}
 function watchJob(jobId, onDone) {
   registerJobWatch(jobId, onDone);
   if (JOB_TIMER) clearInterval(JOB_TIMER);
-  if (RB_TIMER) clearInterval(RB_TIMER);
   JOB_ID = jobId; JOB_LINES = []; JOB_META = null;
-  let offset = 0, rbTick = 0;
+  let offset = 0;
   const tick = async () => {
     try {
       const j = await api(`/api/jobs/${jobId}?offset=${offset}`);
@@ -6005,26 +4555,15 @@ function watchJob(jobId, onDone) {
       JOB_LINES.push(...(j.logs||[]));
       offset += (j.logs||[]).length;
       JOB_META = j;
-      if (STATE.tab === "runs") paintJob();
       if (RAW_DRAWER.analyzeJobId === jobId) paintRawDrawerAnalyze();
-      // 运行中每 2 秒刷新 runbook，使步骤状态与 @@STEP 上报同步
-      if (STATE.tab === "runs" && ++rbTick % 2 === 0) {
-        api("/api/runbook").then(rb => {
-          if (STATE.tab === "runs" && JOB_ID === jobId)
-            renderRunsView(rb);
-        }).catch(() => {});
-      }
       if (!JOB_ACTIVE(j.status)) {
         clearInterval(JOB_TIMER); JOB_TIMER = null;
-        if (RB_TIMER) { clearInterval(RB_TIMER); RB_TIMER = null; }
         onTaskFinished(j);
-        if (STATE.tab === "runs" && j.stage !== "package") loadRuns();
       }
     } catch (e) { /* job may not be registered yet */ }
   };
   tick(); JOB_TIMER = setInterval(tick, 900);
 }
-let RB_TIMER = null;
 
 /* ------------------------------ 抽屉 / 通用 ------------------------------ */
 function setDrawerFoot(html, className="df") {
@@ -6063,7 +4602,6 @@ window.addEventListener("hashchange", () => {
   if (tab && tab !== STATE.tab) setTab(tab);
 });
 
-$("#btnRunAll").onclick = () => runStage("all", false);
 $("#drawerFoot").addEventListener("click", onDrawerFootClick);
 taskHubEnsure();
 setTab(location.hash.slice(1) || "overview");

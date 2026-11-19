@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from pipeline import dataset_draft, session_delete, stage1_extract, stage2_gold
 from pipeline.common import pilog
 from pipeline.common.config import load_config, stage_dirs
-from pipeline.common.store import load_index, now_iso, read_json, write_json_atomic
+from pipeline.common.store import load_index, now_iso, read_json, read_jsonl, write_json_atomic
 
 from . import inspect_tools, ledger
 
@@ -551,15 +551,24 @@ def curate_dpo(
     if not isinstance(store, dict):
         store = {}
 
+    dirs = stage_dirs(cfg)
+    records = (load_index(dirs["gold"] / "index.json").get("sessions") or {})
+    draft = dataset_draft.load_draft(cfg)
+    assignments = (draft.get("split_plan") or {}).get("assignments") or {}
+    cands, _ = stage3_synth.synthesize_dpo_candidates(records, cfg, assignments)
+    known_cand_ids: set[str] = {
+        str(c.get("sample_id") or "").strip()
+        for c in cands
+        if isinstance(c, dict) and str(c.get("sample_id") or "").strip()
+    }
+    for row in read_jsonl(dirs["gold"] / "dpo_pairs.jsonl"):
+        if isinstance(row, dict) and str(row.get("sample_id") or "").strip():
+            known_cand_ids.add(str(row["sample_id"]).strip())
+
     if isinstance(verdicts_input, str) and re.fullmatch(
         r"(all|pending)=(good|swap|drop)", verdicts_input.strip()
     ):
         scope_tok, target_verdict = verdicts_input.strip().split("=", 1)
-        dirs = stage_dirs(cfg)
-        records = (load_index(dirs["gold"] / "index.json").get("sessions") or {})
-        draft = dataset_draft.load_draft(cfg)
-        assignments = (draft.get("split_plan") or {}).get("assignments") or {}
-        cands, _ = stage3_synth.synthesize_dpo_candidates(records, cfg, assignments)
         rcache = read_json(dirs["state"] / "dpo_review_cache.json", default={}) or {}
         normalized = {}
         for c in cands:
@@ -583,6 +592,12 @@ def curate_dpo(
         normalized = _normalize_dpo_verdicts(verdicts_input)
         if not normalized:
             raise ValueError("DPO 裁决不能为空")
+        unknown_ids = sorted(set(normalized.keys()) - known_cand_ids)
+        if unknown_ids:
+            raise ValueError(
+                f"未知 DPO sample_id（不在当前候选池中，共 {len(unknown_ids)} 条）: "
+                f"{', '.join(unknown_ids[:5])}"
+            )
     now = now_iso()
     sids: set[str] = set()
     for sample_id, item in normalized.items():

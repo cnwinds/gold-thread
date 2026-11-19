@@ -483,10 +483,9 @@ def test_web_observability_console_wires_phase3_views(tmp_path: Path) -> None:
         "openSessionLineageDrawer(",
         "renderLineageHtml(",
         "openPackEval(",
-        "packDiffPanelHtml(",
-        "runPackDiff(",
+        "openPackDiffDrawer(",
         "/api/gold/session/${encodeURIComponent(sid)}/step-gate",
-        'data-gold-view="lineage"',
+        'data-sm="lineage"',
         "TAB_ALIASES",
     ):
         assert required in html, f"web/index.html 缺少 Phase 3 关键实现: {required}"

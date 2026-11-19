@@ -240,7 +240,7 @@ def _enrich_metadata_from_build(
     needs_enrich = any(
         not isinstance(r.get("metadata"), dict) or not r["metadata"].get("project_group")
         for rows in datasets.values()
-        for r in rows[:5]
+        for r in rows
     )
     if not needs_enrich:
         return
@@ -587,7 +587,7 @@ def eval_pack(
         sft_train_unique = len(sft_train_unique_ids)
     sft_eval_unique = len(sft_eval_unique_ids)
 
-    # 2) 项目覆盖与归组规范性
+    # 2) 项目覆盖与归组规范性（缺失 project_group 的样本严格标为 unknown 并计入非规范归组）
     train_projects_set: set[str] = set()
     eval_projects_set: set[str] = set()
     for rows, bucket in (
@@ -598,16 +598,11 @@ def eval_pack(
     ):
         for r in rows:
             md = r.get("metadata") if isinstance(r.get("metadata"), dict) else {}
-            pg = str(md.get("project_group") or "").strip()
-            if pg:
-                bucket.add(pg)
+            pg = str(md.get("project_group") or "").strip() or "unknown"
+            bucket.add(pg)
     all_projects_set = train_projects_set | eval_projects_set
-    if not all_projects_set and (sft_train or sft_eval or dpo_train or dpo_eval):
-        projects = ["unknown"]
-        non_canonical_projects: List[str] = []
-    else:
-        projects = sorted(all_projects_set)
-        non_canonical_projects = [p for p in projects if not p.startswith("game::")]
+    projects = sorted(all_projects_set)
+    non_canonical_projects = [p for p in projects if not p.startswith("game::")]
 
     # 3) 工具调用契约 & 6) Prompt 标签污染率
     ok_blocks = wrong_style = stray_xml = bad_blocks = 0
@@ -699,6 +694,7 @@ def eval_pack(
 
     # 4) 思考形态一致性 & 5) 中途假收尾 stop 步检测 & 7) 并行工具调用率
     hist_total = hist_with_think = 0
+    missing_assistant_targets = 0
     missing_target_thinking = 0
     short_target_thinking = 0
     stop_targets = 0
@@ -716,8 +712,16 @@ def eval_pack(
         rows = datasets.get(ds_key) or []
         f_hist = f_hist_th = 0
         for row in rows:
+            convs = row.get("conversations") or row.get("messages") or []
+            last_role = (
+                str((convs[-1].get("from") or convs[-1].get("role") or "")).strip()
+                if convs and isinstance(convs[-1], dict)
+                else ""
+            )
             turns = _sft_assistant_turns(row)
-            if not turns:
+            if not turns or last_role not in ("gpt", "assistant"):
+                missing_assistant_targets += 1
+                missing_target_thinking += 1
                 continue
             for has, _body, _has_tc, _full in turns[:-1]:
                 f_hist += 1
@@ -822,6 +826,12 @@ def eval_pack(
             "code": "thinking_shape_mixed",
             "message": f"SFT 历史思考形态不一致 (ratio={hist_think_ratio:.2%})",
         })
+    if missing_assistant_targets > 0:
+        violations.append({
+            "severity": "error",
+            "code": "missing_assistant_target",
+            "message": f"SFT 样本缺少有效的末尾 assistant 监督目标 ({missing_assistant_targets} 条)",
+        })
     if missing_target_thinking > 0:
         violations.append({
             "severity": "error",
@@ -911,6 +921,7 @@ def eval_pack(
         "hist_think_ratio": hist_think_ratio,
         "thinking_shape": thinking_shape,
         "empty_target_thinking": empty_target_thinking,
+        "missing_assistant_targets": missing_assistant_targets,
         "missing_target_thinking": missing_target_thinking,
         "short_target_thinking": short_target_thinking,
         # 5) 中途假收尾

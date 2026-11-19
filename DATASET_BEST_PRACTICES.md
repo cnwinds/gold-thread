@@ -1,5 +1,4 @@
-> **工程实现说明（2026-10 更新）**：本文档保留领域知识与提纯规范。管线阶段、控制台行为与术语以 [`CONTEXT.md`](CONTEXT.md) 为准；命令与目录索引见 `README.md`。
-> 旧版单文件脚本 `sync_pi_datasets.py` 与 `output/` 仅作对照保留。
+> **工程演进说明（2026-11 更新）**：本文档沉淀了早期 11 条会话阶段确立的**逆向轨迹除噪、剪枝折叠与科学排错保留方法论**。当前系统的最新架构——包括 **Agent-First `gt` 确定性原语（ADR-0008）**、**虚拟数据集条目 + CAS 去重快照池 + 演进 DAG 关系图（ADR-0009）**、**不按正/反标签硬限制 SFT 去向**，以及 **保留截断历史 `<think>`（`strip_history_thinking: false`）** 等现行实现与参数——统一以根目录 [`CONTEXT.md`](CONTEXT.md) 与 `docs/adr/ADR-0001 ~ ADR-0009` 为准；命令与目录索引见 [`README.md`](README.md)。
 
 # GoldThread · Agent 工程分析训练数据集整理与黄金轨迹蒸馏最佳实践手册
 

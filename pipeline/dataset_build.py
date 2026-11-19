@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import dataset_draft
+from . import cas_store, dataset_draft
 from .common.config import config_hash, load_config, stage_dirs
 from .common.store import now_iso, read_json, read_jsonl, sha256_file, write_json_atomic
 from .dataset_draft import DRAFT_LOCK
@@ -131,6 +131,7 @@ def create_build(
             )
             if validate_input and actual_hash != plan_hash:
                 raise RuntimeError("Build 输入在固化前发生变化，请重新运行 Stage 3")
+            cas_manifest = cas_store.capture_build_cas(cfg)
             manifest = {
                 "version": 1,
                 "build_id": build_id,
@@ -138,6 +139,7 @@ def create_build(
                 "created_at": now_iso(),
                 "config_hash": config_hash(cfg),
                 "source_revisions": revisions,
+                "cas_manifest": cas_manifest,
                 "split_plan": copy.deepcopy(draft.get("split_plan") or {}),
                 "scope_decisions": copy.deepcopy(draft.get("scope_decisions") or {}),
                 "decisions": copy.deepcopy(draft.get("decisions") or {}),

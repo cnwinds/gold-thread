@@ -34,6 +34,9 @@ python gt.py inspect source --dir "D:\train-project\teacher" --unadopted --json
 # 查看当前语料库全景（项目切分、SFT/DPO 规模、最新 Build）
 python gt.py inspect corpus [--project game::meowdoku] --json
 
+# 查看虚拟数据集演进关系图（纯只读无写盘副作用：DAG 节点/边、HEAD 包、Clean/Dirty 状态与 CAS 对象数）
+python gt.py inspect graph --json
+
 # 查看单条会话元信息、回合标记与紧凑步骤列表（支持唯一前缀如 01a15341）
 python gt.py inspect session 01a15341 --steps --json
 
@@ -86,7 +89,7 @@ python gt.py curate exclude --scope session_sft:<sid> [--restore] --reason "仅�
 
 #### `gt curate steps --file <json>` 输入结构规范
 
-支持单会话简写或多会话批量结构（注意：`rewrite` 文本须与原思考保持中文/英文主语言一致，且单会话 `prune/fold` 比例默认受 `max_drop_ratio` 安全阀保护）：
+支持单会话简写或多会话批量结构（安全阀边界：`rewrite` 文本须与原思考保持中文/英文主语言一致；单会话 `prune` 数量上限为 `max(1, floor(assistant_steps * 0.35))` 且首个助手步禁止 `prune`；`fold` 独立按相邻同路径 `write+edit` 能否合并校验）：
 
 ```json
 {
@@ -122,30 +125,33 @@ python gt.py curate exclude --scope session_sft:<sid> [--restore] --reason "仅�
 
 #### `gt curate dpo --verdicts <json>` 输入结构规范
 
+**重要**：请勿凭会话前缀与序号臆造 ID！必须先通过 `gt inspect step <sid> <step_ref> --json` 的 `dpo_pairs[].sample_id`（或读取 `data/02_gold/dpo_pairs.jsonl`）获取真实完整 `sample_id`；`curate dpo` 会严格校验候选池存在性，未知 ID 将直接报错拦截。
+> 注意：`--verdicts pending=good` 仅放行尚未裁决的新增项；`--verdicts all=good` 会**全量覆盖已有裁决**，仅用于测试或明确确认全放行场景，不可替代逐对复核。
+
 ```json
 {
-  "dpo::01a15341::0": {"verdict": "good", "reason": "正负例对比鲜明，惩罚中途早停"},
-  "dpo::01a15341::1": {"verdict": "swap", "reason": "原 rejected 更简洁准确，对调纳入"},
-  "dpo::01a15341::2": {"verdict": "drop", "reason": "差异过小，无偏好教学价值"}
+  "<从 dpo_pairs[].sample_id 获取的完整真实 ID>": {"verdict": "good", "reason": "正负例对比鲜明，惩罚中途早停"},
+  "<真实 ID 2>": {"verdict": "swap", "reason": "原 rejected 更简洁准确，对调纳入"},
+  "<真实 ID 3>": {"verdict": "drop", "reason": "差异过小，无偏好教学价值"}
 }
 ```
 
 ### 4. 纯确定性构建、硬门禁与打包 (`build` / `gate` / `pack`)
 
 ```bash
-# 先预览草稿规模与待审 DPO 数（不落盘）
-python gt.py build --dry-run --json
+# 先预览草稿规模与 DPO 审核明细（不落盘；检查 JSON 中的 gate_preview.pending_evaluations 与 gate_preview.bypassed_unreviewed）
+python gt.py build --dry-run [--require-reviewed-dpo] --json
 
-# 正式确定性构建（Stage 2 -> Stage 3 -> 固化不可变 Build -> 自动跑 gate check）
-python gt.py build --reason "构建新一版训练集" --json
+# 正式确定性构建（Stage 2 -> Stage 3 -> 固化不可变 Build + 自动归档 04_release/cas/ 快照池 -> 自动跑 gate check）
+# 加 --require-reviewed-dpo 可在无人值守模式下强制要求 bypassed_unreviewed == 0
+python gt.py build [--require-reviewed-dpo] --reason "构建新一版训练集" --json
 
-# 单独校验任意 Build 或交付 zip 的硬性质量门禁（违例返回非 0 退出码）
-# 门禁断言：SFT Train/Eval 非空、中途早停 stop == 0、标签泄漏 == 0、工具契约 100% 合法、
-# 目标步 <think> 完整、规范 game::* 归组、DPO 合法、length_gate 生效
-python gt.py gate check latest --json
+# 单独校验指定 Build 或交付 zip 的硬性质量门禁（违例返回退出码 2）
+# 注意：`latest` 指向最新 Build；验收学生训练将使用的最终 ZIP 包时，请传入 pack 返回的 package_hash 或 zip 路径！
+python gt.py gate check <pack_hash_or_zip_path> --json
 
-# 从不可变 Build 打包交付 zip（自动跑本地分词 length_gate 软压缩与门禁核验）
-python gt.py pack --profile qwen-xml --copy-to "D:\train-project\student" --reason "导出 Qwen3.8 训练包" --json
+# 从不可变 Build 打包交付 zip（先在暂存区生成并执行 gate check：仅门禁通过才原子发布至 delivery/ 及 --copy-to；失败返回退出码 2 且不产出污染包）
+python gt.py pack --profile qwen-xml [--parent d9dbbbd1] --copy-to "D:\train-project\student" --reason "导出 Qwen3.8 训练包" --json
 ```
 
 ### 5. 评估报告归档与账本查询 (`report` / `ledger`)
@@ -167,7 +173,10 @@ python gt.py ledger list --limit 50 [--sid 01a15341] [--tool curate.steps] --jso
 
 ## 三、新一轮迭代标准闭环 SOP
 
-1. **实测对账**：运行 `gt eval student` 与 `gt inspect source --unadopted`，定位学生模型的早停、盲区、上下文长度问题及未入库教师轨迹。
-2. **精准策展**：用 `gt curate adopt` / `drop-session` / `turns` / `steps` / `dpo` / `split` 下发结构化决策，每步均写明 `--reason`。
-3. **门禁构建与出包**：先 `gt build --dry-run` 确认 `pending_dpo == 0`，再 `gt build` 固化 Build 并确认 `gate.passed == true`，最后 `gt pack --copy-to ...` 生成交付 `.zip`。
-4. **对比归档**：运行 `gt eval diff <old> <new>` 核查全维度指标提升，调用 `gt report publish` 将完整分析报告落盘，供人类在 `http://127.0.0.1:8765` 审阅。
+1. **实测对账**：运行 `gt eval student` 与 `gt inspect source --unadopted --json`，定位学生模型的早停、盲区、上下文长度问题及未入库教师轨迹。
+2. **精准策展**：用 `gt curate adopt` / `drop-session` / `turns` / `steps` / `dpo` / `split` 下发结构化决策，每步均写明 `--reason`（DPO 必须取真实候选 `sample_id` 并确认返回 `updated` 命中数）。
+3. **门禁构建与受控出包**：
+   - 先 `gt build --dry-run --require-reviewed-dpo --json`，确认 `gate_preview.pending_evaluations == 0` 且 `gate_preview.bypassed_unreviewed == 0`；
+   - 再运行 `gt build --require-reviewed-dpo --reason "..." --json`，确认退出码为 `0` 且 `gate.passed == true`；
+   - 最后运行 `gt pack --profile qwen-xml --copy-to ... --reason "..." --json`：**若退出码为 `2`（`ok == false`），必须立即停手排查 `gate.violations`**（暂存包已自动销毁，切勿拿旧包冒充新包下发）；确认 `ok == true` 后可再用 `gt eval pack <package_hash> --json` 复核最终 ZIP。
+4. **对比归档**：运行 `gt eval diff <old_hash> <new_hash> --json` 核查全维度指标提升，调用 `gt report publish --reason "..."` 将完整分析报告落盘，供人类在 `http://127.0.0.1:8765` 审阅。

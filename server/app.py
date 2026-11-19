@@ -24,7 +24,15 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from goldthread import build_tools, curate_tools, eval_tools, inspect_tools, ledger, report_tools
+from goldthread import (
+    build_tools,
+    curate_tools,
+    eval_tools,
+    inspect_tools,
+    ledger,
+    lineage_graph,
+    report_tools,
+)
 from pipeline import (
     curation,
     dataset_build,
@@ -387,29 +395,22 @@ def _run_job(job: Job) -> None:
             stage2_gold.run(force=False, log=job.log, cfg=cfg)
             job.result = ann
         elif job.stage == "package":
-            from pipeline.package import build_delivery_zip  # noqa: PLC0415
-
-            build_dir, manifest = dataset_build.resolve_build(cfg, job.extra.get("build_id"))
-            build_cfg = dataset_build.load_build_config(build_dir, cfg)
-            result = build_delivery_zip(
-                build_dir,
-                build_cfg,
-                log=job.log,
+            result = build_tools.pack_delivery(
+                build_id=job.extra.get("build_id"),
                 profile=job.extra.get("profile"),
-                delivery_dir=stage_dirs(cfg)["root"] / "04_release" / "delivery",
+                run_gate=True,
+                reason="Web 控制台打包生成新交付包",
+                actor="human",
+                log=job.log,
+                cfg=cfg,
             )
-            job.result = {**result, "build_id": manifest["build_id"]}
-            try:
-                ledger.record_operation(
-                    "web.package",
-                    reason=f"Web 控制台打包 {result.get('zip_name') or ''}".strip(),
-                    actor="human",
-                    params={"build_id": manifest["build_id"], "profile": job.extra.get("profile")},
-                    affected={"build_id": manifest["build_id"], "pack": result.get("package_hash")},
-                    cfg=cfg,
+            if not result.get("ok"):
+                v_msgs = "; ".join(
+                    str(v.get("message") or v.get("code") or "")
+                    for v in ((result.get("gate") or {}).get("violations") or [])
                 )
-            except Exception:  # noqa: BLE001
-                pass
+                raise RuntimeError(f"交付门禁未通过，已拒绝发布包: {v_msgs or 'gate_failed'}")
+            job.result = result
         else:
             raise RuntimeError(f"未知阶段: {job.stage}")
         job.status = "done"
@@ -1236,6 +1237,7 @@ def overview() -> Dict[str, Any]:
         "latest_pack": latest_pack,
         "reports": reports_rows,
         "recent_ledger": recent_ledger_events,
+        "dataset_graph": lineage_graph.build_dataset_graph(cfg=cfg),
     }
 
 
@@ -3607,6 +3609,93 @@ def put_gold_step_gate(sid: str, body: StepGateBody) -> Dict[str, Any]:
         )
         return {"ok": True, **res}
     except (KeyError, FileNotFoundError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# 虚拟数据集实体与演进图谱 (Variant A: Lineage DAG + CAS 四层时间旅行)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/datasets/graph")
+def api_datasets_graph() -> Dict[str, Any]:
+    cfg = load_config()
+    return lineage_graph.build_dataset_graph(cfg=cfg)
+
+
+@app.get("/api/datasets/{dataset_id}")
+def api_virtual_dataset_overview(
+    dataset_id: str,
+    gate: bool = Query(False, description="是否附带执行完整硬门禁检查"),
+) -> Dict[str, Any]:
+    cfg = load_config()
+    try:
+        return lineage_graph.get_virtual_dataset_overview(dataset_id, cfg=cfg, include_gate=gate)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/datasets/{dataset_id}/train")
+def api_virtual_dataset_train(
+    dataset_id: str,
+    kind: str = Query("all"),
+    split: str = Query(""),
+    project: str = Query(""),
+    q: str = Query(""),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+) -> Dict[str, Any]:
+    cfg = load_config()
+    try:
+        return lineage_graph.list_virtual_dataset_train(
+            dataset_id,
+            cfg=cfg,
+            kind=kind,
+            split=split,
+            project=project,
+            q=q,
+            offset=offset,
+            limit=limit,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/datasets/{dataset_id}/gold")
+def api_virtual_dataset_gold(
+    dataset_id: str,
+    project: str = Query(""),
+    q: str = Query(""),
+) -> Dict[str, Any]:
+    cfg = load_config()
+    try:
+        return lineage_graph.list_virtual_dataset_gold(dataset_id, cfg=cfg, project=project, q=q)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/datasets/{dataset_id}/raw")
+def api_virtual_dataset_raw(
+    dataset_id: str,
+    project: str = Query(""),
+    q: str = Query(""),
+) -> Dict[str, Any]:
+    cfg = load_config()
+    try:
+        return lineage_graph.list_virtual_dataset_raw(dataset_id, cfg=cfg, project=project, q=q)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/datasets/{dataset_id}/sessions/{sid}")
+def api_virtual_dataset_session_lineage(dataset_id: str, sid: str) -> Dict[str, Any]:
+    cfg = load_config()
+    try:
+        return lineage_graph.get_virtual_dataset_session_lineage(dataset_id, sid, cfg=cfg)
+    except (FileNotFoundError, KeyError) as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

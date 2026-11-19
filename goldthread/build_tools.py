@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import copy
+import json
 import shutil
 import time
+import uuid
+import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from pipeline import package, stage1_extract, stage2_gold, stage3_synth
-from pipeline.common.config import load_config
+from pipeline.common.config import load_config, stage_dirs
+from pipeline.common.store import replace_atomic
 
 from . import eval_tools, ledger
 
@@ -47,8 +51,15 @@ def gate_check(
     checks: List[Dict[str, Any]] = [
         {
             "name": "sft_non_empty",
-            "passed": bool(ev["sft_train_rows"] > 0 and ev["sft_eval_rows"] > 0),
-            "detail": f"train={ev['sft_train_rows']}, eval={ev['sft_eval_rows']}",
+            "passed": bool(
+                ev["sft_train_rows"] > 0
+                and ev["sft_eval_rows"] > 0
+                and ev.get("missing_assistant_targets", 0) == 0
+            ),
+            "detail": (
+                f"train={ev['sft_train_rows']}, eval={ev['sft_eval_rows']}, "
+                f"missing_assistant_targets={ev.get('missing_assistant_targets', 0)}"
+            ),
         },
         {
             "name": "zero_premature_stop",
@@ -137,6 +148,7 @@ def build_pipeline(
     scan_raw: bool = False,
     dry_run: bool = False,
     run_gate: bool = True,
+    require_reviewed_dpo: bool = False,
     reason: str = "",
     actor: str = "agent",
     cfg: Optional[Dict[str, Any]] = None,
@@ -145,30 +157,53 @@ def build_pipeline(
     t0 = time.monotonic()
     offline_cfg = _offline_cfg(cfg)
 
+    preview_for_dpo = stage3_synth.draft_preview(offline_cfg, persist_split=False)
+    p_rows = preview_for_dpo.get("rows") or []
+    dpo_rows_all = [r for r in p_rows if r.get("kind") == "dpo"]
+    vstore = stage3_synth.read_json(stage_dirs(offline_cfg)["state"] / "dpo_verdicts.json", default={}) or {}
+    dpo_audit = {
+        "total_candidates": len(dpo_rows_all),
+        "explicit_verdicts": sum(1 for r in dpo_rows_all if r.get("sample_id") in vstore),
+        "cached_reviews": sum(
+            1 for r in dpo_rows_all
+            if r.get("sample_id") not in vstore and r.get("gate_status") in ("good", "swap", "drop", "passed")
+        ),
+        "bypassed_unreviewed": sum(1 for r in dpo_rows_all if r.get("gate_status") == "bypassed"),
+        "pending_evaluations": int((preview_for_dpo.get("summary") or {}).get("pending_evaluations") or 0),
+    }
+
     if dry_run:
-        preview = stage3_synth.draft_preview(offline_cfg, persist_split=False)
-        rows = preview.get("rows") or []
-        sft_train_n = sum(1 for r in rows if r.get("kind") == "sft" and r.get("included") and r.get("split") == "train")
-        sft_eval_n = sum(1 for r in rows if r.get("kind") == "sft" and r.get("included") and r.get("split") == "eval")
-        dpo_train_n = sum(1 for r in rows if r.get("kind") == "dpo" and r.get("included") and r.get("split") == "train")
-        dpo_eval_n = sum(1 for r in rows if r.get("kind") == "dpo" and r.get("included") and r.get("split") == "eval")
+        sft_train_n = sum(1 for r in p_rows if r.get("kind") == "sft" and r.get("included") and r.get("split") == "train")
+        sft_eval_n = sum(1 for r in p_rows if r.get("kind") == "sft" and r.get("included") and r.get("split") == "eval")
+        dpo_train_n = sum(1 for r in p_rows if r.get("kind") == "dpo" and r.get("included") and r.get("split") == "train")
+        dpo_eval_n = sum(1 for r in p_rows if r.get("kind") == "dpo" and r.get("included") and r.get("split") == "eval")
+        strict_ok = (not require_reviewed_dpo) or (dpo_audit["bypassed_unreviewed"] == 0 and dpo_audit["pending_evaluations"] == 0)
         return {
-            "ok": True,
+            "ok": strict_ok,
             "dry_run": True,
-            "plan_hash": preview.get("plan_hash"),
-            "dirty": preview.get("dirty"),
-            "last_build": preview.get("last_build"),
-            "split": preview.get("split"),
-            "summary": preview.get("summary"),
+            "plan_hash": preview_for_dpo.get("plan_hash"),
+            "dirty": preview_for_dpo.get("dirty"),
+            "last_build": preview_for_dpo.get("last_build"),
+            "split": preview_for_dpo.get("split"),
+            "summary": preview_for_dpo.get("summary"),
+            "dpo_audit": dpo_audit,
             "gate_preview": {
                 "sft_train_rows": sft_train_n,
                 "sft_eval_rows": sft_eval_n,
                 "dpo_train_rows": dpo_train_n,
                 "dpo_eval_rows": dpo_eval_n,
                 "sft_non_empty": bool(sft_train_n > 0 and sft_eval_n > 0),
-                "pending_evaluations": int((preview.get("summary") or {}).get("pending_evaluations") or 0),
+                "pending_evaluations": dpo_audit["pending_evaluations"],
+                "bypassed_unreviewed": dpo_audit["bypassed_unreviewed"],
+                "dpo_audit": dpo_audit,
             },
         }
+
+    if require_reviewed_dpo and (dpo_audit["bypassed_unreviewed"] > 0 or dpo_audit["pending_evaluations"] > 0):
+        raise ValueError(
+            f"严格 DPO 审核模式下仍有未显式复核项: bypassed={dpo_audit['bypassed_unreviewed']}, "
+            f"pending={dpo_audit['pending_evaluations']}"
+        )
 
     before_summary = ledger.corpus_snapshot_summary(offline_cfg)
     r1: Optional[Dict[str, Any]] = None
@@ -226,41 +261,76 @@ def pack_delivery(
     *,
     build_id: Optional[str] = None,
     profile: Optional[str] = None,
+    parent_pack: Optional[str] = None,
     copy_to: Optional[str | Path] = None,
     run_gate: bool = True,
     reason: str = "",
     actor: str = "agent",
+    log: Optional[Callable[[str], None]] = None,
     cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """从不可变 Build 打包交付 zip，默认执行 gate_check，可选 copy_to 同步拷贝。"""
+    """暂存区打包 -> 硬门禁校验 -> 仅通过后原子发布至 delivery/ 并执行 copy_to（幂等保护已有合格包）。"""
     t0 = time.monotonic()
     cfg = cfg or load_config()
     before_summary = ledger.corpus_snapshot_summary(cfg)
+    emit = log or (lambda *_: None)
 
-    res = package.build_delivery_zip_from_build(
-        cfg,
-        build_id=build_id,
-        profile=profile,
-        log=lambda *_: None,
-    )
-    zip_path = Path(res["zip_path"])
+    delivery_root = stage_dirs(cfg)["root"] / "04_release" / "delivery"
+    delivery_root.mkdir(parents=True, exist_ok=True)
+    staging_dir = delivery_root / f".staging-{uuid.uuid4().hex[:10]}"
+    staging_dir.mkdir(parents=True, exist_ok=True)
 
-    gate_res = gate_check(str(zip_path), cfg=cfg) if run_gate else None
-    copied_to: Optional[str] = None
-    if copy_to:
-        dest = Path(copy_to)
-        if dest.is_dir() or str(copy_to).endswith(("/", "\\")) or dest.suffix.lower() != ".zip":
-            dest.mkdir(parents=True, exist_ok=True)
-            target_file = dest / zip_path.name
+    try:
+        res = package.build_delivery_zip_from_build(
+            cfg,
+            build_id=build_id,
+            profile=profile,
+            parent_pack=parent_pack,
+            log=emit,
+            delivery_dir=staging_dir,
+            reference_delivery_dir=delivery_root,
+        )
+        staged_zip = Path(res["zip_path"])
+        gate_res = gate_check(str(staged_zip), cfg=cfg) if run_gate else None
+        ok = gate_res is None or bool(gate_res["passed"])
+
+        final_zip = delivery_root / staged_zip.name
+        copied_to: Optional[str] = None
+
+        if ok:
+            if final_zip.is_file() and parent_pack is None:
+                try:
+                    with zipfile.ZipFile(final_zip, "r") as zf:
+                        has_valid_existing = len(zf.namelist()) > 0
+                except zipfile.BadZipFile:
+                    has_valid_existing = False
+            else:
+                has_valid_existing = False
+
+            if not has_valid_existing:
+                replace_atomic(staged_zip, final_zip)
+            staged_profile = staging_dir / "export_profile.json"
+            if staged_profile.is_file():
+                replace_atomic(staged_profile, delivery_root / "export_profile.json")
+            res["zip_path"] = str(final_zip)
+            res["size_bytes"] = final_zip.stat().st_size
+
+            if copy_to:
+                dest = Path(copy_to)
+                if dest.is_dir() or str(copy_to).endswith(("/", "\\")) or dest.suffix.lower() != ".zip":
+                    dest.mkdir(parents=True, exist_ok=True)
+                    target_file = dest / final_zip.name
+                else:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    target_file = dest
+                shutil.copy2(final_zip, target_file)
+                copied_to = str(target_file.resolve())
         else:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            target_file = dest
-        shutil.copy2(zip_path, target_file)
-        copied_to = str(target_file.resolve())
+            res["zip_path"] = None
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
     after_summary = ledger.corpus_snapshot_summary(cfg)
-    ok = gate_res is None or bool(gate_res["passed"])
-
     ev = ledger.record_operation(
         "pack.delivery",
         reason=reason,
@@ -273,7 +343,7 @@ def pack_delivery(
         },
         affected={
             "build_id": res.get("build_id"),
-            "pack": res.get("package_hash"),
+            "pack": res.get("package_hash") if ok else None,
         },
         before_summary=before_summary,
         after_summary=after_summary,
