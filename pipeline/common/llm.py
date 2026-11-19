@@ -37,16 +37,20 @@ def _resolve_api_key(raw: Any) -> str:
     return value
 
 
-def load_pi_models(path: Optional[str] = None) -> Dict[str, Any]:
-    cfg = load_config()
+def load_pi_models(path: Optional[str] = None, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cfg = cfg or load_config()
     p = resolve_path(path or cfg["paths"]["pi_models_json"])
     data = read_json(p, default={}) or {}
     return data.get("providers", {}) or {}
 
 
-def resolve_model(model_id: str, models_path: Optional[str] = None) -> Dict[str, Any]:
-    cfg = load_config()
-    providers = load_pi_models(models_path)
+def resolve_model(
+    model_id: str,
+    models_path: Optional[str] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    cfg = cfg or load_config()
+    providers = load_pi_models(models_path, cfg=cfg)
     for provider_name, provider in providers.items():
         for entry in provider.get("models", []) or []:
             if entry.get("id") == model_id:
@@ -66,19 +70,19 @@ def resolve_model(model_id: str, models_path: Optional[str] = None) -> Dict[str,
     raise LLMError(f"在 pi models.json 中找不到模型: {model_id}")
 
 
-def _cache_dir() -> Path:
-    return data_root(load_config()) / "00_state" / "llm_cache"
+def _cache_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
+    return data_root(cfg or load_config()) / "00_state" / "llm_cache"
 
 
-def _cache_get(key: str) -> Optional[Dict[str, Any]]:
-    p = _cache_dir() / f"{key}.json"
+def _cache_get(key: str, cfg: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    p = _cache_dir(cfg) / f"{key}.json"
     if p.exists():
         return read_json(p)
     return None
 
 
-def _cache_put(key: str, value: Dict[str, Any]) -> None:
-    write_json_atomic(_cache_dir() / f"{key}.json", value)
+def _cache_put(key: str, value: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> None:
+    write_json_atomic(_cache_dir(cfg) / f"{key}.json", value)
 
 
 def chat(
@@ -88,20 +92,25 @@ def chat(
     max_tokens: Optional[int] = None,
     use_cache: Optional[bool] = None,
     prompt_version: str = PROMPT_VERSION,
+    cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    cfg = load_config()
+    cfg = cfg or load_config()
     lcfg = cfg.get("llm", {})
     model_id = model or lcfg.get("model", "deepseek-v4.1-flash-1017")
     temperature = lcfg.get("temperature", 0.2) if temperature is None else temperature
     max_tokens = lcfg.get("max_tokens", 4096) if max_tokens is None else max_tokens
     use_cache = lcfg.get("cache", True) if use_cache is None else use_cache
 
-    resolved = resolve_model(model_id)
+    resolved = resolve_model(model_id, cfg=cfg)
+    # Cache identity includes the resolved provider/endpoint so two providers that
+    # expose the same model id never share responses. Never include credentials.
     key = sha256_text(
         json.dumps(
             {
                 "v": prompt_version,
                 "model": model_id,
+                "provider": resolved["provider"],
+                "endpoint": resolved["base_url"],
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
@@ -112,7 +121,7 @@ def chat(
     )[:32]
 
     if use_cache:
-        cached = _cache_get(key)
+        cached = _cache_get(key, cfg=cfg)
         if cached:
             cached["cached"] = True
             return cached
@@ -134,7 +143,7 @@ def chat(
             url,
             headers=headers,
             json=payload,
-            timeout=cfg.get("llm", {}).get("timeout_seconds", 180),
+            timeout=lcfg.get("timeout_seconds", 180),
         )
     except requests.RequestException as exc:
         raise LLMError(f"请求失败 {url}: {exc}") from exc
@@ -157,7 +166,7 @@ def chat(
         "cached": False,
     }
     if use_cache:
-        _cache_put(key, out)
+        _cache_put(key, out, cfg=cfg)
     return out
 
 
@@ -167,6 +176,7 @@ def chat_json(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     prompt_version: str = PROMPT_VERSION,
+    cfg: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """要求模型输出 JSON；自动剥离 ``` 围栏并解析。"""
     messages = [
@@ -180,6 +190,7 @@ def chat_json(
             model=model,
             temperature=temperature,
             prompt_version=f"{prompt_version}.try{attempt}",
+            cfg=cfg,
         )
         text = (resp.get("content") or "").strip()
         text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -195,15 +206,16 @@ def chat_json(
     raise LLMError(f"模型未返回可解析 JSON: {last_err}")
 
 
-def test_model(model: Optional[str] = None) -> Dict[str, Any]:
-    cfg = load_config()
+def test_model(model: Optional[str] = None, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cfg = cfg or load_config()
     model_id = model or cfg["llm"]["model"]
-    resolved = resolve_model(model_id)
+    resolved = resolve_model(model_id, cfg=cfg)
     resp = chat(
         [{"role": "user", "content": "只回复两个字：可用"}],
         model=model_id,
         max_tokens=512,
         use_cache=False,
+        cfg=cfg,
     )
     return {
         "model": model_id,

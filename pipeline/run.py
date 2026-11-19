@@ -14,13 +14,16 @@ def _log(msg: str) -> None:
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
-def _record(stage: str, status: str, started: str, result=None, error: str = None) -> None:
-    path = stage_dirs(load_config())["state"] / "runs.json"
+def _record(stage: str, status: str, started: str, result=None, error: str = None,
+            cfg: Dict[str, Any] | None = None, force: bool = False) -> None:
+    cfg = cfg or load_config()
+    path = stage_dirs(cfg)["state"] / "runs.json"
     hist = read_json(path, default=[]) or []
     hist.insert(0, {
         "id": f"cli-{int(time.time())}",
         "stage": stage,
-        "force": False,
+        "force": bool(force),
+        "config": cfg.get("_config_path"),
         "status": status,
         "created_at": started,
         "finished_at": now_iso(),
@@ -55,9 +58,9 @@ def main(argv: List[str] | None = None) -> int:
             elif name == "stage3":
                 from .stage3_synth import run
                 result = run(force=args.force, log=_log, cfg=cfg)
-            _record(name, "done", started, result)
+            _record(name, "done", started, result, cfg=cfg, force=args.force)
         except Exception as exc:  # noqa: BLE001
-            _record(name, "failed", started, error=str(exc))
+            _record(name, "failed", started, error=str(exc), cfg=cfg, force=args.force)
             raise
     return 0
 

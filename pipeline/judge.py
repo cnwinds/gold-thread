@@ -247,6 +247,7 @@ def _call(system: str, schema: str, payload: Any, cfg: Dict[str, Any], j: Dict[s
                 model=_model(cfg, j, tag),
                 temperature=temperature,
                 prompt_version=f"{PROMPT_VERSION}.{tag}",
+                cfg=cfg,
             )
         return out if isinstance(out, dict) else {}
     except Exception as exc:  # noqa: BLE001

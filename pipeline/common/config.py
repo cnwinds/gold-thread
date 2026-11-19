@@ -4,10 +4,18 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 import yaml
+
+from .config_schema import (
+    ConfigError,
+    load_yaml_mapping,
+    validate_config_mapping,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "config" / "pipeline.yaml"
@@ -154,32 +162,71 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
+def merge_config(raw: Mapping[str, Any] | None) -> Dict[str, Any]:
+    """按 ``load_config`` 的语义补齐默认值：字典深合并，列表整体替换。"""
+    return _deep_merge(DEFAULTS, raw if isinstance(raw, Mapping) else {})
+
+
+def parse_config_text(text: str) -> Dict[str, Any]:
+    """解析并校验配置原文，返回文件中**显式写入**的原始映射。
+
+    校验对象是 ``DEFAULTS`` 与原文深度合并后的完整配置：省略的简单字段按默认值
+    处理，未知字段/类型/范围/正则/跨字段问题都会抛出 :class:`ConfigError`。
+    """
+    raw = load_yaml_mapping(text)
+    validate_config_mapping(_deep_merge(DEFAULTS, raw))
+    return raw
+
+
 def load_config(path: Path | str | None = None) -> Dict[str, Any]:
-    p = Path(path) if path else CONFIG_PATH
+    explicit = path is not None
+    p = Path(path) if explicit else CONFIG_PATH
+    if explicit and not p.exists():
+        raise FileNotFoundError(f"配置文件不存在: {p}")
     if p.exists():
-        raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        raw = parse_config_text(p.read_text(encoding="utf-8"))
         cfg = _deep_merge(DEFAULTS, raw)
     else:
+        # 不传路径时沿用历史行为：默认配置缺失就使用内建默认值。
         cfg = copy.deepcopy(DEFAULTS)
     cfg["_config_path"] = str(p)
     return cfg
 
 
+def _atomic_write_text(p: Path, text: str) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=str(p.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, p)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def save_config(cfg: Dict[str, Any], path: Path | str | None = None) -> None:
     p = Path(path) if path else CONFIG_PATH
-    clean = {k: v for k, v in cfg.items() if not k.startswith("_")}
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        yaml.safe_dump(clean, allow_unicode=True, sort_keys=False, width=120),
-        encoding="utf-8",
-    )
+    if not isinstance(cfg, Mapping):
+        raise ConfigError("<root>", f"config must be an object, got {type(cfg).__name__}")
+    # 与加载共享同一份语义：保存前先按“默认值 + 本次覆盖”验证完整配置；
+    # 内部 _config_path 等来源信息不写入文件，也不进入 config_hash。
+    clean = {k: v for k, v in cfg.items() if not (isinstance(k, str) and k.startswith("_"))}
+    validate_config_mapping(_deep_merge(DEFAULTS, clean))
+    text = yaml.safe_dump(clean, allow_unicode=True, sort_keys=False, width=120)
+    _atomic_write_text(p, text)
 
 
 def save_config_text(text: str, path: Path | str | None = None) -> None:
-    """按原文写入（保留注释与排版），仅用于控制台编辑。"""
+    """按原文原子写入（保留注释与排版），校验失败时不改动旧文件。"""
     p = Path(path) if path else CONFIG_PATH
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding="utf-8")
+    parse_config_text(text)
+    _atomic_write_text(p, text)
 
 
 def config_hash(cfg: Dict[str, Any]) -> str:

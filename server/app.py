@@ -13,6 +13,7 @@ import threading
 import time
 import traceback
 import uuid
+import yaml
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -49,9 +50,13 @@ from pipeline.common.config import (
     CONFIG_PATH,
     config_hash,
     load_config,
+    merge_config,
+    parse_config_text,
     save_config_text,
     stage_dirs,
 )
+from pipeline.common.config_info import describe_config
+from pipeline.common.config_schema import load_yaml_mapping
 from pipeline.common.format import export_profiles_public, resolve_export_profile
 from pipeline.common.llm import load_pi_models, test_model
 
@@ -506,16 +511,55 @@ def _assert_no_gold_write_running() -> None:
         raise HTTPException(409, f"后台作业 {blocking.stage} ({blocking.id}) 正在运行，请等待其完成后再提交")
 
 
+def _merge_over_defaults(raw: Any) -> Dict[str, Any]:
+    """按 ``load_config`` 的同一份深合并实现补齐默认值。"""
+    return merge_config(raw)
+
+
+def _config_models_path(cfg: Any) -> str:
+    paths = cfg.get("paths") if isinstance(cfg, dict) else None
+    if not isinstance(paths, dict):
+        return ""
+    return str(paths.get("pi_models_json") or "")
+
+
+def _current_models_path() -> Tuple[str, bool]:
+    """返回（当前有效 ``paths.pi_models_json``，旧值是否可确定）。
+
+    基线只由**同一份** ``server.CONFIG_PATH`` 快照确定：读原文 → 规范化形状解析 →
+    按 ``load_config`` 的同一套默认值合并，不再二次读文件、也不做完整语义校验。
+    因此配置里其它字段错误（可修复状态）不影响基线；但原文不可读、YAML 非法、
+    重复键、``paths`` 形状错误或该值不是非空字符串时返回 ``established=False``，
+    由调用方失败关闭，绝不把「读不出来/形状可疑」当成「没有改动」。
+    """
+    raw = _try_load_raw_mapping(_read_config_text())
+    if raw is None:
+        return "", False
+    paths = _merge_over_defaults(raw).get("paths")
+    if not isinstance(paths, dict):
+        return "", False
+    val = paths.get("pi_models_json")
+    if not isinstance(val, str) or not val:
+        return "", False
+    return val, True
+
+
 def _guard_sensitive_config_change(new_cfg: Dict[str, Any]) -> None:
-    """无鉴权本地模式下，禁止通过 HTTP 接口篡改 pi_models_json 指向任意外部文件（防 !cmd 命令注入）。"""
+    """无鉴权本地模式下，禁止通过 HTTP 接口篡改 pi_models_json 指向任意外部文件（防 !cmd 命令注入）。
+
+    比较的是**合并后的有效配置**：整体替换 ``paths`` 父节点或省略该键（恢复内建默认）
+    同样被视为修改，不能借此绕过限制。旧值无法确定时失败关闭，并给出本机修复入口。
+    """
     if os.environ.get("GOLDTHREAD_API_TOKEN", "").strip():
         return
-    new_paths = new_cfg.get("paths")
-    if not isinstance(new_paths, dict) or "pi_models_json" not in new_paths:
-        return
-    cur_cfg = load_config()
-    cur_val = str((cur_cfg.get("paths") or {}).get("pi_models_json") or "")
-    next_val = str(new_paths.get("pi_models_json") or "")
+    cur_val, established = _current_models_path()
+    if not established:
+        raise HTTPException(
+            403,
+            "安全限制：现有配置无法解析，无法确认 paths.pi_models_json 是否被修改；"
+            "请直接在本机编辑 config/pipeline.yaml 后再通过 Web 修改",
+        )
+    next_val = _config_models_path(_merge_over_defaults(new_cfg))
     if next_val and next_val != cur_val:
         raise HTTPException(
             403,
@@ -527,48 +571,117 @@ def _guard_sensitive_config_change(new_cfg: Dict[str, Any]) -> None:
 # 配置
 # ---------------------------------------------------------------------------
 
+
+_CONFIG_PATH_SEGMENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
+def _parse_config_candidate(text: str) -> Dict[str, Any]:
+    """三条写入路径共用的唯一入口：完整语义校验后返回文件显式 raw mapping。"""
+    return parse_config_text(text)
+
+
+def _validation_error_field(message: str) -> str:
+    match = re.match(
+        r"^([A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*)(?:\[\d+\])?\s*[:：]",
+        message or "",
+    )
+    return match.group(1) if match else ""
+
+
+def _config_error_response(message: str, status_code: int = 400) -> JSONResponse:
+    payload: Dict[str, Any] = {"ok": False, "error": message}
+    field = _validation_error_field(message)
+    if field:
+        payload["field"] = field
+    return JSONResponse(payload, status_code=status_code)
+
+
+def _read_config_text() -> str:
+    """读取配置原文：只有「文件不存在」等价于空配置，其余读取失败一律失败关闭。
+
+    直接读文件（不做 ``exists()`` 预检，避免检查与读取之间的竞态）；把
+    ``PermissionError``/``IsADirectoryError``/编码错误等吞成 ``""`` 会让 PUT 在
+    从未核对现有 ``paths.pi_models_json`` 的情况下覆盖原文，因此这些情况返回
+    带本机修复入口的明确 HTTP 错误。
+    """
+    try:
+        return CONFIG_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    except (OSError, UnicodeError) as exc:
+        raise HTTPException(
+            500,
+            f"读取配置文件失败（{type(exc).__name__}: {exc}）：{CONFIG_PATH}；"
+            "请直接在本机修复该文件的权限/编码（或删除它）后再通过 Web 修改",
+        ) from exc
+
+
+def _try_load_raw_mapping(text: str) -> Optional[Dict[str, Any]]:
+    """只做形状解析读取原始映射；仅用于判断旧敏感路径，不进入校验结果。
+
+    走与校验完全相同的规范化加载器（重复键/语法错误显式报错），不复用宽松的
+    ``yaml.safe_load``，否则重复键文件会静默取到「某个」旧值形成错误基线。
+    返回 ``None`` 表示不可用，调用方必须失败关闭。
+    """
+    try:
+        return load_yaml_mapping(text)
+    except ValueError:  # ConfigError: YAML 非法 / 重复键 / 根节点不是映射
+        return None
+
+
 class ConfigBody(BaseModel):
     yaml: str
 
 
 @app.get("/api/config")
 def get_config() -> Dict[str, Any]:
-    cfg = load_config()
-    text = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else ""
-    return JSONResponse(
-        {
-            "path": str(CONFIG_PATH),
-            "yaml": text,
-            "parsed": {k: v for k, v in cfg.items() if not k.startswith("_")},
-        },
-        headers={"Cache-Control": "no-store"},
-    )
+    text = _read_config_text()
+    payload: Dict[str, Any] = {
+        "path": str(CONFIG_PATH),
+        "yaml": text,
+    }
+    try:
+        raw = _parse_config_candidate(text)
+    except ValueError as exc:
+        # 修复模式：只回传原文和可定位错误，绝不把未通过校验的解析结果当有效值返回。
+        payload["config_valid"] = False
+        payload["config_error"] = str(exc)
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+    cfg = _merge_over_defaults(raw)
+    payload["parsed"] = {k: v for k, v in cfg.items() if not k.startswith("_")}
+    payload["effective"] = describe_config(raw)
+    payload["config_valid"] = True
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/config/validate")
 def validate_config(body: ConfigBody) -> Dict[str, Any]:
-    import yaml as yaml_lib
-
     try:
-        parsed = yaml_lib.safe_load(body.yaml) or {}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-    return {"ok": True, "keys": sorted(parsed.keys())}
+        parsed = _parse_config_candidate(body.yaml)
+    except ValueError as exc:
+        message = str(exc)
+        field = _validation_error_field(message)
+        out: Dict[str, Any] = {"ok": False, "error": message}
+        if field:
+            out["field"] = field
+        return out
+    return {"ok": True, "keys": sorted(str(k) for k in parsed.keys())}
 
 
 @app.put("/api/config")
 def put_config(body: ConfigBody) -> Dict[str, Any]:
-    import yaml as yaml_lib
-
     try:
-        parsed = yaml_lib.safe_load(body.yaml) or {}
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, f"YAML 解析失败: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise HTTPException(400, "配置根节点必须是对象")
+        parsed = _parse_config_candidate(body.yaml)
+    except ValueError as exc:
+        return _config_error_response(str(exc))
     _guard_sensitive_config_change(parsed)
-    save_config_text(body.yaml)
-    return {"ok": True, "path": str(CONFIG_PATH), "config_hash": config_hash(load_config())}
+    save_config_text(body.yaml, path=CONFIG_PATH)
+    return {
+        "ok": True,
+        "path": str(CONFIG_PATH),
+        "config_hash": config_hash(_merge_over_defaults(parsed)),
+    }
 
 
 @app.post("/api/llm/test")
@@ -610,47 +723,82 @@ def _set_path(data: Dict[str, Any], path: str, value: Any) -> None:
     cur[keys[-1]] = value
 
 
+def _config_path_allowed(path: Any) -> bool:
+    """只做路径结构检查；值类型/范围/未知字段一律交给共享 parser。"""
+    if not isinstance(path, str) or not path:
+        raise ValueError("配置路径必须是非空字符串")
+    for part in path.split("."):
+        if not part or part.startswith("_") or not _CONFIG_PATH_SEGMENT_RE.fullmatch(part):
+            raise ValueError(f"{path}: 非法的配置路径片段 {part!r}")
+    return True
+
+
+def _validate_patch_entry(entry: Any) -> Tuple[str, Any]:
+    if not isinstance(entry, dict):
+        raise ValueError("结构化配置项必须是 {path, value} 对象")
+    path = entry.get("path")
+    _config_path_allowed(path)
+    if "value" not in entry:
+        raise ValueError(f"{path}: 缺少 value 字段")
+    return str(path), entry.get("value")
+
+
 @app.post("/api/config/structured")
 def config_structured(body: ConfigPatchBody) -> Dict[str, Any]:
-    """按 path->value 深度合并进当前配置；ruamel 往返保留注释与顺序。"""
-    if not os.environ.get("GOLDTHREAD_API_TOKEN", "").strip():
-        cur_pm = str((load_config().get("paths") or {}).get("pi_models_json") or "")
-        for v in body.values:
-            if isinstance(v, dict) and v.get("path") == "paths.pi_models_json":
-                if str(v.get("value") or "") not in ("", cur_pm):
-                    raise HTTPException(
-                        403,
-                        "安全限制：未配置 GOLDTHREAD_API_TOKEN 时，禁止通过 HTTP API 修改 paths.pi_models_json",
-                    )
-    text = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else ""
-    import yaml as yaml_lib  # noqa: PLC0415
+    """按 path->value 深度合并进当前配置；ruamel 往返保留注释与顺序。
+
+    写入前用与原文保存完全相同的语义校验检查**最终合并候选**，失败不改文件；
+    服务端不维护第二套类型/范围 schema。
+    """
+    text = _read_config_text()
+    patches: List[Tuple[str, Any]] = []
+    try:
+        for entry in body.values:
+            patches.append(_validate_patch_entry(entry))
+    except ValueError as exc:
+        return _config_error_response(str(exc))
 
     engine = "ruamel"
     if _HAS_RUAMEL:
         yml = _RuamelYAML()
         yml.preserve_quotes = True
-        data = yml.load(text) or {}
-        for v in body.values:
-            _set_path(data, v["path"], v["value"])
+        try:
+            data = yml.load(text)
+        except Exception as exc:  # noqa: BLE001
+            return _config_error_response(f"现有 YAML 无法解析，请先用 YAML 源码模式修复: {exc}")
+        if data is None:
+            data = yml.load("{}")
+        if not isinstance(data, dict):
+            return _config_error_response("配置根节点必须是映射（mapping）")
+        for path, value in patches:
+            _set_path(data, path, value)
         buf = io.StringIO()
         yml.dump(data, buf)
         new_text = buf.getvalue()
     else:
         engine = "pyyaml"
-        data = yaml_lib.safe_load(text) or {}
-        for v in body.values:
-            _set_path(data, v["path"], v["value"])
-        new_text = yaml_lib.safe_dump(data, allow_unicode=True, sort_keys=False)
-    parsed = yaml_lib.safe_load(new_text)
-    if not isinstance(parsed, dict):
-        raise HTTPException(400, "配置根节点必须是对象")
-    save_config_text(new_text)
+        try:
+            data = yaml.safe_load(text) or {}
+        except Exception as exc:  # noqa: BLE001
+            return _config_error_response(f"现有 YAML 无法解析，请先用 YAML 源码模式修复: {exc}")
+        if not isinstance(data, dict):
+            return _config_error_response("配置根节点必须是映射（mapping）")
+        for path, value in patches:
+            _set_path(data, path, value)
+        new_text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+
+    try:
+        candidate = _parse_config_candidate(new_text)
+    except ValueError as exc:
+        return _config_error_response(str(exc))
+    _guard_sensitive_config_change(candidate)
+    save_config_text(new_text, path=CONFIG_PATH)
     return {
         "ok": True,
         "engine": engine,
-        "config_hash": config_hash(load_config()),
+        "config_hash": config_hash(_merge_over_defaults(candidate)),
         "yaml": new_text,
-        "applied": len(body.values),
+        "applied": len(patches),
     }
 
 

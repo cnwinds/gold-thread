@@ -46,6 +46,7 @@ python serve.py --port 9000 --no-browser
 python gt.py inspect graph --json                                        # 虚拟数据集演进 DAG 与工作空间状态
 python gt.py inspect corpus --json                                       # 语料库全景摘要
 python gt.py inspect source --dir "D:\train-project\teacher" --unadopted # 扫描外部未入库轨迹
+python gt.py inspect config --json                                       # 有效配置叶值、来源与作用阶段（只读）
 python gt.py eval pack latest --json                                     # 训练包全身体检
 python gt.py eval diff d9dbbbd1 308e6497                                 # 两版交付包指标对比
 python gt.py curate adopt --from "..." --select <sids> --reason "..."    # 采纳会话并记账本

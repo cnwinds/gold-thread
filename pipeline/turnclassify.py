@@ -86,6 +86,7 @@ def classify_session(
         SYSTEM,
         SCHEMA + "\n\n会话数据：\n" + json.dumps(payload, ensure_ascii=False),
         prompt_version=PROMPT_VERSION,
+        cfg=cfg,
     )
     if not isinstance(result, dict) or not isinstance(result.get("turns"), list):
         log("[turnclassify] 模型返回结构异常，回退到正则判定")

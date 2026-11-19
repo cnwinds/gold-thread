@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from pipeline.common.config import load_config
+from pipeline.common.config_info import describe_config, load_explicit_config
 
 from . import (
     assist_tools,
@@ -118,6 +119,15 @@ def _format_inspect_step(res: Dict[str, Any]) -> None:
     print(f"  tool_calls({len(res['tool_calls'])}): {[t['name'] for t in res['tool_calls']]}")
     if res["dpo_pairs"]:
         print(f"  dpo_pairs({len(res['dpo_pairs'])}): {[p['sample_id'] for p in res['dpo_pairs']]}")
+
+
+def _format_inspect_config(path: Path, exists: bool, entries: List[Dict[str, Any]]) -> None:
+    status = "已读取" if exists else "文件不存在，使用内建默认值"
+    print(f"[config] {path} ({status}, {len(entries)} 项有效叶值)")
+    for entry in entries:
+        value = entry["value"]
+        shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        print(f"  {entry['path']} = {shown} [{entry['source']}] {entry['stage']}")
 
 
 def _format_eval_pack(res: Dict[str, Any]) -> None:
@@ -271,6 +281,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ins_stp.add_argument("step_ref", help="msg_id（支持前缀）或 0-based 步骤序号")
 
     ins_sub.add_parser("graph", parents=[common], help="查看虚拟数据集演进关系图（DAG）与工作空间状态")
+    ins_sub.add_parser("config", parents=[common], help="查看合并后的有效配置、来源与作用阶段")
 
     # eval
     p_ev = sub.add_parser("eval", help="训练包体检与实测评估")
@@ -439,6 +450,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     json_mode = bool(getattr(args, "json", False))
 
     try:
+        # inspect config 只需要配置快照本身：先于 load_config 处理，避免同一份文件
+        # 被 load_config 与快照解析各读一遍，叶值与来源始终来自同一次校验结果。
+        if args.group == "inspect" and args.action == "config":
+            raw, path, exists = load_explicit_config(getattr(args, "config", None))
+            entries = describe_config(raw)
+            if json_mode:
+                _print_json(entries)
+            else:
+                _format_inspect_config(path, exists, entries)
+            return 0
+
         cfg = load_config(args.config) if getattr(args, "config", None) else load_config()
 
         if args.group == "inspect":

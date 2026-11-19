@@ -541,6 +541,15 @@
   .cfg-pipe .node.rev{border-color:rgba(217,180,103,.4);color:#e6cf95}
   .cfg-pipe .node.hum{border-color:rgba(143,196,127,.35);color:#9fd18f}
   .cfg-pipe .arrow{font-size:10.5px;color:var(--text-3);padding:0 8px;letter-spacing:.04em}
+  .cfg-effective{margin:16px 0 0}
+  .cfg-effective-list{margin-top:4px;border-top:1px solid var(--line-soft)}
+  .cfg-ro{grid-template-columns:minmax(0,1fr) minmax(0,auto)}
+  .cfg-ro .nm{font-family:var(--f-mono);font-size:11.5px;color:var(--text-2)}
+  .cfg-ro-ctl{flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:60%}
+  .cfg-ro-val{font-family:var(--f-mono);font-size:11px;color:var(--gold);max-width:44ch;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .cfg-ro-stage{font-size:10.5px;color:var(--text-3);border:1px solid var(--line-soft);border-radius:5px;padding:1px 6px;white-space:nowrap}
+  @media (max-width:900px){.cfg-ro-ctl{max-width:100%;justify-content:flex-start}}
   .cfg-savebar{position:sticky;bottom:0;display:flex;align-items:center;gap:12px;padding:11px 22px;
     border-top:1px solid var(--line);background:rgba(22,25,31,.94);backdrop-filter:blur(8px);
     transform:translateY(0);transition:.2s}
@@ -3936,18 +3945,60 @@ function convToMsgs(list) {
 }
 
 /* ------------------------------ 配置 ------------------------------ */
-const CFG = {mode:"form", yaml:"", parsed:{}, path:"", models:[], ruamel:true,
-  values:{}, dirty:{}, q:"", sec:"model", advOpen:{}};
+const CFG = {mode:"form", yaml:"", parsed:{}, path:"", models:[], ruamel:true, effective:[], valid:true, error:"",
+  values:{}, dirty:{}, q:"", sec:"gold", advOpen:{}, effOpen:false};
+
+// 离线构建（gt build / assist 等确定性入口）内部强制关闭隐式模型；
+// 文件里的开关只影响显式在线入口，界面上必须与生效值区分开。
+const CFG_OFFLINE_FORCED = {"judge.enabled": false, "turns.use_model": false};
 
 const CFG_SECS = [
-  {id:"model", name:"模型与调用", hint:"回合分类、评审与优化的默认模型及调用参数", fields:[
+  {id:"gold", name:"黄金提纯", hint:"脚本可确定的提纯规则：状态折叠、绕路剪枝、思考压缩与最短轨迹", fields:[
+    {p:"gold.state_folding", k:"bool", label:"状态折叠", hint:"write 后紧跟对同一文件的 edit → 折叠为一步（仍需成功回执）"},
+    {p:"gold.detour_pruning", k:"bool", label:"绕路剪枝", hint:"手滑 / 低级命令错误剪除；仅生成 DPO 候选，不等于已批准偏好"},
+    {p:"gold.fix_missing_thinking", k:"bool", label:"补齐缺失思考", hint:"空 thinking 的工具步：失败剪除，成功用已有对外文本回填"},
+    {p:"gold.silent_intermediate_steps", k:"bool", label:"中间步静默", hint:"清空中间工具步的对外播报，只保留工具调用"},
+    {p:"gold.min_gold_steps", k:"range", min:1, max:60, step:1, label:"最短黄金步数", hint:"低于该步数仅标记为短轨迹提醒，不是 SFT 硬门槛"},
+    {p:"gold.max_thinking_chars", k:"range", min:400, max:8000, step:100, adv:true, label:"思考长度上限（字）", hint:"超过视为过度反刍"},
+    {p:"gold.target_thinking_chars", k:"range", min:1, max:8000, step:100, adv:true, label:"思考压缩目标（字）", hint:"0 < 目标 ≤ 上限"},
+    {p:"gold.max_fold_edits", k:"range", min:1, max:32, step:1, adv:true, label:"单步折叠 edit 上限", hint:"超过上限整对不折，不放宽证据条件"},
+  ]},
+  {id:"admission", name:"会话准入", hint:"哪些 pi 会话有资格进入数据集", fields:[
+    {p:"admission.workspace_prefixes", k:"tags", label:"工作区前缀白名单", hint:"相对 sessions_dir 的文件夹名前缀"},
+    {p:"admission.exclude_folders", k:"tags", label:"明确排除目录", hint:"命中即整目录跳过"},
+    {p:"admission.dedupe_duplicate_prefix", k:"bool", label:"同源副本去重", hint:"迁移/复制产生的重复前缀会话只留最长一份"},
+  ]},
+  {id:"labeling", name:"来源识别", hint:"Teacher / Student 模型来源仅用于血缘，不决定 SFT 或 DPO 去向", fields:[
+    {p:"labeling.positive_model_patterns", k:"tags", label:"Teacher 模型模式", hint:"正则，匹配主导模型名；旧字段名仅为兼容保留"},
+    {p:"labeling.negative_model_patterns", k:"tags", label:"Student 模型模式", hint:"正则，匹配主导模型名；旧字段名仅为兼容保留"},
+    {p:"labeling.dominant_ratio_min", k:"range", min:0, max:1, step:0.05, digits:2, label:"主导占比阈值", hint:"低于则标为来源未知"},
+  ]},
+  {id:"turns", name:"回合规则", hint:"根任务识别、噪音剥离、催促折叠与纠偏内化", fields:[
+    {p:"turns.use_model", k:"bool", label:"模型回合分类", hint:"语义边界交给模型，脚本确定性应用结果；离线构建 / GT 主链强制 false"},
+    {p:"turns.fallback_first_turn_as_root", k:"bool", label:"兜底根任务", hint:"未命中正则时把首个实质回合当根任务"},
+    {p:"turns.fold_await_user_messages", k:"bool", label:"折叠等待语", hint:"删掉「停下来请示」的纯文本，使执行流连续"},
+    {p:"turns.root_task_patterns", k:"tags", adv:true, label:"根任务识别"},
+    {p:"turns.continuation_patterns", k:"tags", adv:true, label:"催促折叠"},
+    {p:"turns.correction_patterns", k:"tags", adv:true, label:"纠偏内化"},
+    {p:"turns.irrelevant_patterns", k:"tags", adv:true, label:"噪音剥离"},
+  ]},
+  {id:"synth", name:"训练合成", hint:"单步窗口、过采样权重与切分策略", fields:[
+    {p:"synth.window_turns", k:"range", min:1, max:24, step:1, label:"窗口步数", hint:"根任务锚定后附带的历史步数"},
+    {p:"synth.eval_ratio", k:"range", min:0, max:0.5, step:0.05, digits:2, label:"验证集比例", hint:"按项目整包切分，防止相邻步泄漏"},
+    {p:"synth.shuffle", k:"bool", label:"全局打乱", hint:"跨项目打乱，防止优化器偏向单一游戏"},
+    {p:"synth.weights.opening", k:"range", min:1, max:5, step:1, adv:true, label:"开局权重"},
+    {p:"synth.weights.key_decision", k:"range", min:1, max:5, step:1, adv:true, label:"关键步权重"},
+    {p:"synth.weights.closing", k:"range", min:1, max:5, step:1, adv:true, label:"收尾权重"},
+    {p:"synth.weights.routine", k:"range", min:1, max:5, step:1, adv:true, label:"常规步权重"},
+  ]},
+  {id:"model", name:"模型与调用", hint:"仅辅助模型调用：离线构建不依赖这些开关", fields:[
     {p:"llm.model", k:"model", label:"主模型", hint:"兜底模型：回合分类、步级判断、质量报告都未单独指定时用它"},
     {p:"llm.temperature", k:"range", min:0, max:2, step:0.05, digits:2, label:"温度", hint:"0 = 稳定可复现，适合评审与结构化输出"},
     {p:"llm.max_tokens", k:"num", label:"max_tokens", hint:"单次调用输出上限"},
     {p:"llm.timeout_seconds", k:"num", label:"单次超时（秒）"},
   ]},
-  {id:"judge", name:"模型判断", hint:"模型的全部判断权都在这里：删哪些步、接缝是否平滑、值不值得训练、偏好对是否成立", pipe:true, fields:[
-    {p:"judge.enabled", k:"bool", label:"启用模型判断层", hint:"关闭则回退到脚本规则（质量会下降，仅用于对比）"},
+  {id:"judge", name:"模型判断", hint:"仅显式在线入口的辅助判断；离线构建 / GT 主链强制关闭", pipe:true, fields:[
+    {p:"judge.enabled", k:"bool", label:"启用模型判断层", hint:"离线构建 / GT 主链强制 false；文件值只影响显式 assist / 兼容在线入口"},
     {p:"judge.decide_model", k:"model", inherit:"llm.model", follow:"跟随主模型", label:"步级判断模型", hint:"决定 keep/prune/fold/rewrite/exclude；调用量最大"},
     {p:"judge.audit_model", k:"model", inherit:"llm.model", follow:"跟随主模型", label:"审计模型", hint:"接缝 / 质量报告 / DPO 复核的默认模型"},
     {p:"judge.task_models.seams", k:"model", inherit:"judge.audit_model", follow:"跟随审计模型", label:"└ 接缝修复模型", hint:"留空 = 跟随审计模型；接缝窗口小、量大"},
@@ -3968,35 +4019,55 @@ const CFG_SECS = [
     {p:"judge.decisions.rewrite", k:"bool", adv:true, label:"允许 rewrite（改写思维链）"},
     {p:"judge.decisions.exclude", k:"bool", adv:true, label:"允许 exclude（排除出训练）"},
   ]},
-  {id:"admission", name:"会话准入", hint:"哪些 pi 会话有资格进入数据集", fields:[
-    {p:"admission.workspace_prefixes", k:"tags", label:"工作区前缀白名单", hint:"相对 sessions_dir 的文件夹名前缀"},
-    {p:"admission.exclude_folders", k:"tags", label:"明确排除目录", hint:"命中即整目录跳过"},
-    {p:"admission.dedupe_duplicate_prefix", k:"bool", label:"同源副本去重", hint:"迁移/复制产生的重复前缀会话只留最长一份"},
-  ]},
-  {id:"labeling", name:"来源识别", hint:"Teacher / Student 模型来源仅用于血缘，不决定 SFT 或 DPO 去向", fields:[
-    {p:"labeling.positive_model_patterns", k:"tags", label:"Teacher 模型模式", hint:"正则，匹配主导模型名；旧字段名仅为兼容保留"},
-    {p:"labeling.negative_model_patterns", k:"tags", label:"Student 模型模式", hint:"正则，匹配主导模型名；旧字段名仅为兼容保留"},
-    {p:"labeling.dominant_ratio_min", k:"range", min:0, max:1, step:0.05, digits:2, label:"主导占比阈值", hint:"低于则标为来源未知"},
-  ]},
-  {id:"turns", name:"回合规则", hint:"根任务识别、噪音剥离、催促折叠与纠偏内化", fields:[
-    {p:"turns.use_model", k:"bool", label:"模型回合分类", hint:"语义边界交给模型，脚本确定性应用结果"},
-    {p:"turns.fallback_first_turn_as_root", k:"bool", label:"兜底根任务", hint:"未命中正则时把首个实质回合当根任务"},
-    {p:"turns.fold_await_user_messages", k:"bool", label:"折叠等待语", hint:"删掉「停下来请示」的纯文本，使执行流连续"},
-    {p:"turns.root_task_patterns", k:"tags", adv:true, label:"根任务识别"},
-    {p:"turns.continuation_patterns", k:"tags", adv:true, label:"催促折叠"},
-    {p:"turns.correction_patterns", k:"tags", adv:true, label:"纠偏内化"},
-    {p:"turns.irrelevant_patterns", k:"tags", adv:true, label:"噪音剥离"},
-  ]},
-  {id:"synth", name:"训练合成", hint:"单步窗口、过采样权重与切分策略", fields:[
-    {p:"synth.window_turns", k:"range", min:1, max:24, step:1, label:"窗口步数", hint:"根任务锚定后附带的历史步数"},
-    {p:"synth.eval_ratio", k:"range", min:0, max:0.5, step:0.05, digits:2, label:"验证集比例", hint:"按项目整包切分，防止相邻步泄漏"},
-    {p:"synth.shuffle", k:"bool", label:"全局打乱", hint:"跨项目打乱，防止优化器偏向单一游戏"},
-    {p:"synth.weights.opening", k:"range", min:1, max:5, step:1, adv:true, label:"开局权重"},
-    {p:"synth.weights.key_decision", k:"range", min:1, max:5, step:1, adv:true, label:"关键步权重"},
-    {p:"synth.weights.closing", k:"range", min:1, max:5, step:1, adv:true, label:"收尾权重"},
-    {p:"synth.weights.routine", k:"range", min:1, max:5, step:1, adv:true, label:"常规步权重"},
-  ]},
 ];
+
+const CFG_STAGE_LABELS = {"stage1":"① 准入/回合", "stage2":"② 黄金提纯", "stage3":"③ 训练合成"};
+const cfgStageLabel = s => {
+  const t = String(s || "");
+  const hit = Object.keys(CFG_STAGE_LABELS).find(k => t.startsWith(k));
+  if (hit) return CFG_STAGE_LABELS[hit];
+  return t.split(" ")[0] || "—";
+};
+const cfgFmtValue = v => {
+  if (v == null) return "—";
+  if (typeof v === "object") { try { return JSON.stringify(v); } catch (_) { return String(v); } }
+  return String(v);
+};
+function cfgEffectiveSource(path, source) {
+  const forced = Object.prototype.hasOwnProperty.call(CFG_OFFLINE_FORCED, path);
+  const base = source === "file" ? "文件" : "内建默认";
+  return forced ? `${base} · 离线构建强制 ${String(CFG_OFFLINE_FORCED[path])}` : base;
+}
+function cfgEffectiveRows() {
+  const q = CFG.q.toLowerCase();
+  return (CFG.effective || []).filter(r => {
+    if (!r || typeof r.path !== "string") return false;
+    if (r.path.startsWith("_")) return false;  // 只隐藏内部键；有效值清单已由共享 parser 校验
+    return !q || r.path.toLowerCase().includes(q) || cfgFmtValue(r.value).toLowerCase().includes(q);
+  });
+}
+function cfgEffectiveHtml() {
+  const all = (CFG.effective || []).filter(r => r && typeof r.path === "string"
+    && !r.path.startsWith("_"));
+  if (!all.length) return "";
+  const rows = cfgEffectiveRows();
+  const body = rows.map(r => {
+    const val = cfgFmtValue(r.value);
+    const forced = Object.prototype.hasOwnProperty.call(CFG_OFFLINE_FORCED, r.path);
+    return `<div class="cfg-row cfg-ro" data-path="${esc(r.path)}">
+      <div><div class="nm">${esc(r.path)}</div>
+        ${forced ? `<div class="hint">文件值 ${String(CFG_OFFLINE_FORCED[r.path]) === "false" ? "为 true 也不生效" : "为 false 也不生效"}：离线构建强制关闭隐式模型</div>` : ""}</div>
+      <div class="cfg-ctl cfg-ro-ctl">
+        <span class="cfg-ro-val" title="${esc(val)}">${esc(val)}</span>
+        <span class="cfg-inherit">${esc(cfgEffectiveSource(r.path, r.source))}</span>
+        <span class="cfg-ro-stage" title="${esc(r.stage)}">${esc(cfgStageLabel(r.stage))}</span>
+      </div></div>`;
+  }).join("");
+  return `<details class="cfg-adv cfg-effective" ${CFG.effOpen ? "open" : ""} ontoggle="CFG.effOpen=this.open">
+    <summary>有效值清单 · ${rows.length}/${all.length} 项（只读：合并后的全部参数 · 来源 · 作用阶段）</summary>
+    <div class="cfg-effective-list">${body || `<div class="cfg-empty">没有匹配「${esc(CFG.q)}」的有效值</div>`}</div>
+  </details>`;
+}
 
 const cfgGet = (obj, p) => p.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
 const cfgFmt = (f, v) => f.digits != null ? Number(v).toFixed(f.digits) : String(v);
@@ -4192,6 +4263,8 @@ async function loadConfig() {
     [d, md] = await Promise.all([api("/api/config"), api("/api/llm/models").catch(() => ({models: [], ruamel: false}))]);
   } catch (e) { $("#view-config").innerHTML = `<div class="panel"><div class="empty">${esc(e.message)}</div></div>`; return; }
   CFG.yaml = d.yaml; CFG.parsed = d.parsed || {}; CFG.path = d.path;
+  CFG.effective = Array.isArray(d.effective) ? d.effective : [];
+  CFG.valid = d.config_valid !== false; CFG.error = d.config_error || "";
   CFG.models = md.models || []; CFG.ruamel = md.ruamel !== false;
   if (!Object.keys(CFG.values).length) cfgLoadValues();
 
@@ -4206,8 +4279,9 @@ async function loadConfig() {
           <div class="seg-ctl">${[["form","分项"],["yaml","YAML"]].map(([v,t])=>`<button data-v="${v}" class="${CFG.mode===v?"on":""}" onclick="CFG.mode='${v}';CFG.values={};loadConfig()">${t}</button>`).join("")}</div>
           <button class="ghost" id="cfgTest">测试主模型</button>
         </div>
+        ${CFG.valid ? "" : `<div class="note" style="margin:10px 22px 0">⚠ 当前配置未通过语义校验：${esc(CFG.error)} · 请在 YAML 源码模式修复后保存</div>`}
         ${CFG.mode === "form" ? `
-        <div class="cfg-scroll" id="cfgScroll">${CFG_SECS.map(cfgSecHtml).join("") || `<div class="cfg-empty">没有匹配「${esc(CFG.q)}」的设置项</div>`}</div>
+        <div class="cfg-scroll" id="cfgScroll">${cfgEffectiveHtml()}${CFG_SECS.map(cfgSecHtml).join("") || `<div class="cfg-empty">没有匹配「${esc(CFG.q)}」的设置项</div>`}</div>
         <div class="cfg-savebar hide" id="cfgSaveBar">
           <span class="cnt"><i></i><b data-cnt>0 项未保存</b></span>
           <span class="faint" style="font-size:11.5px">只提交改动项 · YAML 注释与顺序保持</span>
@@ -4250,7 +4324,7 @@ async function loadConfig() {
     if (si) si.oninput = e => {
       CFG.q = e.target.value.trim();
       const sc2 = $("#cfgScroll");
-      if (sc2) sc2.innerHTML = CFG_SECS.map(cfgSecHtml).join("") || `<div class="cfg-empty">没有匹配「${esc(CFG.q)}」的设置项</div>`;
+      if (sc2) sc2.innerHTML = cfgEffectiveHtml() + (CFG_SECS.map(cfgSecHtml).join("") || `<div class="cfg-empty">没有匹配「${esc(CFG.q)}」的设置项</div>`);
       $("#cfgNav").innerHTML = cfgRailHtml();
       $$(".cfg-nav").forEach(b => b.classList.toggle("on", b.dataset.sec === CFG.sec));
       cfgPaintDirty();
@@ -4262,12 +4336,14 @@ async function loadConfig() {
         const r = await api("/api/config", {method:"PUT", body: JSON.stringify({yaml: $("#cfgEditor").value})});
         toast("已保存 · 版本 " + r.config_hash, "ok");
         CFG.yaml = $("#cfgEditor").value; refreshMeta().catch(() => {});
+        loadConfig();  // 刷新有效值清单与校验状态
       } catch (e) { toast(e.message, "err"); }
     };
     $("#cfgSaveYaml").onclick = saveYaml;
     $("#cfgValidate").onclick = async () => {
       const r = await api("/api/config/validate", {method:"POST", body: JSON.stringify({yaml: $("#cfgEditor").value})});
-      r.ok ? toast("YAML 合法 · 顶层键：" + r.keys.join("、"), "ok") : toast("有误：" + r.error, "err");
+      r.ok ? toast("校验通过 · 顶层键：" + r.keys.join("、"), "ok")
+        : toast("有误：" + r.error + (r.field ? `（${r.field}）` : ""), "err");
     };
     $("#cfgEditor").onkeydown = e => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveYaml(); }

@@ -42,6 +42,10 @@ python gt.py inspect session 01a15341 --steps --json
 
 # 下钻查看单步三态血缘（raw_thinking / gold thinking / tool_calls / 关联 DPO）
 python gt.py inspect step 01a15341 <msg_id_or_0_based_index> --json
+
+# 只读查看合并后的有效配置：每个叶值的 file/default 来源与作用阶段
+# （显式 --config 不存在时退出码非零；普通默认路径缺失则回退内建默认值）
+python gt.py inspect config --json
 ```
 
 ### 2. 训练包体检与学生实测归因 (`eval`)
