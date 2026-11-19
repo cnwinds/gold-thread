@@ -1478,39 +1478,90 @@
   .diff-delta-pos{color:var(--pos);font-weight:600}
   .diff-delta-neg{color:var(--neg);font-weight:600}
 
-  /* ---------- Variant A：虚拟数据集条目、演进 DAG 画布与 CAS 四层钻取 ---------- */
+  /* ---------- Variant A：虚拟数据集条目、横向演进时间轴与 CAS 四层钻取 ---------- */
   .dag-canvas{
-    padding:20px 18px;overflow-x:auto;
+    padding:14px 0 10px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-gutter:stable;
     background:radial-gradient(circle at 1px 1px,rgba(255,255,255,.045) 1px,transparent 0);
     background-size:20px 20px;
   }
-  .dag-track{display:flex;align-items:flex-start;gap:12px;min-width:max-content}
-  .dag-col{display:flex;flex-direction:column;gap:12px}
+  #vdsDagPanel .panel-h{flex-wrap:wrap;row-gap:8px}
+  #vdsDagPanel .panel-h .hint{flex:1 1 260px;min-width:0;line-height:1.5}
+  #vdsDagPanel .panel-h .grow{flex:0 1 auto}
+  #vdsDagPanel .panel-h button,
+  #vdsDagPanel .panel-h .cas-chip{flex:0 0 auto}
+  @media (max-width:900px){
+    #vdsDagPanel .panel-h .hint{flex-basis:100%;order:10;font-size:11.5px}
+    #vdsDagPanel .panel-h .grow{display:none}
+    #vdsDagPanel .panel-h #vdsBackToCurrent{order:1}
+  }
+  /* 分支泳道：横轴一列一个时间事件，纵轴一行一条演进分支，底部共享时间轴。
+     几何常量由 JS（VDS_LANE_GEOM）写入行内样式，SVG 与 CSS 网格共用同一套像素坐标。 */
+  .dag-journal{position:relative;margin:0 auto 0 0}
+  .dag-grid{position:relative;z-index:1;display:grid;grid-auto-flow:row}
+  .dag-grid>.vds-node{align-self:stretch;height:100%;overflow:hidden}
+  .dag-bridges{position:absolute;left:0;top:0;z-index:0;pointer-events:none;overflow:visible}
+  .dag-bridge{fill:none;stroke:rgba(217,180,103,.5);stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
+  .dag-bridge.is-inferred{stroke:rgba(95,185,196,.6);stroke-dasharray:5 4}
+  .dag-bridge.is-draft{stroke:rgba(217,180,103,.72);stroke-dasharray:3 4}
+  .dag-bridge.is-left{stroke:rgba(169,178,220,.7);stroke-dasharray:2 4}
+  .dag-bridge-cap{fill:var(--ink-1)}
+  .dag-axis{position:absolute;z-index:0}
+  .dag-axis::before{content:"";position:absolute;left:0;right:0;top:10px;height:1px;background:var(--line)}
+  .dag-tick{position:absolute;top:0;display:flex;flex-direction:column;align-items:center;gap:2px}
+  .dag-tick-dot{width:7px;height:7px;margin-top:7px;border-radius:50%;background:var(--ink-3);
+    border:1px solid var(--line);position:relative;z-index:1}
+  .dag-tick.is-current .dag-tick-dot{background:var(--gold);border-color:var(--gold);box-shadow:0 0 0 3px rgba(217,180,103,.16)}
+  .dag-tick.is-selected .dag-tick-dot{background:var(--mint);border-color:var(--mint);box-shadow:0 0 0 3px rgba(95,185,196,.18)}
   .vds-node{
-    width:246px;padding:13px 15px;border-radius:11px;cursor:pointer;
+    display:block;width:100%;min-width:0;text-align:left;font:inherit;color:var(--text);
+    padding:11px 13px;border-radius:10px;cursor:pointer;overflow-wrap:anywhere;
     background:var(--ink-1);border:1.5px solid var(--line);
     transition:transform .12s,border-color .15s,box-shadow .15s,background .15s;
   }
   .vds-node:hover{border-color:#525f77;transform:translateY(-1px)}
-  .vds-node.selected{border-color:var(--gold);box-shadow:0 0 0 3px rgba(217,180,103,.16);background:#202632}
+  .vds-node.is-current{border-color:rgba(217,180,103,.58);background:linear-gradient(180deg,rgba(217,180,103,.07),rgba(217,180,103,.01))}
+  .vds-node.selected{border-color:var(--mint);box-shadow:0 0 0 3px rgba(95,185,196,.18);background:var(--ink-2)}
   .vds-node.is-draft{
     border-style:dashed;border-color:var(--gold);
-    background:repeating-linear-gradient(-45deg,rgba(217,180,103,.04),rgba(217,180,103,.04) 8px,rgba(28,32,40,.92) 8px,rgba(28,32,40,.92) 16px);
+    background:repeating-linear-gradient(-45deg,rgba(217,180,103,.04),rgba(217,180,103,.04) 8px,var(--ink-1) 8px,var(--ink-1) 16px);
   }
-  .vds-title{display:flex;align-items:center;gap:7px;font-weight:700;font-size:14px;margin-top:6px}
-  .vds-metrics{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px;margin-top:10px;padding-top:9px;border-top:1px solid var(--line-soft);font-size:12px;color:var(--text-2)}
-  .vds-metrics b{color:var(--text);font-family:var(--f-num)}
-  .vds-edge{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:194px;padding-top:24px;position:relative}
-  .vds-edge-line{width:100%;height:2px;background:var(--line);position:relative}
-  .vds-edge-line.dashed{background:repeating-linear-gradient(90deg,var(--gold) 0 6px,transparent 6px 12px)}
-  .vds-edge-line::after{content:"▸";position:absolute;right:-4px;top:-11px;color:var(--gold);font-size:14px}
-  .vds-edge-card{
-    margin-top:-15px;z-index:2;padding:8px 11px;border-radius:9px;cursor:pointer;
-    background:var(--ink-2);border:1px solid var(--line);width:184px;font-size:11.5px;
-    transition:border-color .15s,background .15s,box-shadow .15s;
+  .vds-node-head{display:flex;align-items:center;gap:5px;min-height:16px;flex-wrap:wrap}
+  .vds-flag{font-size:10px;line-height:16px;padding:0 5px;border-radius:999px;white-space:nowrap;
+    color:var(--text-3);border:1px solid var(--line);background:rgba(255,255,255,.02)}
+  .vds-flag.is-current{color:var(--gold);border-color:rgba(217,180,103,.5);background:rgba(217,180,103,.1)}
+  .vds-flag.is-selected{color:var(--mint);border-color:rgba(95,185,196,.5);background:rgba(95,185,196,.1)}
+  .vds-flag.is-draft{color:var(--gold);border-color:rgba(217,180,103,.4)}
+  .vds-note{font-size:10px;color:var(--gold);white-space:nowrap}
+  .vds-title{display:block;margin-top:7px;font-size:14px;font-weight:700;color:var(--text);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vds-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+  .vds-metrics{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;margin-top:8px;padding-top:7px;
+    border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--text-2)}
+  .vds-metrics b{color:var(--text);font-family:var(--f-num);font-weight:600}
+  .dag-date{display:flex;flex-direction:column;align-items:center;gap:1px;height:34px;padding-top:2px;
+    font:11px/1.3 var(--f-num);font-variant-numeric:tabular-nums;color:var(--text-2);white-space:nowrap}
+  .dag-date .dag-date-sub{font-size:10.5px;color:var(--text-3)}
+  .dag-date.is-unknown{color:var(--text-3)}
+  .dag-date.is-draft{color:var(--gold)}
+  /* 桥标签：绝对定位落在「父卡片右缘 → 子卡片左缘」的列间空隙里，并与子卡片同一泳道。 */
+  .dag-rel,.vds-edge-card{
+    position:absolute;z-index:2;display:flex;flex-direction:column;justify-content:center;gap:1px;
+    padding:3px 7px;border-radius:7px;cursor:pointer;text-align:left;
+    background:var(--ink-2);border:1px solid var(--line);color:var(--text-2);
+    font-size:10.5px;line-height:1.35;overflow:hidden;
+    transition:border-color .15s,background .15s,box-shadow .15s,color .15s;
   }
-  .vds-edge-card:hover{border-color:var(--mint);background:var(--ink-3)}
-  .vds-edge-card.selected{border-color:var(--mint);box-shadow:0 0 0 3px rgba(95,185,196,.18)}
+  .vds-edge-card.is-inferred{border-style:dashed;border-color:rgba(95,185,196,.45)}
+  .vds-edge-card.is-draft{border-style:dashed;border-color:rgba(217,180,103,.55);background:rgba(38,32,19,.92)}
+  .vds-edge-card.is-left{border-color:rgba(169,178,220,.45)}
+  .vds-edge-card:hover,.dag-rel:hover{border-color:var(--mint);background:var(--ink-3);color:var(--text)}
+  .vds-edge-card.selected,.dag-rel.selected{border-color:var(--mint);box-shadow:0 0 0 2px rgba(95,185,196,.16);color:var(--text)}
+  .dag-rel-src{display:flex;align-items:center;gap:4px;min-width:0;max-width:100%;
+    font-family:var(--f-mono);font-size:10.5px;color:var(--mint)}
+  .dag-rel-src-id{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dag-rel-meta{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-size:10px;color:var(--text-3)}
+  .dag-rel-inf{flex:none;font-size:9.5px;color:var(--gold)}
   .vds-subtabs{display:flex;gap:4px;padding:0 18px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,.14);flex-wrap:wrap}
   .vds-subtabs button{background:transparent;border:none;border-bottom:2px solid transparent;border-radius:0;padding:11px 14px;color:var(--text-2);font-weight:500}
   .vds-subtabs button:hover{color:var(--text);background:transparent}
@@ -1604,7 +1655,7 @@ const PAGES = {
 };
 const TAB_ALIASES = { ledger: "tasks", raw: "overview", gold: "overview", train: "overview", runs: "overview", sessions: "overview", dataset: "overview", packs: "overview" };
 
-let STATE = { tab: "overview", overview: null, vds: { graph: null, focusType: "dataset", selectedId: "", selectedEdge: "", subTab: "overview", trainFilter: {kind:"all", split:"", project:"", q:"", offset:0}, goldFilter: {project:"", q:""}, rawFilter: {project:"", q:""} }, tasksMode: "ledger", tasksSelectedId: "", ledger: {events:[], tools:[], actors:[], tool:"", actor:"", sid:"", project:"", q:""}, lineageFilter: "all", packDiff: {before:"", after:"", data:null, loading:false, error:""}, raw: {project:"", model:"", adopted:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {project:"", model:"", output:"", category:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {workspace:"draft", name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", kind:"", decision:"", fileq:"", scope:"all", splitPlan:null, replanPreview:null, builds:[], groupBy:"project", expanded:null, treeData:null}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
+let STATE = { tab: "overview", overview: null, vds: { graph: null, focusType: "dataset", selectedId: "", selectedEdge: "", subTab: "overview", mounted: false, scrollLeft: null, trainFilter: {kind:"all", split:"", project:"", q:"", offset:0}, goldFilter: {project:"", q:""}, rawFilter: {project:"", q:""} }, tasksMode: "ledger", tasksSelectedId: "", ledger: {events:[], tools:[], actors:[], tool:"", actor:"", sid:"", project:"", q:""}, lineageFilter: "all", packDiff: {before:"", after:"", data:null, loading:false, error:""}, raw: {project:"", model:"", adopted:"", q:"", mode:"library", pickSource:"pi", pickQ:"", pickFilter:"", pickOpen:[], pickIds:[], pickOn:""}, gold: {project:"", model:"", output:"", category:"", q:"", eff:""}, review: {ids:[], items:[], cursor:null, autoAdvance:true}, train: {workspace:"draft", name:"sft.train.lf.jsonl", offset:0, q:"", project:"", stage:"", split:"", kind:"", decision:"", fileq:"", scope:"all", splitPlan:null, replanPreview:null, builds:[], groupBy:"project", expanded:null, treeData:null}, job: null, drawerData: null, poured: false, pendingGold: "", packHist: {packs:[]} };
 /** 交付打包作业 UI 状态（独立于 pipeline stage jobs） */
 let PACK = { running: false, jobId: null, startedAt: null, elapsed: 0, phase: "", error: null, result: null, timer: null,
   profile: localStorage.getItem("gt.exportProfile") || "", profileChosen: !!localStorage.getItem("gt.exportProfile") };
@@ -2178,10 +2229,13 @@ async function loadOverview() {
   const reports = d.reports || [];
   const graph = d.dataset_graph || await api("/api/datasets/graph");
   STATE.vds.graph = graph;
-  if (!STATE.vds.selectedId) {
-    STATE.vds.selectedId = graph.head_pack || (graph.workspace?.dirty ? "workspace" : "");
-  } else if (STATE.vds.selectedId === "workspace" && !graph.workspace?.dirty && graph.head_pack) {
-    STATE.vds.selectedId = graph.head_pack;
+  let positionFocus = !STATE.vds.mounted;
+  if (positionFocus) {
+    STATE.vds.focusType = "dataset";
+    STATE.vds.selectedId = vdsCurrentId(graph);
+    STATE.vds.scrollLeft = null;
+  } else {
+    positionFocus = vdsSyncSelection(graph);
   }
 
   $("#view-overview").innerHTML = `
@@ -2189,18 +2243,23 @@ async function loadOverview() {
     <div id="overviewTaskStrip" class="hidden"></div>
     <div class="panel" style="margin-bottom:18px" id="vdsDagPanel">
       <div class="panel-h">
-        <h3>数据集演进关系图谱 (Dataset Lineage DAG)</h3>
-        <span class="hint">点击「数据集卡片」查看它的原始 / 黄金 / 训练四层快照；点击连线「报告/账本胶囊」审阅版本演进因果</span>
+        <h3>数据集演进</h3>
+        <span class="hint">点版本卡片看四层快照 · 每条分支独占一行泳道，桥标签落在父包与子包之间 · 点桥看报告与账本</span>
         <span class="grow"></span>
         <span class="cas-chip" title="04_release/cas 内容寻址去重对象总数">CAS 对象池 ${fmt(graph.cas_total_objects || 0)}</span>
+        <button type="button" class="ghost slim" id="vdsBackToCurrent" onclick="focusCurrentDataset()">回到当前</button>
         ${reports.length ? `<button type="button" class="ghost slim" onclick="openAllReportsDrawer()">评估报告 (${fmt(reports.length)})</button>` : ""}
-        <button type="button" class="ghost slim" onclick="openCollectDrawer()">采集外部源会话</button>
-        <button type="button" class="ghost slim" onclick="jumpToLedger()">全量审计账本 →</button>
+        <button type="button" class="ghost slim" onclick="openCollectDrawer()">采集外部会话</button>
+        <button type="button" class="ghost slim" onclick="jumpToLedger()">审计账本 →</button>
       </div>
       <div class="dag-canvas" id="vdsDagCanvas">${renderDatasetDagHtml(graph)}</div>
     </div>
     <div id="vdsDetailHost" style="margin-bottom:18px"></div>`;
+  STATE.vds.mounted = true;
   STATE.poured = true;
+  vdsBindTimelineScroll();
+  const schedule = typeof requestAnimationFrame === "function" ? requestAnimationFrame : fn => setTimeout(fn, 0);
+  schedule(() => vdsRevealTimeline({ center: positionFocus }));
   paintOverviewTaskStrip();
   await renderVdsDetailHost();
 }
@@ -2236,144 +2295,559 @@ const VDS_DIRTY_REASON_ZH = {
   split_plan_changed: "Train / Eval 切分计划已调整",
 };
 
-function vdsNodeCardHtml(node, ws) {
+/* ===== VDS_TIMELINE_START ===== */
+function vdsParseTs(iso) {
+  const raw = String(iso ?? "").trim();
+  if (!raw) return null;
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? t : null;
+}
+
+function vdsLocalStamp(iso) {
+  const t = vdsParseTs(iso);
+  if (t == null) return null;
+  const d = new Date(t);
+  const p = n => String(n).padStart(2, "0");
+  return { date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
+}
+
+// 一个版本一列；有真实时间戳的按时间升序，缺失/非法时间戳排在末尾并按 id 稳定排序，草稿始终最后。
+function vdsTimelineEntries(graph) {
+  const nodes = (graph && graph.nodes) || [];
+  const ws = (graph && graph.workspace) || {};
+  const items = nodes.map(n => {
+    const isDraft = n.kind === "draft" || String(n.id) === "workspace";
+    const ts = isDraft ? null : vdsParseTs(n.generated_at);
+    return { id: String(n.id), node: n, kind: isDraft ? "draft" : "pack", ts, valid: ts != null };
+  });
+  items.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "draft" ? 1 : -1;
+    if (a.valid !== b.valid) return a.valid ? -1 : 1;
+    if (a.valid && b.valid && a.ts !== b.ts) return a.ts - b.ts;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  if ((!items.length || ws.dirty) && !items.some(i => i.kind === "draft")) {
+    items.push({ id: "workspace", node: { kind: "draft" }, kind: "draft", ts: null, valid: false });
+  }
+  return items;
+}
+
+// 当前 = 后端 head_pack（若仍存在）；否则最新有效时间戳的包；无包时为工作区。
+function vdsCurrentId(graph) {
+  const nodes = (graph && graph.nodes) || [];
+  const ids = new Set(nodes.map(n => String(n.id)));
+  const head = String((graph && graph.head_pack) || "");
+  if (head && ids.has(head)) return head;
+  const valid = nodes
+    .filter(n => vdsParseTs(n.generated_at) != null)
+    .sort((a, b) => {
+      const d = vdsParseTs(a.generated_at) - vdsParseTs(b.generated_at);
+      return d !== 0 ? d : (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
+    });
+  if (valid.length) return String(valid[valid.length - 1].id);
+  const packs = vdsTimelineEntries(graph).filter(e => e.kind === "pack");
+  return packs.length ? packs[packs.length - 1].id : "workspace";
+}
+
+// 刷新后聚焦项失效（含草稿消失 / 边消失）时回退到当前版本。
+function vdsSyncSelection(graph) {
+  const ids = new Set(vdsTimelineEntries(graph).map(e => e.id));
+  const cur = vdsCurrentId(graph);
+  if (STATE.vds.focusType === "edge") {
+    const ok = ((graph && graph.edges) || []).some(
+      e => e.id === STATE.vds.selectedEdge && ids.has(String(e.to)),
+    );
+    if (!ok) {
+      STATE.vds.focusType = "dataset";
+      STATE.vds.selectedId = cur;
+      return true;
+    }
+    return false;
+  }
+  if (!STATE.vds.selectedId || !ids.has(STATE.vds.selectedId)) {
+    STATE.vds.focusType = "dataset";
+    STATE.vds.selectedId = cur;
+    return true;
+  }
+  return false;
+}
+
+function vdsFocusTargetId(graph) {
+  if (!graph) return "";
+  if (STATE.vds.focusType === "edge") {
+    const e = ((graph.edges) || []).find(x => x.id === STATE.vds.selectedEdge);
+    if (e) return String(e.to || e.from || "");
+  }
+  return String(STATE.vds.selectedId || vdsCurrentId(graph));
+}
+
+function vdsFindTimelineCard(journal, id) {
+  if (!journal || !id) return null;
+  const cards = journal.querySelectorAll("[data-vds-id]");
+  for (const card of cards) {
+    if (String(card.dataset.vdsId) === String(id)) return card;
+  }
+  return null;
+}
+
+// 卡片在横向滚动容器内容坐标系中的左偏移：offsetLeft 相对的是定位的 .dag-grid，
+// 不是滚动容器本身，因此必须用 getBoundingClientRect 结合容器定位与当前滚动量换算。
+function vdsCardContentX(scroller, card) {
+  const cardRect = card.getBoundingClientRect();
+  const scrollerRect = scroller.getBoundingClientRect();
+  const clientLeft = Number(scroller.clientLeft) || 0;
+  return (Number(cardRect.left) || 0) - (Number(scrollerRect.left) || 0)
+    - clientLeft + (Number(scroller.scrollLeft) || 0);
+}
+
+// 仅调整横向滚动容器；不调用 scrollIntoView，不移动页面纵向视口，也不抢占焦点。
+// `left` 为内容坐标系左偏移，`w` 为需要完整可见的宽度（卡片或「卡片 + 桥标签」跨度）。
+function vdsScrollSpanIntoView(scroller, left, w, opts = {}) {
+  if (!scroller) return null;
+  const vw = Math.max(0, Number(scroller.clientWidth) || 0);
+  const span = Math.max(0, Number(w) || 0);
+  let target;
+  if (span > vw) {
+    target = left;
+  } else if (opts.center) {
+    target = left - (vw - span) / 2;
+    target = Math.min(left, Math.max(left + span - vw, target));
+  } else {
+    const cur = Number(scroller.scrollLeft) || 0;
+    target = cur;
+    if (left < cur) target = left;
+    else if (left + span > cur + vw) target = left + span - vw;
+  }
+  target = Math.max(0, Math.round(target * 100) / 100);
+  const maxScroll = Number(scroller.scrollWidth);
+  if (Number.isFinite(maxScroll) && maxScroll > 0) target = Math.min(target, Math.max(0, maxScroll - vw));
+  scroller.scrollLeft = target;
+  return target;
+}
+
+function vdsScrollCardIntoView(scroller, card, opts = {}) {
+  if (!scroller || !card) return null;
+  const left = vdsCardContentX(scroller, card);
+  const w = Math.max(0, Number(card.getBoundingClientRect().width) || 0);
+  return vdsScrollSpanIntoView(scroller, left, w, opts);
+}
+
+// 桥标签（报告/账本胶囊）与子卡片同泳道、位于父卡片与子卡片之间的空隙里。
+function vdsFindEdgeChip(journal, edgeId) {
+  if (!journal || !edgeId || typeof journal.querySelector !== "function") return null;
+  const id = String(edgeId).replace(/(["\\])/g, "\\$1");
+  return journal.querySelector(`.vds-edge-card[data-edge-id="${id}"]`);
+}
+
+function vdsRevealTimeline(opts = {}) {
+  const scroller = $("#vdsDagCanvas");
+  const journal = $("#vdsDagJournal");
+  if (!scroller || !journal) return null;
+  const card = vdsFindTimelineCard(journal, vdsFocusTargetId(STATE.vds.graph));
+  let target = null;
+  if (opts.center && card) target = vdsScrollCardIntoView(scroller, card, { center: true });
+  else if (opts.reveal && card) {
+    // 关系聚焦时把「桥标签 + 子卡片」整段露出来，手机上不会把桥滚出视口。
+    const chip = STATE.vds.focusType === "edge" ? vdsFindEdgeChip(journal, STATE.vds.selectedEdge) : null;
+    const vw = Math.max(0, Number(scroller.clientWidth) || 0);
+    if (chip) {
+      const cardLeft = vdsCardContentX(scroller, card);
+      const cardW = Math.max(0, Number(card.getBoundingClientRect().width) || 0);
+      const chipLeft = vdsCardContentX(scroller, chip);
+      const chipW = Math.max(0, Number(chip.getBoundingClientRect().width) || 0);
+      const left = Math.min(cardLeft, chipLeft);
+      const right = Math.max(cardLeft + cardW, chipLeft + chipW);
+      if (right - left > 0 && right - left <= vw) {
+        target = vdsScrollSpanIntoView(scroller, left, right - left, { center: false });
+      } else {
+        // 极窄屏（<400px）放不下「标签 + 卡片」整段时，至少居中露出子卡片。
+        target = vdsScrollCardIntoView(scroller, card, { center: true });
+      }
+    }
+    if (target == null) target = vdsScrollCardIntoView(scroller, card, { center: false });
+  }
+  else if (STATE.vds.scrollLeft != null) {
+    scroller.scrollLeft = STATE.vds.scrollLeft;
+    target = scroller.scrollLeft;
+  } else if (card) {
+    target = vdsScrollCardIntoView(scroller, card, { center: false });
+  }
+  if (target != null) STATE.vds.scrollLeft = Number(target) || 0;
+  return target;
+}
+
+function vdsBindTimelineScroll() {
+  const scroller = $("#vdsDagCanvas");
+  if (!scroller || scroller.__vdsScrollBound) return;
+  scroller.__vdsScrollBound = true;
+  if (typeof scroller.addEventListener === "function") {
+    scroller.addEventListener("scroll", () => { STATE.vds.scrollLeft = Number(scroller.scrollLeft) || 0; }, { passive: true });
+  }
+}
+
+function vdsPaintTimeline() {
+  const dag = $("#vdsDagCanvas");
+  if (dag && STATE.vds.graph) dag.innerHTML = renderDatasetDagHtml(STATE.vds.graph);
+  vdsBindTimelineScroll();
+}
+
+/* ---------- 分支泳道：真实父边 → 确定性的 lane 分配 + 像素几何 ----------
+   几何常量同时驱动行内样式（CSS 网格）与 SVG viewBox，保证两边线段座标体系完全一致。 */
+const VDS_LANE_GEOM = {
+  colW: 220,      // 一列 = 一个时间事件（卡片宽度）
+  gapX: 124,      // 列间距：容纳桥标签（落在父卡片右缘与子卡片左缘之间）
+  rowH: 166,      // 一行 = 一条分支泳道（也是卡片高度，容纳卡片全部内容）
+  gapY: 40,       // 泳道间距：桥的横向通道走在这里，不穿过任何卡片
+  padX: 18,
+  padTop: 14,
+  axisH: 52,      // 底部共享时间轴
+  chipW: 108,     // 桥标签宽度（必须小于 gapX，文字才塞得进列间空隙）
+  chipH: 38,
+  chipGap: 8,     // 桥标签贴近子卡片一侧的留白
+  trunkX: 6,      // 分叉主干距父卡片边缘的距离
+};
+
+// 真实边的父指针：每个节点只取第一条合法 incoming 边；自环 / 悬空端点 / 成环链一律丢弃。
+function vdsParentLinks(graph, ids) {
+  const parentOf = new Map();
+  const edgeOf = new Map();
+  for (const e of ((graph && graph.edges) || [])) {
+    const from = String(e.from ?? "");
+    const to = String(e.to ?? "");
+    if (!ids.has(from) || !ids.has(to) || from === to) continue;
+    if (parentOf.has(to)) continue;   // 真实模型一个节点只有一个父包，多父只认第一条
+    parentOf.set(to, from);
+    edgeOf.set(to, e);
+  }
+  // 环保护：父链回到自身即切断该子节点的父指针，渲染与滚动永不进死循环。
+  for (const child of Array.from(parentOf.keys())) {
+    let cur = parentOf.get(child) || "";
+    const seen = new Set([child]);
+    let guard = 0;
+    while (cur && guard++ <= ids.size) {
+      if (seen.has(cur)) {
+        parentOf.delete(child);
+        edgeOf.delete(child);
+        break;
+      }
+      seen.add(cur);
+      cur = parentOf.get(cur) || "";
+    }
+  }
+  return { parentOf, edgeOf };
+}
+
+// 在父包旁边分岔，然后沿子分支的行直达桥标签。只有中途被卡片挡住才绕行。
+function vdsRouteBridge(from, to, g, nodes) {
+  const dir = to.col > from.col ? "right" : "left";
+  const sy = from.y + from.h / 2;
+  const ey = to.y + to.h / 2;
+  const adjacent = Math.abs(to.col - from.col) === 1;
+  const detour = !adjacent && nodes.some(n => n.lane === to.lane
+    && n.col > Math.min(from.col, to.col) && n.col < Math.max(from.col, to.col));
+  const approach = g.chipGap + g.chipW + 2; // 横线从标签外侧进入，不能让标签悬在线旁边。
+  const points = [];
+  let chip;
+  let cap;
+  if (dir === "right") {
+    const sx = from.x + from.w;
+    const tx = sx + g.trunkX;
+    const ex = to.x;
+    points.push([sx, sy], [tx, sy]);
+    if (detour) {
+      const channelY = to.lane >= from.lane ? from.y + from.h + g.gapY / 2 : from.y - g.gapY / 2;
+      const cx = ex - approach;
+      points.push([tx, channelY], [cx, channelY], [cx, ey]);
+    } else {
+      points.push([tx, ey]);
+    }
+    points.push([ex, ey]);
+    chip = { left: ex - g.chipGap - g.chipW, top: to.y + (to.h - g.chipH) / 2, width: g.chipW, height: g.chipH };
+    cap = [ex, ey];
+  } else {
+    const sx = from.x;
+    const tx = sx - g.trunkX;
+    const ex = to.x + to.w;
+    points.push([sx, sy], [tx, sy]);
+    if (detour) {
+      const channelY = to.lane >= from.lane ? from.y + from.h + g.gapY / 2 : from.y - g.gapY / 2;
+      const cx = ex + approach;
+      points.push([tx, channelY], [cx, channelY], [cx, ey]);
+    } else {
+      points.push([tx, ey]);
+    }
+    points.push([ex, ey]);
+    chip = { left: ex + g.chipGap, top: to.y + (to.h - g.chipH) / 2, width: g.chipW, height: g.chipH };
+    cap = [ex, ey];
+  }
+  return { dir, adjacent, points: vdsCleanPoints(points), chip, cap, d: vdsBridgePath(points) };
+}
+
+// 去掉连续的重复顶点，保证路径与断言不依赖重叠线段。
+function vdsCleanPoints(points) {
+  const pts = [];
+  for (const p of points) {
+    const x = Math.round(p[0] * 100) / 100;
+    const y = Math.round(p[1] * 100) / 100;
+    const last = pts[pts.length - 1];
+    if (last && last[0] === x && last[1] === y) continue;
+    pts.push([x, y]);
+  }
+  return pts;
+}
+
+function vdsBridgePath(points) {
+  return vdsCleanPoints(points).map((p, i) => `${i ? "L" : "M"}${p[0]} ${p[1]}`).join(" ");
+}
+
+// 确定性泳道分配：横向一列一个时间事件（时间轴顺序），纵向 HEAD 祖先保持主泳道，
+// 每个分叉的兄弟分支各占一条新泳道，后代留在自己分支的泳道上；独立根不编造连线。
+function vdsLaneLayout(graph) {
+  const g = VDS_LANE_GEOM;
+  const entries = vdsTimelineEntries(graph);
+  const ids = new Set(entries.map(e => e.id));
+  const { parentOf, edgeOf } = vdsParentLinks(graph, ids);
+  const nodes = entries.map((entry, col) => ({
+    id: entry.id, entry, col, lane: 0,
+    x: g.padX + col * (g.colW + g.gapX), y: g.padTop, w: g.colW, h: g.rowH,
+  }));
+  const byId = new Map(nodes.map(n => [n.id, n]));
+
+  const children = new Map();
+  for (const n of nodes) {
+    const p = parentOf.get(n.id);
+    if (!p || !byId.has(p)) continue;
+    if (!children.has(p)) children.set(p, []);
+    children.get(p).push(n.id);   // entries 已时间升序，孩子列表即时间顺序
+  }
+
+  const headId = vdsCurrentId(graph);
+  const onHead = new Set();
+  let cur = byId.has(headId) ? headId : "";
+  let guard = 0;
+  while (cur && !onHead.has(cur) && guard++ <= nodes.length) {
+    onHead.add(cur);
+    cur = parentOf.get(cur) || "";
+  }
+
+  // 每个父节点只让「延续分支」继承自己的泳道：HEAD 祖先链优先，否则时间最早的孩子。
+  const successor = new Map();
+  for (const [p, kids] of children) {
+    successor.set(p, kids.find(k => onHead.has(k)) || kids[0]);
+  }
+
+  const laneKeys = ["main"];   // 主泳道恒为第 0 行，承载 HEAD 祖先链
+  const laneOf = new Map();
+  for (const id of onHead) laneOf.set(id, 0);
+  const openLane = key => { laneKeys.push(key); return laneKeys.length - 1; };
+
+  const pending = new Set(nodes.map(n => n.id).filter(id => !laneOf.has(id)));
+  let progress = true;
+  while (pending.size && progress) {
+    progress = false;
+    for (const n of nodes) {
+      if (!pending.has(n.id)) continue;
+      const p = parentOf.get(n.id) || "";
+      if (p && !laneOf.has(p)) continue;   // 父泳道未定（时间倒挂的边）留到下一轮
+      const lane = !p
+        ? openLane(`root:${n.id}`)
+        : (successor.get(p) === n.id ? laneOf.get(p) : openLane(`branch:${p}->${n.id}`));
+      laneOf.set(n.id, lane);
+      pending.delete(n.id);
+      progress = true;
+    }
+  }
+  for (const n of nodes) {   // 环保护兜底：仍无泳道则独占一行
+    if (!laneOf.has(n.id)) laneOf.set(n.id, openLane(`orphan:${n.id}`));
+  }
+
+  const usedLanes = Array.from(new Set(nodes.map(n => laneOf.get(n.id)))).sort((a, b) => a - b);
+  const laneIndex = new Map(usedLanes.map((old, i) => [old, i]));
+  for (const n of nodes) {
+    n.lane = laneIndex.get(laneOf.get(n.id));
+    n.y = g.padTop + n.lane * (g.rowH + g.gapY);
+  }
+  const lanes = usedLanes.map((old, i) => ({
+    index: i,
+    key: laneKeys[old],
+    nodes: nodes.filter(n => n.lane === i).map(n => n.id),
+  }));
+
+  const gridWidth = nodes.length * g.colW + Math.max(0, nodes.length - 1) * g.gapX;
+  const gridHeight = lanes.length * g.rowH + Math.max(0, lanes.length - 1) * g.gapY;
+  // 最后一条泳道下方也留一条空隙，作为同泳道远距连线的通道，再放共享时间轴。
+  const axisTop = g.padTop + gridHeight + g.gapY;
+
+  const edges = [];
+  for (const n of nodes) {   // 按子节点时间顺序输出，标签顺序与时间轴一致
+    const edge = edgeOf.get(n.id);
+    if (!edge) continue;
+    const from = byId.get(parentOf.get(n.id));
+    if (!from) continue;
+    edges.push(Object.assign({ edge, from, to: n }, vdsRouteBridge(from, n, g, nodes)));
+  }
+
+  return {
+    geom: g,
+    entries,
+    nodes,
+    byId,
+    lanes,
+    laneOf: new Map(nodes.map(n => [n.id, n.lane])),
+    parentOf,
+    edges,
+    headId,
+    gridWidth,
+    axisTop,
+    width: gridWidth + g.padX * 2,
+    height: axisTop + g.axisH,
+  };
+}
+
+function vdsNodeCardHtml(node, ws, currentId, pos) {
   const isDraft = node.kind === "draft";
-  const id = isDraft ? "workspace" : node.id;
+  const id = isDraft ? "workspace" : String(node.id);
   const isSel = STATE.vds.focusType === "dataset" && STATE.vds.selectedId === id;
-  const headTag = node.is_head
-    ? (ws?.dirty ? `<span class="tag t-gold">最新正式包</span>` : `<span class="tag t-done">HEAD · 与工作区同步</span>`)
-    : (isDraft ? `<span class="tag t-running">演进中草稿 · Dirty</span>` : `<span class="tag t-stale">历史冻结包</span>`);
+  const isCur = id === currentId;
   const gateTag = isDraft
-    ? `<span class="chip">待打包 (${fmt((ws?.reasons || []).length)} 项变更)</span>`
-    : (node.length_gate_ok ? `<span class="chip train">长度闸门已过</span>` : `<span class="chip">早期包 (未开闸门)</span>`);
-  const casBadge = !isDraft && node.cas_object_count ? `<span class="cas-chip">CAS:${fmt(node.cas_object_count)}</span>` : "";
+    ? `<span class="chip">待打包 ${fmt((ws?.reasons || []).length)} 项</span>`
+    : (node.length_gate_ok ? `<span class="chip train">闸门已过</span>` : `<span class="chip">早期包</span>`);
+  const casBadge = !isDraft && node.cas_object_count ? `<span class="cas-chip">CAS ${fmt(node.cas_object_count)}</span>` : "";
   const projN = isDraft ? (ws?.counts?.projects_count || 0) : (node.projects_count || 0);
   const sessN = isDraft ? (ws?.counts?.gold_sessions || ws?.counts?.raw_sessions || 0) : (node.sessions_count || 0);
   const sftT = isDraft ? (ws?.counts?.sft_train || 0) : (node.sft_train || 0);
   const sftE = isDraft ? (ws?.counts?.sft_eval || 0) : (node.sft_eval || 0);
   const dpoT = isDraft ? (ws?.counts?.dpo_train || 0) : (node.dpo_train || 0);
   const dpoE = isDraft ? (ws?.counts?.dpo_eval || 0) : (node.dpo_eval || 0);
-  const timeText = isDraft ? "实时工作区" : ago(node.generated_at);
 
-  return `<div class="vds-node ${isSel ? "selected" : ""} ${isDraft ? "is-draft" : ""}" tabindex="0" onclick="selectVirtualDataset(${jsArg(id)})" onkeydown="if(event.key==='Enter')selectVirtualDataset(${jsArg(id)})">
-    <div class="row" style="gap:6px;justify-content:space-between">${headTag}<span class="faint" style="font-size:11px">${esc(timeText)}</span></div>
-    <div class="vds-title"><span class="mono" style="font-size:14.5px;color:${isDraft ? "var(--gold)" : "var(--text)"}">${isDraft ? "Workspace (未打包)" : "📦 " + esc(id)}</span></div>
-    <div class="row" style="gap:5px;margin-top:6px">${gateTag}${casBadge}</div>
-    <div class="vds-metrics">
+  const place = pos ? ` style="grid-column:${pos.col + 1};grid-row:${pos.lane + 1}"` : "";
+  return `<button type="button" class="vds-node ${isSel ? "selected" : ""} ${isCur ? "is-current" : ""} ${isDraft ? "is-draft" : ""}"${place} data-vds-id="${esc(id)}" aria-pressed="${isSel ? "true" : "false"}" onclick="selectVirtualDataset(${jsArg(id)})">
+    <span class="vds-node-head">
+      ${isCur ? `<span class="vds-flag is-current">当前</span>` : ""}
+      ${isDraft ? `<span class="vds-flag is-draft">草稿</span>` : ""}
+      ${isSel ? `<span class="vds-flag is-selected">查看中</span>` : ""}
+      <span class="grow"></span>
+      ${isDraft ? `<span class="vds-note">未发布</span>` : ""}
+    </span>
+    <span class="vds-title mono">${esc(id)}</span>
+    <span class="vds-tags">${gateTag}${casBadge}</span>
+    <span class="vds-metrics">
       <span>项目 <b>${fmt(projN)}</b></span>
       <span>会话 <b>${fmt(sessN)}</b></span>
       <span>SFT <b>${fmt(sftT)}</b>/${fmt(sftE)}</span>
       <span>DPO <b>${fmt(dpoT)}</b>/${fmt(dpoE)}</span>
-    </div>
-  </div>`;
+    </span>
+  </button>`;
 }
 
-function vdsEdgeBridgeHtml(edge) {
-  const isDraft = edge.kind === "draft";
+// 桥标签：键盘可聚焦的原生按钮，绝对定位落在子卡片所在泳道的列间空隙里。
+function vdsRelationChipHtml(edge, bridge) {
+  if (!edge) return "";
+  const g = VDS_LANE_GEOM;
   const isSel = STATE.vds.focusType === "edge" && STATE.vds.selectedEdge === edge.id;
-  const rpt = (edge.reports || [])[0];
-  const opsCount = (edge.ledger_ops || []).length;
-  const badgeTxt = rpt
-    ? `📄 实测评估报告`
-    : (isDraft ? `⚡ 待打包草稿增量` : (opsCount ? `🔧 ${fmt(opsCount)} 条审计操作` : `演进派生`));
-  const subTxt = rpt
-    ? short(rpt.title || rpt.summary || "", 46)
-    : (isDraft ? `自 ${edge.from} 后新增 ${fmt(opsCount)} 项未打包记录` : (edge.inferred ? "按时间序串联历史基线" : `含 ${fmt(opsCount)} 条 CLI/Web 变更留痕`));
-  return `<div class="vds-edge">
-    <div class="vds-edge-line ${isDraft ? "dashed" : ""}"></div>
-    <div class="vds-edge-card ${isSel ? "selected" : ""}" tabindex="0" onclick="selectLineageEdge(${jsArg(edge.id)})" onkeydown="if(event.key==='Enter')selectLineageEdge(${jsArg(edge.id)})">
-      <div style="font-weight:600;color:${rpt ? "var(--mint)" : "var(--gold)"}">${esc(badgeTxt)}</div>
-      <div class="muted" style="margin-top:3px;font-size:11px;line-height:1.4">${esc(subTxt)}</div>
-      <div class="faint" style="margin-top:4px;font-size:10.5px">点此查看报告与 ${fmt(opsCount)} 条账本 ▸</div>
-    </div>
-  </div>`;
+  const reports = (edge.reports || []).length;
+  const ops = (edge.ledger_ops || []).length;
+  const src = String(edge.from || "");
+  const dst = String(edge.to || "");
+  const isDraft = edge.kind === "draft" || dst === "workspace";
+  const isLeft = bridge && bridge.dir === "left";
+  const flags = [];
+  if (isSel) flags.push("selected");
+  if (edge.inferred) flags.push("is-inferred");
+  if (isDraft) flags.push("is-draft");
+  if (isLeft) flags.push("is-left");
+  const box = bridge ? bridge.chip : { left: g.padX, top: g.padTop, width: g.chipW, height: g.chipH };
+  const pos = `left:${box.left}px;top:${box.top}px;width:${box.width}px;height:${box.height}px`;
+  const flag = edge.inferred ? "（推断）" : isDraft ? "（草稿）" : isLeft ? "（时间倒挂）" : "";
+  const label = `${src} → ${dst}：报告 ${reports} 份 / 账本 ${ops} 条${flag}；点击查看`;
+  return `<button type="button" class="dag-rel vds-edge-card ${flags.join(" ")}" style="${pos}" data-edge-id="${esc(edge.id)}" data-edge-from="${esc(src)}" data-edge-to="${esc(dst)}" aria-label="${esc(label)}" onclick="selectLineageEdge(${jsArg(edge.id)})" title="${esc(label)}">
+    <span class="dag-rel-src"><span class="dag-rel-src-id">源 ${esc(src)}</span>${edge.inferred ? `<span class="dag-rel-inf">推断</span>` : isDraft ? `<span class="dag-rel-inf">草稿</span>` : ""}</span>
+    <span class="dag-rel-meta">报告 ${fmt(reports)} · 账本 ${fmt(ops)}</span>
+  </button>`;
+}
+
+function vdsTimelineDateHtml(node) {
+  if (node && (node.kind === "draft" || String(node.id) === "workspace")) {
+    return `<div class="dag-date is-draft"><span class="dag-date-main">未发布</span></div>`;
+  }
+  const s = vdsLocalStamp(node && node.generated_at);
+  if (!s) return `<div class="dag-date is-unknown"><span class="dag-date-main">时间未知</span></div>`;
+  return `<time class="dag-date" datetime="${esc(node.generated_at)}"><span class="dag-date-main">${esc(s.date)}</span><span class="dag-date-sub">${esc(s.time)}</span></time>`;
+}
+
+function vdsNodeOfEntry(entry) {
+  return entry.kind === "draft" ? { kind: "draft" } : entry.node;
 }
 
 function renderDatasetDagHtml(graph) {
-  const nodes = graph?.nodes || [];
-  const edges = graph?.edges || [];
-  const ws = graph?.workspace || {};
-  if (!nodes.length) {
-    return `<div class="dag-track"><div class="dag-col">${vdsNodeCardHtml({kind:"draft"}, ws)}</div></div>`;
-  }
-  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
-  const edgeMap = Object.fromEntries(edges.map(e => [`${e.from}->${e.to}`, e]));
-  const childrenOf = {};
-  const roots = [];
-  for (const n of nodes) {
-    const p = n.resolved_parent;
-    if (p && byId[p]) (childrenOf[p] = childrenOf[p] || []).push(n);
-    else roots.push(n);
-  }
-  // 挑选包含 head_pack 或后代最多的主干链向右展开，同层兄弟作为紧凑分支挂载在同一列下方
-  const hasHeadDesc = id => {
-    if (byId[id]?.is_head) return true;
-    return (childrenOf[id] || []).some(c => hasHeadDesc(c.id));
-  };
-  const renderChainFromRoot = (rootNode, includeWorkspace) => {
-    let cur = rootNode;
-    const parts = [];
-    while (cur && !visited.has(cur.id)) {
-      visited.add(cur.id);
-      parts.push(`<div class="dag-col">${vdsNodeCardHtml(cur, ws)}</div>`);
-      const kids = childrenOf[cur.id] || [];
-      if (!kids.length) break;
-      const primary = kids.find(k => hasHeadDesc(k.id)) || kids[kids.length - 1];
-      const sideKids = kids.filter(k => k.id !== primary.id);
-      const e = edgeMap[`${cur.id}->${primary.id}`] || { id: `${cur.id}->${primary.id}`, from: cur.id, to: primary.id, reports: [], ledger_ops: [] };
-      parts.push(vdsEdgeBridgeHtml(e));
-      if (sideKids.length) {
-        visited.add(primary.id);
-        parts.push(`<div class="dag-col">
-          ${vdsNodeCardHtml(primary, ws)}
-          ${sideKids.map(sk => { visited.add(sk.id); return `<div style="opacity:.88;transform:scale(.96);transform-origin:left top"><div class="faint" style="font-size:11px;margin:2px 0 4px 4px">↳ 同基线派生分支 (${esc(cur.id)})：</div>${vdsNodeCardHtml(sk, ws)}</div>`; }).join("")}
-        </div>`);
-        const nextKids = childrenOf[primary.id] || [];
-        if (!nextKids.length) { cur = primary; break; }
-        const nextPrimary = nextKids.find(k => hasHeadDesc(k.id)) || nextKids[nextKids.length - 1];
-        const ne = edgeMap[`${primary.id}->${nextPrimary.id}`] || { id: `${primary.id}->${nextPrimary.id}`, from: primary.id, to: nextPrimary.id, reports: [], ledger_ops: [] };
-        parts.push(vdsEdgeBridgeHtml(ne));
-        cur = nextPrimary;
-      } else {
-        cur = primary;
-      }
-    }
-    if (includeWorkspace && ws?.dirty) {
-      const draftEdge = edges.find(e => e.to === "workspace");
-      if (draftEdge) parts.push(vdsEdgeBridgeHtml(draftEdge));
-      parts.push(`<div class="dag-col">${vdsNodeCardHtml({kind:"draft"}, ws)}</div>`);
-    }
-    return `<div class="dag-track" style="margin-bottom:8px">${parts.join("")}</div>`;
-  };
+  const layout = vdsLaneLayout(graph);
+  const g = layout.geom;
+  const ws = (graph && graph.workspace) || {};
+  const currentId = vdsCurrentId(graph);
+  const journalStyle = `width:${layout.width}px;height:${layout.height}px;padding:${g.padTop}px ${g.padX}px 0`;
 
-  const mainRoot = roots.find(r => hasHeadDesc(r.id)) || roots[0];
-  const visited = new Set();
-  const tracks = [];
-  if (mainRoot) tracks.push(renderChainFromRoot(mainRoot, true));
-  for (const r of roots) {
-    if (!visited.has(r.id)) tracks.push(renderChainFromRoot(r, false));
-  }
-  for (const n of nodes) {
-    if (!visited.has(n.id)) tracks.push(renderChainFromRoot(n, false));
-  }
-  return tracks.join("");
+  const bridges = layout.edges.map(b => {
+    const cls = ["dag-bridge"];
+    if (b.edge.inferred) cls.push("is-inferred");
+    if (b.edge.kind === "draft" || String(b.edge.to) === "workspace") cls.push("is-draft");
+    if (b.dir === "left") cls.push("is-left");
+    return `<g class="${cls.join(" ")}"><path d="${b.d}"></path>`
+      + `<circle class="dag-bridge-cap" cx="${b.cap[0]}" cy="${b.cap[1]}" r="2.6"></circle></g>`;
+  }).join("");
+
+  const gridStyle = `grid-template-columns:repeat(${layout.nodes.length},${g.colW}px);`
+    + `grid-auto-rows:${g.rowH}px;column-gap:${g.gapX}px;row-gap:${g.gapY}px`;
+
+  // 卡片按时间顺序输出（阅读顺序 = 时间顺序），再通过 grid-column / grid-row 落到泳道。
+  const cards = layout.nodes.map(n => vdsNodeCardHtml(vdsNodeOfEntry(n.entry), ws, currentId, n)).join("");
+
+  const ticks = layout.nodes.map(n => {
+    const isSel = STATE.vds.focusType === "dataset" && STATE.vds.selectedId === n.id;
+    const cls = ["dag-tick"];
+    if (n.id === currentId) cls.push("is-current");
+    if (isSel) cls.push("is-selected");
+    return `<div class="${cls.join(" ")}" style="left:${n.col * (g.colW + g.gapX)}px;width:${g.colW}px">`
+      + `<span class="dag-tick-dot" aria-hidden="true"></span>${vdsTimelineDateHtml(vdsNodeOfEntry(n.entry))}</div>`;
+  }).join("");
+
+  const chips = layout.edges.map(b => vdsRelationChipHtml(b.edge, b)).join("");
+
+  return `<div class="dag-journal" id="vdsDagJournal" style="${journalStyle}">`
+    + `<svg class="dag-bridges" viewBox="0 0 ${layout.width} ${layout.height}" width="${layout.width}" height="${layout.height}" aria-hidden="true" focusable="false">${bridges}</svg>`
+    + `<div class="dag-grid" style="${gridStyle}">${cards}</div>`
+    + `<div class="dag-axis" style="left:${g.padX}px;top:${layout.axisTop}px;width:${layout.gridWidth}px;height:${g.axisH}px">${ticks}</div>`
+    + chips
+    + `</div>`;
 }
 
 function selectVirtualDataset(id) {
   STATE.vds.focusType = "dataset";
-  STATE.vds.selectedId = id;
-  const dag = $("#vdsDagCanvas");
-  if (dag && STATE.vds.graph) dag.innerHTML = renderDatasetDagHtml(STATE.vds.graph);
+  STATE.vds.selectedId = String(id);
+  vdsPaintTimeline();
+  vdsRevealTimeline({ reveal: true });
   renderVdsDetailHost().catch(err => toast(err.message, "err"));
 }
 
 function selectLineageEdge(edgeId) {
   STATE.vds.focusType = "edge";
-  STATE.vds.selectedEdge = edgeId;
-  const dag = $("#vdsDagCanvas");
-  if (dag && STATE.vds.graph) dag.innerHTML = renderDatasetDagHtml(STATE.vds.graph);
+  STATE.vds.selectedEdge = String(edgeId);
+  vdsPaintTimeline();
+  vdsRevealTimeline({ reveal: true });
   renderVdsDetailHost().catch(err => toast(err.message, "err"));
 }
+
+function focusCurrentDataset() {
+  const graph = STATE.vds.graph;
+  if (!graph) return "";
+  STATE.vds.focusType = "dataset";
+  STATE.vds.selectedId = vdsCurrentId(graph);
+  STATE.vds.scrollLeft = null;
+  vdsPaintTimeline();
+  vdsRevealTimeline({ center: true });
+  renderVdsDetailHost().catch(err => toast(err.message, "err"));
+  return STATE.vds.selectedId;
+}
+/* ===== VDS_TIMELINE_END ===== */
 
 async function renderVdsDetailHost() {
   const host = $("#vdsDetailHost");
