@@ -144,6 +144,9 @@
   .chip.train{color:var(--mint);border-color:rgba(95,185,196,.3)}
   .chip.eval{color:var(--pend);border-color:rgba(169,178,220,.3)}
   .chip.model{color:var(--gold);border-color:rgba(217,180,103,.3)}
+  .chip.ws-off{color:var(--neg);border-color:rgba(227,115,95,.38);background:rgba(227,115,95,.08)}
+  .chip.ws-sft-off{color:var(--gold);border-color:rgba(217,180,103,.38);background:rgba(217,180,103,.08)}
+  .chip.ws-dpo-off{color:var(--mint);border-color:rgba(95,185,196,.34);background:rgba(95,185,196,.08)}
 
   /* ---------- 分段条 ---------- */
   .seg{display:flex;height:6px;border-radius:6px;overflow:hidden;background:var(--ink-3);gap:2px;min-width:60px}
@@ -2981,6 +2984,83 @@ async function openCollectDrawer() {
   await loadCollect("#collectDrawerHost");
 }
 
+function vdsScopeZh(scope) {
+  return scope === "project" ? "项目级" : scope === "session" ? "会话级" : scope === "session_sft" ? "会话 SFT 级" : scope === "session_dpo" ? "会话 DPO 级" : "";
+}
+
+// 工作区实时草稿范围（与冻结计数严格分开）：优先读 row.workspace_usage，旧数据无该字段时缺失即视为未知。
+function vdsWorkspaceUsage(obj, opts) {
+  const row = obj || {};
+  const wu = row.workspace_usage;
+  if (wu && typeof wu === "object") {
+    return {
+      known: true,
+      in_workspace: wu.in_workspace !== false,
+      session_excluded: !!wu.session_excluded,
+      session_exclusion_scope: String(wu.session_exclusion_scope || ""),
+      sft_excluded: !!wu.sft_excluded,
+      dpo_excluded: !!wu.dpo_excluded,
+    };
+  }
+  // 仅工作区数据集的历史响应才回退到顶层 sft/dpo（此时顶层即实时草稿状态）；
+  // 历史包的顶层字段是构建时冻结状态，绝不能当作工作区实时范围。
+  if (opts && opts.workspaceRow) {
+    return {
+      known: true,
+      in_workspace: true,
+      session_excluded: !!row.dataset_excluded,
+      session_exclusion_scope: String(row.exclusion_scope || ""),
+      sft_excluded: !!row.sft_excluded,
+      dpo_excluded: !!row.dpo_excluded,
+    };
+  }
+  return { known: false, in_workspace: false, session_excluded: false, session_exclusion_scope: "", sft_excluded: false, dpo_excluded: false };
+}
+
+function vdsWorkspaceBadgeHtml(usage) {
+  if (!usage || !usage.known || !usage.in_workspace) return "";
+  const sftOff = !!usage.sft_excluded;
+  const dpoOff = !!usage.dpo_excluded;
+  const scopeZh = vdsScopeZh(usage.session_exclusion_scope);
+  if (usage.session_excluded || (sftOff && dpoOff)) {
+    const why = usage.session_excluded && scopeZh ? `停用继承自${scopeZh}范围` : "SFT 与 DPO 均已停用";
+    return `<span class="chip ws-off" title="工作区实时草稿：${esc(why)}；不影响左侧冻结计数与历史包">工作区已停用</span>`;
+  }
+  if (sftOff) return `<span class="chip ws-sft-off" title="工作区实时草稿：SFT 已停用，DPO 仍纳入下一版构建；不影响冻结计数">工作区 SFT 已停用</span>`;
+  if (dpoOff) return `<span class="chip ws-dpo-off" title="工作区实时草稿：DPO 已停用，SFT 仍纳入下一版构建；不影响冻结计数">工作区 DPO 已停用</span>`;
+  return "";
+}
+
+function renderVdsGoldWorkspaceCellHtml(s, datasetId) {
+  const usage = vdsWorkspaceUsage(s, { workspaceRow: datasetId === "workspace" });
+  return vdsWorkspaceBadgeHtml(usage) || `<span class="faint">–</span>`;
+}
+
+function renderVdsGoldCountCellHtml(s) {
+  return `${fmt(s.sft_windows)} / ${fmt(s.dpo_count)}`;
+}
+
+function renderVdsSessionUsageControlsHtml(datasetId, lin, isOff) {
+  const usage = vdsWorkspaceUsage(lin);
+  if (!usage.known || !usage.in_workspace) return "";
+  const sid = lin && lin.session_id;
+  const sftOff = !!usage.sft_excluded;
+  const dpoOff = !!usage.dpo_excluded;
+  const scopeZh = vdsScopeZh(usage.session_exclusion_scope) || "上级";
+  const offClass = isOff ? " is-off" : "";
+  if (usage.session_excluded) {
+    // 继承自会话/项目范围的停用，单会话 SFT 恢复按钮无效，因此只展示状态。
+    return `<span class="chip ws-off" title="工作区实时草稿：停用继承自${esc(scopeZh)}范围；恢复需解除${esc(scopeZh)}范围停用">工作区已停用</span>`;
+  }
+  // “恢复 SFT”已经表达 SFT 当前停用；只有独立的 DPO 状态需要额外提示。
+  const status = dpoOff ? vdsWorkspaceBadgeHtml(usage) : "";
+  const label = sftOff ? "恢复 SFT" : "停用 SFT";
+  const detail = `仅调整此会话的工作区 SFT；${dpoOff ? "DPO 仍停用" : "DPO 不受影响"}。历史包不变。`;
+  const aria = `${label}：${detail}`;
+  const btn = `<button type="button" class="toggle-pill${offClass}" title="${esc(detail)}" aria-label="${esc(aria)}" onclick="toggleVdsSessionSft(${jsArg(datasetId)}, ${jsArg(sid)}, ${sftOff ? "true" : "false"})"><i></i>${label}</button>`;
+  return `${status}${btn}`;
+}
+
 function renderVdsBreakdownHtml(bd) {
   if (!bd) return "";
   const projs = bd.projects || [];
@@ -3114,6 +3194,7 @@ async function loadVirtualDatasetSubView(dsId, tab) {
       const f = STATE.vds.goldFilter;
       const qs = new URLSearchParams({ project: f.project || "", q: f.q || "" });
       const res = await api(`/api/datasets/${encodeURIComponent(dsId)}/gold?` + qs.toString());
+      const frozen = !!res.readonly;
       box.innerHTML = `
         <div class="toolbar">
           <select id="vdsGoProj"><option value="">所有项目 (${(res.projects||[]).length})</option>${(res.projects||[]).map(p => `<option value="${esc(p)}"${f.project===p?" selected":""}>${esc(p)}</option>`).join("")}</select>
@@ -3123,7 +3204,7 @@ async function loadVirtualDatasetSubView(dsId, tab) {
         </div>
         <div class="scroll">
           <table>
-            <thead><tr><th>会话 ID</th><th>规范项目组</th><th>主导模型</th><th>切分</th><th class="n">黄金步</th><th class="n">SFT / DPO</th><th>CAS 快照指纹与时间旅行状态</th></tr></thead>
+            <thead><tr><th>会话 ID</th><th>规范项目组</th><th>主导模型</th><th>切分</th><th>工作区实时范围</th><th class="n">黄金步</th><th class="n">SFT / DPO${frozen ? "（冻结）" : ""}</th><th>CAS 快照指纹与时间旅行状态</th></tr></thead>
             <tbody>
               ${(res.sessions || []).map(s => {
                 const [stTxt, stCls] = VDS_DRIFT_ZH[s.snapshot_status] || [s.snapshot_status, "t-stale"];
@@ -3132,11 +3213,12 @@ async function loadVirtualDatasetSubView(dsId, tab) {
                   <td class="mono">${esc(s.project_group)}</td>
                   <td><span class="chip model">${esc(s.dominant_model)}</span></td>
                   <td><span class="chip ${esc(s.split)}">${esc(s.split)}</span></td>
+                  <td>${renderVdsGoldWorkspaceCellHtml(s, dsId)}</td>
                   <td class="n">${fmt(s.gold_steps)}</td>
-                  <td class="n">${fmt(s.sft_windows)} / ${fmt(s.dpo_count)}${(s.sft_windows === 0 && s.dpo_count > 0) ? `<span class="chip" style="margin-left:6px">${s.sft_excluded ? "SFT停用·仅DPO" : "仅DPO"}</span>` : ""}</td>
+                  <td class="n">${renderVdsGoldCountCellHtml(s)}</td>
                   <td><div class="row" style="gap:6px">${s.cas_gold_sha256 ? `<span class="cas-chip">sha256:${esc(s.cas_gold_sha256.slice(0, 10))}</span>` : ""}<span class="tag ${stCls}">${esc(stTxt)}</span></div></td>
                 </tr>`;
-              }).join("") || emptyRow(7, "当前数据集下无匹配的黄金会话")}
+              }).join("") || emptyRow(8, "当前数据集下无匹配的黄金会话")}
             </tbody>
           </table>
         </div>`;
@@ -3188,8 +3270,143 @@ async function loadVirtualDatasetSubView(dsId, tab) {
 let _VDS_SESSION_CACHE = null;
 let _VDS_SESSION_MODE = "gold";
 
+/* ------------------------------ DPO 偏好对查看（会话抽屉内联，无写入动作） ------------------------------ */
+let _VDS_DPO_VIEW = null;
+let _VDS_DPO_TICKET = 0;
+
+// 工作区是「上次生成」的实时产物，历史包是构建时冻结的「包内样本」，两者语义不可混用。
+function vdsDpoScope(datasetId) {
+  return String(datasetId || "") === "workspace" ? "上次生成" : "包内样本";
+}
+
+// 精确到单会话的 DPO 行来源：kind=dpo + 完整 session_id + 单条分页（由后端精确筛选）。
+function vdsDpoTrainUrl(datasetId, sid, offset) {
+  const qs = new URLSearchParams({
+    kind: "dpo",
+    session_id: String(sid || ""),
+    offset: String(Math.max(0, offset | 0)),
+    limit: "1",
+  });
+  return `/api/datasets/${encodeURIComponent(datasetId)}/train?` + qs.toString();
+}
+
+function resetVdsDpoView() {
+  _VDS_DPO_VIEW = null;
+  _VDS_DPO_TICKET += 1;
+}
+
+// 过期响应不得覆盖：抽屉/模式/会话/页码任一变化都判定为失效。
+function vdsDpoViewAlive(view, ticket) {
+  return !!view
+    && _VDS_DPO_VIEW === view
+    && ticket === _VDS_DPO_TICKET
+    && _VDS_SESSION_MODE === "dpo"
+    && view.seq === DRAWER_REQUEST_SEQ
+    && !!_VDS_SESSION_CACHE
+    && _VDS_SESSION_CACHE.session_id === view.sid
+    && $("#drawer").classList.contains("open")
+    && !!$("#vdsDpoViewer");
+}
+
+function openVdsDpoView(datasetId) {
+  const lin = _VDS_SESSION_CACHE || {};
+  const view = {
+    datasetId: String(lin.dataset_id || datasetId || "workspace"),
+    sid: String(lin.session_id || ""),
+    seq: DRAWER_REQUEST_SEQ,
+    offset: 0,
+    total: null,
+    row: null,
+    loading: true,
+    error: "",
+  };
+  _VDS_DPO_VIEW = view;
+  renderVdsDpoView();
+  view.pending = loadVdsDpoPage(view, 0);
+  return view;
+}
+
+async function loadVdsDpoPage(view, offset) {
+  if (!view) return;
+  const ticket = ++_VDS_DPO_TICKET;
+  let target = Math.max(0, offset | 0);
+  // 已知总数时先夹取目标页，避免请求越界 offset。
+  if (view.total != null) target = Math.min(target, Math.max(0, Number(view.total) - 1));
+  view.offset = target;
+  view.loading = true;
+  view.error = "";
+  view.row = null;
+  renderVdsDpoView();
+  try {
+    const res = await api(vdsDpoTrainUrl(view.datasetId, view.sid, target));
+    if (!vdsDpoViewAlive(view, ticket)) return;
+    const total = Math.max(0, Number(res.total) || 0);
+    const last = Math.max(0, total - 1);
+    // 样本数变少（例如工作区重新生成）时夹到最后一页重新取一次。
+    if (view.offset > last) return loadVdsDpoPage(view, last);
+    view.total = total;
+    view.row = (res.rows || [])[0] || null;
+    view.loading = false;
+    renderVdsDpoView();
+  } catch (err) {
+    if (!vdsDpoViewAlive(view, ticket)) return;
+    view.loading = false;
+    view.error = String((err && err.message) || err || "未知错误");
+    renderVdsDpoView();
+  }
+}
+
+function vdsDpoNav(delta) {
+  const view = _VDS_DPO_VIEW;
+  if (!view || view.total == null) return;
+  const last = Math.max(0, Number(view.total) - 1);
+  const target = Math.min(Math.max(0, view.offset + delta), last);
+  if (target === view.offset) return;
+  return loadVdsDpoPage(view, target);
+}
+
+function vdsDpoRetry() {
+  const view = _VDS_DPO_VIEW;
+  if (!view) return;
+  return loadVdsDpoPage(view, view.offset);
+}
+
+function renderVdsDpoView() {
+  const host = $("#vdsDpoViewer");
+  const view = _VDS_DPO_VIEW;
+  if (!host || !view) return;
+  const scope = vdsDpoScope(view.datasetId);
+  const hasTotal = view.total != null;
+  const total = hasTotal ? Math.max(0, Number(view.total) || 0) : 0;
+  const pos = total > 0 ? Math.min(view.offset + 1, total) : 0;
+  const prevOff = !hasTotal || view.offset <= 0;
+  const nextOff = !hasTotal || view.offset + 1 >= total;
+  const counter = hasTotal ? `第 <b>${fmt(pos)}</b> / ${fmt(total)} 对` : (view.loading ? "读取中…" : "—");
+  let body;
+  if (view.loading) {
+    body = `<div class="loading">正在读取${esc(scope)}的 DPO 偏好对…</div>`;
+  } else if (view.error) {
+    body = `<div class="error-box">读取${esc(scope)}的 DPO 偏好对失败：${esc(view.error)}<div style="margin-top:8px"><button type="button" class="ghost slim" onclick="vdsDpoRetry()">重试</button></div></div>`;
+  } else if (!total) {
+    body = `<div class="empty">该会话在${esc(scope)}中没有 DPO 偏好对。<div style="margin-top:8px"><button type="button" class="ghost slim" onclick="vdsDpoRetry()">重新读取</button></div></div>`;
+  } else if (!view.row) {
+    body = `<div class="empty">当前页没有可展示的 DPO 偏好对。</div>`;
+  } else {
+    body = renderGoldSampleDetail((view.row && view.row.raw_row) || {}, "dpo");
+  }
+  host.innerHTML = `<div class="toolbar" style="background:transparent;border:none;padding:0 0 10px">
+      <span class="chip">${esc(scope)}</span>
+      <span class="count" id="vdsDpoCounter">${counter}</span>
+      <span class="grow"></span>
+      <button type="button" class="ghost slim" id="vdsDpoPrev" ${prevOff ? "disabled" : ""} onclick="vdsDpoNav(-1)">上一对</button>
+      <button type="button" class="ghost slim" id="vdsDpoNext" ${nextOff ? "disabled" : ""} onclick="vdsDpoNav(1)">下一对</button>
+    </div>
+    <div class="panel"><div class="panel-b">${body}</div></div>`;
+}
+
 function switchVdsSessionMode(mode) {
   if (!_VDS_SESSION_CACHE) return;
+  if (mode !== "dpo") resetVdsDpoView();
   _VDS_SESSION_MODE = mode;
   $$("#vdsSessionModeBar button").forEach(b => b.classList.toggle("on", b.dataset.sm === mode));
   const body = $("#vdsDrawerLineageBody");
@@ -3205,6 +3422,9 @@ function switchVdsSessionMode(mode) {
     body.innerHTML = `${headLine}${renderMessages(lin.gold_messages || [], lin.turns || [])}`;
   } else if (mode === "raw") {
     body.innerHTML = renderMessages(lin.raw_messages || [], lin.turns || []);
+  } else if (mode === "dpo") {
+    body.innerHTML = `<div id="vdsDpoViewer"></div>`;
+    openVdsDpoView(lin.dataset_id);
   } else {
     body.innerHTML = renderLineageHtml(lin);
     bindLineageEvents(lin, "#vdsDrawerLineageBody");
@@ -3212,6 +3432,7 @@ function switchVdsSessionMode(mode) {
 }
 
 async function openDatasetSessionDrawer(datasetId, sid, defaultMode = "gold") {
+  resetVdsDpoView();
   openDrawer(`数据集 [${datasetId}] · 会话 ${String(sid).slice(0, 8)}`, "CAS 时间旅行快照回放");
   const seq = DRAWER_REQUEST_SEQ;
   $("#drawerBody").innerHTML = `<div class="loading">正在从 CAS 快照池还原完整会话与血缘…</div>`;
@@ -3228,22 +3449,23 @@ async function openDatasetSessionDrawer(datasetId, sid, defaultMode = "gold") {
     const goldAsstCnt = (lin.gold_messages || []).filter(m => m.role === "assistant").length;
     const rawAsstCnt = (lin.raw_messages || []).filter(m => m.role === "assistant").length;
     const wu = lin.workspace_usage || {};
-    const sftToggleBtn = wu.in_workspace
-      ? `<button type="button" class="toggle-pill ${wu.sft_excluded ? "is-off" : ""}" title="控制下一版构建是否纳入本会话的 SFT（历史已打包 zip 不受影响）" onclick="toggleVdsSessionSft(${jsArg(datasetId)}, ${jsArg(lin.session_id)}, ${wu.sft_excluded ? "true" : "false"})"><i></i>${wu.sft_excluded ? "工作区 SFT 已停用（仅留 DPO）· 点此恢复" : "停用本会话 SFT（仅留 DPO）"}</button>`
-      : "";
+    const usageCtl = renderVdsSessionUsageControlsHtml(datasetId, lin, !!wu.sft_excluded);
+    const dpoScope = vdsDpoScope(lin.dataset_id || datasetId);
     const topBar = `<div class="panel" style="background:var(--ink-0);margin-bottom:14px"><div class="panel-b" style="padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px">
         <div class="seg-ctl" id="vdsSessionModeBar">
           <button type="button" data-sm="gold" class="${initMode === "gold" ? "on" : ""}" ${hasGoldMsgs ? "" : "disabled"} onclick="switchVdsSessionMode('gold')">黄金对话与最终回复 <span class="num">${fmt(goldAsstCnt)}</span></button>
           <button type="button" data-sm="lineage" class="${initMode === "lineage" ? "on" : ""}" onclick="switchVdsSessionMode('lineage')">三态血缘 Diff <span class="num">${fmt((lin.steps || []).length)}</span></button>
           <button type="button" data-sm="raw" class="${initMode === "raw" ? "on" : ""}" onclick="switchVdsSessionMode('raw')">原始对话 <span class="num">${fmt(rawAsstCnt)}</span></button>
+          <button type="button" data-sm="dpo" class="${initMode === "dpo" ? "on" : ""}" title="查看本会话在${esc(dpoScope)}中实际的 DPO 偏好对（单对翻页，只读）" onclick="switchVdsSessionMode('dpo')">DPO 偏好对</button>
         </div>
-        ${sftToggleBtn}
+        ${usageCtl}
         <span class="grow"></span>
         <span class="tag ${stCls}">${esc(stTxt)}</span>
         ${lin.cas_files?.gold_file ? `<span class="cas-chip">gold:${esc(lin.cas_files.gold_file.slice(0, 10))}</span>` : ""}
         ${lin.cas_files?.raw_file ? `<span class="cas-chip">raw:${esc(lin.cas_files.raw_file.slice(0, 10))}</span>` : ""}
       </div></div>`;
-    $("#drawerSub").textContent = `${lin.meta?.project_group || ""} · ${lin.meta?.dominant_model || ""} · DPO ${fmt(lin.dpo_count || 0)} 对`;
+    // CAS 的 dpo_count 只是 Stage 2 候选数，可能与实际导出偏好对不一致，因此不当作查看器总数。
+    $("#drawerSub").textContent = `${lin.meta?.project_group || ""} · ${lin.meta?.dominant_model || ""} · DPO 候选 ${fmt(lin.dpo_count || 0)} 对`;
     $("#drawerBody").innerHTML = `${topBar}<div id="vdsDrawerLineageBody"></div>`;
     switchVdsSessionMode(initMode);
     if (wu.in_workspace) {
@@ -3260,17 +3482,27 @@ async function openDatasetSessionDrawer(datasetId, sid, defaultMode = "gold") {
 
 async function toggleVdsSessionSft(datasetId, sid, currentlyExcluded) {
   const nextAction = currentlyExcluded ? "auto" : "exclude";
+  const liveUsage = (_VDS_SESSION_CACHE && _VDS_SESSION_CACHE.workspace_usage) || {};
+  const dpoOff = !!liveUsage.dpo_excluded;
   const reason = currentlyExcluded
     ? "恢复本会话 SFT 纳入工作区草稿"
-    : "停用本会话全部 SFT，仅保留其 DPO 偏好对";
+    : (dpoOff ? "停用本会话全部 SFT（DPO 此前已停用）" : "停用本会话全部 SFT，仅保留其 DPO 偏好对");
   try {
     await api("/api/dataset/draft/scopes", {
       method: "PUT",
       body: JSON.stringify({ updates: [{ scope: "session_sft", id: sid, action: nextAction, reason }] }),
     });
-    toast(currentlyExcluded ? "已在工作区恢复该会话 SFT（已记入账本）" : "已在工作区停用该会话 SFT、仅留 DPO（下次构建打包生效）", "ok");
+    toast(
+      currentlyExcluded
+        ? "已在工作区恢复该会话 SFT（已记入账本）"
+        : (dpoOff ? "已在工作区停用该会话 SFT（DPO 此前已停用，已记入账本）" : "已在工作区停用该会话 SFT、仅留 DPO（下次构建打包生效）"),
+      "ok",
+    );
     await openDatasetSessionDrawer(datasetId, sid, _VDS_SESSION_MODE);
     if (STATE.tab === "overview") await loadOverview();
+    if (STATE.vds && STATE.vds.subTab === "gold" && $("#vdsSubBody") && (STATE.vds.selectedId || "workspace") === datasetId) {
+      await loadVirtualDatasetSubView(datasetId, "gold");
+    }
   } catch (err) {
     toast(err.message, "err");
   }
@@ -3990,9 +4222,13 @@ function bindLineageEvents(linData, containerSelector = "#goldViewBody") {
       } else {
         thinkHtml = `<pre class="diff">${esc(st.gold_thinking || st.raw_thinking || "（无思考内容）")}</pre>`;
       }
-      const replyHtml = (st.text && String(st.text).trim())
-        ? `<div style="margin-top:10px"><div class="diff-cap">助手对外回复内容 (${chars(String(st.text).length)})</div><div class="bubble reply" style="margin:6px 0 0"><div class="md">${md(st.text)}</div></div></div>`
-        : "";
+      let replyHtml = "";
+      if (st.text && String(st.text).trim()) {
+        const textDiffHtml = (st.text_changed || (st.raw_text && st.raw_text !== st.text))
+          ? `<div style="margin-bottom:8px">${buildDiff(st.raw_text || "", st.text || "", ["原始回复 (Raw)", "黄金统合回复 (Gold)"]).html}</div>`
+          : "";
+        replyHtml = `<div style="margin-top:10px"><div class="diff-cap">助手对外回复内容 (${chars(String(st.text).length)})${textDiffHtml ? " · 已改写统合" : ""}</div>${textDiffHtml}<div class="bubble reply" style="margin:6px 0 0"><div class="md">${md(st.text)}</div></div></div>`;
+      }
       slot.innerHTML = thinkHtml + replyHtml;
       slot.dataset.rendered = "1";
     };
@@ -4034,6 +4270,15 @@ async function openSessionLineageDrawer(sid) {
   }
 }
 
+// 各构建阶段导出的 chosen/rejected 可能是纯字符串、{value} 或 {content}，统一取文本避免丢内容或重复展示。
+function goldPrefText(v) {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v.value === "string") return v.value;
+  if (typeof v.content === "string") return v.content;
+  return "";
+}
+
 function renderGoldSampleDetail(row, kind) {
   const meta = row.metadata || {};
   const sampleId = row.sample_id || meta.sample_id || "";
@@ -4045,8 +4290,7 @@ function renderGoldSampleDetail(row, kind) {
     <span class="mono" title="${esc(sampleId)}">${esc(sampleId)}</span>
   </div>`;
   if (kind === "dpo") {
-    const pref = v => v == null ? "" : typeof v === "string" ? v : v.value || "";
-    const chosen = pref(row.chosen), rejected = pref(row.rejected);
+    const chosen = goldPrefText(row.chosen), rejected = goldPrefText(row.rejected);
     return `${head}${renderDpoPreferenceCard(chosen, rejected)}
       <div class="note" style="margin-bottom:12px">下方是触发时的上下文；Chosen / Rejected 见上方对照。</div>
       ${renderMessages(convToMsgs(row.conversations || row.messages))}`;

@@ -1,21 +1,21 @@
 {
-  "generated_at": "2026-11-19T18:05:39+08:00",
-  "config_hash": "caf680c2f8102063",
+  "generated_at": "2026-11-20T07:41:36+08:00",
+  "config_hash": "8b2a9e103af1a48c",
   "counts": {
-    "sft_gold_trajectories_sharegpt.jsonl": 27,
-    "sft_step_windows_sharegpt.jsonl": 3144,
-    "sft_step_windows_openai.jsonl": 3144,
-    "dpo_preference_pairs.jsonl": 729,
-    "negative_diagnostics.jsonl": 2091,
-    "sft_gold_trajectories_sharegpt.train.jsonl": 22,
+    "sft_gold_trajectories_sharegpt.jsonl": 25,
+    "sft_step_windows_sharegpt.jsonl": 2582,
+    "sft_step_windows_openai.jsonl": 2582,
+    "dpo_preference_pairs.jsonl": 612,
+    "negative_diagnostics.jsonl": 2589,
+    "sft_gold_trajectories_sharegpt.train.jsonl": 20,
     "sft_gold_trajectories_sharegpt.eval.jsonl": 5,
-    "sft_step_windows_sharegpt.train.jsonl": 2651,
+    "sft_step_windows_sharegpt.train.jsonl": 2089,
     "sft_step_windows_sharegpt.eval.jsonl": 493,
-    "sft_step_windows_openai.train.jsonl": 2651,
+    "sft_step_windows_openai.train.jsonl": 2089,
     "sft_step_windows_openai.eval.jsonl": 493,
-    "dpo_preference_pairs.train.jsonl": 643,
-    "dpo_preference_pairs.eval.jsonl": 86,
-    "negative_diagnostics.train.jsonl": 2091
+    "dpo_preference_pairs.train.jsonl": 533,
+    "dpo_preference_pairs.eval.jsonl": 79,
+    "negative_diagnostics.train.jsonl": 2589
   },
   "split": {
     "game::altosodyssey": "eval",
@@ -39,7 +39,6 @@
     "game::youmustescape2": "train"
   },
   "by_project": {
-    "game::jigsawcard": 773,
     "game::meowdoku": 294,
     "game::altosodyssey": 76,
     "game::puzzle": 130,
@@ -55,35 +54,35 @@
     "game::usagishima": 45,
     "game::klondike": 197,
     "game::monkeymart": 232,
-    "game::riddle": 237,
-    "game::unblock3d": 276,
-    "game::mahjong": 239
+    "game::jigsawcard": 232,
+    "game::riddle": 231,
+    "game::unblock3d": 266,
+    "game::mahjong": 234
   },
   "by_stage": {
-    "opening": 71,
-    "key_decision": 1593,
-    "routine": 1295,
-    "highlight": 131,
-    "closing": 54
+    "opening": 66,
+    "key_decision": 1257,
+    "highlight": 108,
+    "routine": 1102,
+    "closing": 49
   },
   "by_model": {
-    "glm-5.3": 2,
-    "deepseek-v4.1-flash-1017": 7,
+    "deepseek-v4.1-flash-1017": 6,
+    "glm-5.3": 1,
     "glm-5.3-flash": 15,
     "MiniMax-M3.1-Flash": 3
   },
   "admit_reasons": {
-    "clean_gold": 2403,
-    "rescued_by_rewrite": 740,
-    "human_kept": 1
+    "clean_gold": 2038,
+    "rescued_by_rewrite": 544
   },
   "drop_reasons": {
-    "excluded_by_review": 10,
-    "pathology": 96,
-    "synthesized_thinking_unverified": 738,
-    "premature_stop_without_tool": 7,
-    "empty_thinking": 12,
-    "model_discard": 703
+    "model_discard": 995,
+    "synthesized_thinking_unverified": 723,
+    "pathology": 99,
+    "premature_stop_without_tool": 14,
+    "empty_thinking": 9,
+    "excluded_by_review": 56
   },
   "session_funnels": {
     "01a15341-6ad4-7530-bd18-84943ebbe26f": {
@@ -92,30 +91,63 @@
       "project_group": "game::jigsawcard",
       "model": "glm-5.3",
       "split": "train",
-      "effective_state": "auto_gold",
-      "full_sft_allowed": true,
+      "effective_state": "auto_reject",
+      "full_sft_allowed": false,
       "subsegment_only": false,
       "funnel": {
-        "raw_steps": 316,
-        "gold_steps": 294,
-        "admitted_steps": 267,
-        "rescued_steps": 99,
-        "human_kept_steps": 1,
-        "excluded_steps": 12,
-        "pathology_dropped": 11,
-        "synthesized_dropped": 3,
-        "empty_dropped": 1,
-        "blocked_or_subsegment_dropped": 0,
-        "weighted_steps": 469
+        "raw_steps": 314,
+        "gold_steps": 292,
+        "admitted_steps": 0,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 292,
+        "weighted_steps": 0
       },
-      "dpo_pruned": 15,
+      "dpo_pruned": 17,
       "dpo_review": 25,
       "dpo_negative": 0,
       "diagnostics": 143,
-      "dpo_written": 36,
+      "dpo_written": 26,
       "dpo_written_parts": {
-        "pruned": 12,
-        "review": 24,
+        "pruned": 8,
+        "review": 18,
+        "negative": 0
+      }
+    },
+    "01a1535e-bf14-7693-a920-9ca7de0ea907": {
+      "session_id": "01a1535e-bf14-7693-a920-9ca7de0ea907",
+      "label": "pending",
+      "project_group": "game::meowdoku",
+      "model": "glm-5.3",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 5,
+        "gold_steps": 5,
+        "admitted_steps": 5,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 17
+      },
+      "dpo_pruned": 1,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
         "negative": 0
       }
     },
@@ -130,25 +162,25 @@
       "subsegment_only": false,
       "funnel": {
         "raw_steps": 305,
-        "gold_steps": 290,
-        "admitted_steps": 276,
-        "rescued_steps": 99,
+        "gold_steps": 288,
+        "admitted_steps": 275,
+        "rescued_steps": 98,
         "human_kept_steps": 0,
         "excluded_steps": 3,
-        "pathology_dropped": 8,
+        "pathology_dropped": 7,
         "synthesized_dropped": 3,
         "empty_dropped": 0,
         "blocked_or_subsegment_dropped": 0,
-        "weighted_steps": 494
+        "weighted_steps": 493
       },
-      "dpo_pruned": 25,
-      "dpo_review": 45,
+      "dpo_pruned": 27,
+      "dpo_review": 46,
       "dpo_negative": 0,
       "diagnostics": 125,
-      "dpo_written": 70,
+      "dpo_written": 0,
       "dpo_written_parts": {
-        "pruned": 25,
-        "review": 45,
+        "pruned": 0,
+        "review": 0,
         "negative": 0
       }
     },
@@ -178,9 +210,9 @@
       "dpo_review": 10,
       "dpo_negative": 10,
       "diagnostics": 15,
-      "dpo_written": 15,
+      "dpo_written": 13,
       "dpo_written_parts": {
-        "pruned": 5,
+        "pruned": 3,
         "review": 10,
         "negative": 0
       }
@@ -211,9 +243,9 @@
       "dpo_review": 0,
       "dpo_negative": 0,
       "diagnostics": 8,
-      "dpo_written": 7,
+      "dpo_written": 6,
       "dpo_written_parts": {
-        "pruned": 7,
+        "pruned": 6,
         "review": 0,
         "negative": 0
       }
@@ -244,9 +276,9 @@
       "dpo_review": 8,
       "dpo_negative": 8,
       "diagnostics": 26,
-      "dpo_written": 21,
+      "dpo_written": 18,
       "dpo_written_parts": {
-        "pruned": 13,
+        "pruned": 10,
         "review": 8,
         "negative": 0
       }
@@ -306,13 +338,13 @@
         "blocked_or_subsegment_dropped": 0,
         "weighted_steps": 120
       },
-      "dpo_pruned": 12,
-      "dpo_review": 0,
+      "dpo_pruned": 14,
+      "dpo_review": 1,
       "dpo_negative": 0,
       "diagnostics": 25,
-      "dpo_written": 10,
+      "dpo_written": 9,
       "dpo_written_parts": {
-        "pruned": 10,
+        "pruned": 9,
         "review": 0,
         "negative": 0
       }
@@ -343,10 +375,10 @@
       "dpo_review": 9,
       "dpo_negative": 10,
       "diagnostics": 27,
-      "dpo_written": 12,
+      "dpo_written": 6,
       "dpo_written_parts": {
-        "pruned": 8,
-        "review": 4,
+        "pruned": 3,
+        "review": 3,
         "negative": 0
       }
     },
@@ -376,10 +408,10 @@
       "dpo_review": 22,
       "dpo_negative": 22,
       "diagnostics": 28,
-      "dpo_written": 23,
+      "dpo_written": 21,
       "dpo_written_parts": {
         "pruned": 2,
-        "review": 21,
+        "review": 19,
         "negative": 0
       }
     },
@@ -409,10 +441,76 @@
       "dpo_review": 24,
       "dpo_negative": 27,
       "diagnostics": 93,
-      "dpo_written": 86,
+      "dpo_written": 73,
       "dpo_written_parts": {
-        "pruned": 62,
+        "pruned": 49,
         "review": 24,
+        "negative": 0
+      }
+    },
+    "01a15dc3-ceb7-7573-9392-77a9a4237f55": {
+      "session_id": "01a15dc3-ceb7-7573-9392-77a9a4237f55",
+      "label": "pending",
+      "project_group": "game::meowdoku",
+      "model": "google/gemma-4-31b-it",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 48,
+        "gold_steps": 37,
+        "admitted_steps": 32,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 4,
+        "pathology_dropped": 1,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 45
+      },
+      "dpo_pruned": 11,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 12,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a16296-27dd-73e8-86fa-04938ed99f6d": {
+      "session_id": "01a16296-27dd-73e8-86fa-04938ed99f6d",
+      "label": "positive",
+      "project_group": "game::meowdoku",
+      "model": "deepseek-v4.1-flash-1017",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 6,
+        "gold_steps": 6,
+        "admitted_steps": 6,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 28
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
         "negative": 0
       }
     },
@@ -422,7 +520,7 @@
       "project_group": "game::altosodyssey",
       "model": "glm-5.3-flash",
       "split": "eval",
-      "effective_state": "auto_gold",
+      "effective_state": "approved",
       "full_sft_allowed": true,
       "subsegment_only": false,
       "funnel": {
@@ -442,10 +540,604 @@
       "dpo_review": 9,
       "dpo_negative": 0,
       "diagnostics": 36,
-      "dpo_written": 13,
+      "dpo_written": 12,
       "dpo_written_parts": {
         "pruned": 4,
-        "review": 9,
+        "review": 8,
+        "negative": 0
+      }
+    },
+    "01a16770-e923-764c-af1d-d61a97637009": {
+      "session_id": "01a16770-e923-764c-af1d-d61a97637009",
+      "label": "positive",
+      "project_group": "game::cookingmadness",
+      "model": "glm-5.3-flash",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 38,
+        "gold_steps": 34,
+        "admitted_steps": 27,
+        "rescued_steps": 1,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 7,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 63
+      },
+      "dpo_pruned": 4,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 12,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1788d-e797-7021-8f50-cb941776f432": {
+      "session_id": "01a1788d-e797-7021-8f50-cb941776f432",
+      "label": "positive",
+      "project_group": "game::riddle",
+      "model": "deepseek-v4.1-flash-1017",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 41,
+        "gold_steps": 37,
+        "admitted_steps": 25,
+        "rescued_steps": 4,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 12,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 37
+      },
+      "dpo_pruned": 4,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 20,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1789d-f937-751a-ae6d-47df846ef1fb": {
+      "session_id": "01a1789d-f937-751a-ae6d-47df846ef1fb",
+      "label": "pending",
+      "project_group": "game::riddle",
+      "model": "moonshotai/kimi-k2.6",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 4,
+        "gold_steps": 4,
+        "admitted_steps": 2,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 2,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 6
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a178a0-4541-7104-9cbd-2adec6e1a825": {
+      "session_id": "01a178a0-4541-7104-9cbd-2adec6e1a825",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "qwen3-8b-goldthread-sft",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 59,
+        "gold_steps": 34,
+        "admitted_steps": 34,
+        "rescued_steps": 34,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 46
+      },
+      "dpo_pruned": 24,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 59,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a18034-1ddd-7752-8e4e-f23c3068556a": {
+      "session_id": "01a18034-1ddd-7752-8e4e-f23c3068556a",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "Qwen3.8-27B-dpo-merged",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 1,
+        "gold_steps": 1,
+        "admitted_steps": 1,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 3
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a18037-e656-75b7-aea4-0acfcf70f940": {
+      "session_id": "01a18037-e656-75b7-aea4-0acfcf70f940",
+      "label": "pending",
+      "project_group": "game::meowdoku",
+      "model": "moonshotai/kimi-k2.6",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 2,
+        "gold_steps": 1,
+        "admitted_steps": 1,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 5
+      },
+      "dpo_pruned": 1,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 1,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a18038-2e31-7376-9351-f67b86781195": {
+      "session_id": "01a18038-2e31-7376-9351-f67b86781195",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "Qwen3.8-27B-dpo-merged",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 1,
+        "gold_steps": 1,
+        "admitted_steps": 1,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 3
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1803e-aea8-7434-b4f5-75c6f5f69c83": {
+      "session_id": "01a1803e-aea8-7434-b4f5-75c6f5f69c83",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "Qwen3.8-27B-dpo-merged",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 1,
+        "gold_steps": 1,
+        "admitted_steps": 1,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 3
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1804b-eb45-706f-b333-8557c8fa6add": {
+      "session_id": "01a1804b-eb45-706f-b333-8557c8fa6add",
+      "label": "pending",
+      "project_group": "game::meowdoku",
+      "model": "moonshotai/kimi-k2.6",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 1,
+        "gold_steps": 1,
+        "admitted_steps": 0,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 1,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 0
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 1,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1804c-1053-74ca-aec0-89e80a49ab96": {
+      "session_id": "01a1804c-1053-74ca-aec0-89e80a49ab96",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "Qwen3.8-27B-dpo-merged",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 1,
+        "gold_steps": 1,
+        "admitted_steps": 1,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 3
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a18080-6d43-7699-801a-401bde95aecb": {
+      "session_id": "01a18080-6d43-7699-801a-401bde95aecb",
+      "label": "pending",
+      "project_group": "game::meowdoku",
+      "model": "unknown",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 0,
+        "gold_steps": 0,
+        "admitted_steps": 0,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 0
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a18081-0ef4-7183-9858-0a19a66bbaf1": {
+      "session_id": "01a18081-0ef4-7183-9858-0a19a66bbaf1",
+      "label": "pending",
+      "project_group": "game::meowdoku",
+      "model": "unknown",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 0,
+        "gold_steps": 0,
+        "admitted_steps": 0,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 0
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a18083-f61e-72c3-990f-cb77ac05d84a": {
+      "session_id": "01a18083-f61e-72c3-990f-cb77ac05d84a",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "qwen38-dpo",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 7,
+        "gold_steps": 7,
+        "admitted_steps": 4,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 3,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 11
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1808b-8efd-7003-9d7e-5e39de80d3fd": {
+      "session_id": "01a1808b-8efd-7003-9d7e-5e39de80d3fd",
+      "label": "positive",
+      "project_group": "game::meowdoku",
+      "model": "glm-5.3-flash",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 1,
+        "gold_steps": 1,
+        "admitted_steps": 1,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 3
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a182f2-a2ec-73a6-bd87-894ec5ed1d35": {
+      "session_id": "01a182f2-a2ec-73a6-bd87-894ec5ed1d35",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "qwen38-dpo",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 2,
+        "gold_steps": 2,
+        "admitted_steps": 2,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 6
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a19647-b241-725c-9d0c-fc16161874bc": {
+      "session_id": "01a19647-b241-725c-9d0c-fc16161874bc",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "Qwen3.8-27B-sft-dpo",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 3,
+        "gold_steps": 3,
+        "admitted_steps": 3,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 11
+      },
+      "dpo_pruned": 0,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 0,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a19f1a-e0af-7551-8642-af62d6254357": {
+      "session_id": "01a19f1a-e0af-7551-8642-af62d6254357",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "Qwen3.8-27B-sft",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 26,
+        "gold_steps": 25,
+        "admitted_steps": 24,
+        "rescued_steps": 0,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 1,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 38
+      },
+      "dpo_pruned": 1,
+      "dpo_review": 0,
+      "dpo_negative": 0,
+      "diagnostics": 2,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1a52b-1ee1-72a3-ac41-ae17521d7d0c": {
+      "session_id": "01a1a52b-1ee1-72a3-ac41-ae17521d7d0c",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "Qwen3.8-27B-sft-dpo",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 161,
+        "gold_steps": 136,
+        "admitted_steps": 136,
+        "rescued_steps": 2,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 0,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 182
+      },
+      "dpo_pruned": 25,
+      "dpo_review": 2,
+      "dpo_negative": 2,
+      "diagnostics": 27,
+      "dpo_written": 0,
+      "dpo_written_parts": {
+        "pruned": 0,
+        "review": 0,
         "negative": 0
       }
     },
@@ -508,10 +1200,10 @@
       "dpo_review": 8,
       "dpo_negative": 0,
       "diagnostics": 41,
-      "dpo_written": 15,
+      "dpo_written": 14,
       "dpo_written_parts": {
         "pruned": 7,
-        "review": 8,
+        "review": 7,
         "negative": 0
       }
     },
@@ -673,9 +1365,9 @@
       "dpo_review": 19,
       "dpo_negative": 0,
       "diagnostics": 78,
-      "dpo_written": 22,
+      "dpo_written": 21,
       "dpo_written_parts": {
-        "pruned": 7,
+        "pruned": 6,
         "review": 15,
         "negative": 0
       }
@@ -706,9 +1398,9 @@
       "dpo_review": 12,
       "dpo_negative": 0,
       "diagnostics": 59,
-      "dpo_written": 29,
+      "dpo_written": 26,
       "dpo_written_parts": {
-        "pruned": 17,
+        "pruned": 14,
         "review": 12,
         "negative": 0
       }
@@ -739,9 +1431,9 @@
       "dpo_review": 15,
       "dpo_negative": 0,
       "diagnostics": 72,
-      "dpo_written": 24,
+      "dpo_written": 22,
       "dpo_written_parts": {
-        "pruned": 9,
+        "pruned": 7,
         "review": 15,
         "negative": 0
       }
@@ -772,9 +1464,9 @@
       "dpo_review": 15,
       "dpo_negative": 0,
       "diagnostics": 57,
-      "dpo_written": 24,
+      "dpo_written": 23,
       "dpo_written_parts": {
-        "pruned": 14,
+        "pruned": 13,
         "review": 10,
         "negative": 0
       }
@@ -871,10 +1563,10 @@
       "dpo_review": 23,
       "dpo_negative": 0,
       "diagnostics": 145,
-      "dpo_written": 28,
+      "dpo_written": 24,
       "dpo_written_parts": {
         "pruned": 5,
-        "review": 23,
+        "review": 19,
         "negative": 0
       }
     },
@@ -904,10 +1596,10 @@
       "dpo_review": 18,
       "dpo_negative": 0,
       "diagnostics": 132,
-      "dpo_written": 29,
+      "dpo_written": 22,
       "dpo_written_parts": {
-        "pruned": 11,
-        "review": 18,
+        "pruned": 6,
+        "review": 16,
         "negative": 0
       }
     },
@@ -970,9 +1662,9 @@
       "dpo_review": 5,
       "dpo_negative": 0,
       "diagnostics": 43,
-      "dpo_written": 17,
+      "dpo_written": 16,
       "dpo_written_parts": {
-        "pruned": 12,
+        "pruned": 11,
         "review": 5,
         "negative": 0
       }
@@ -1055,24 +1747,189 @@
       "funnel": {
         "raw_steps": 302,
         "gold_steps": 279,
-        "admitted_steps": 233,
+        "admitted_steps": 232,
         "rescued_steps": 42,
         "human_kept_steps": 0,
-        "excluded_steps": 0,
+        "excluded_steps": 3,
         "pathology_dropped": 14,
-        "synthesized_dropped": 31,
-        "empty_dropped": 1,
+        "synthesized_dropped": 30,
+        "empty_dropped": 0,
         "blocked_or_subsegment_dropped": 0,
-        "weighted_steps": 395
+        "weighted_steps": 394
       },
       "dpo_pruned": 24,
       "dpo_review": 44,
       "dpo_negative": 0,
       "diagnostics": 109,
-      "dpo_written": 48,
+      "dpo_written": 47,
       "dpo_written_parts": {
         "pruned": 18,
-        "review": 30,
+        "review": 29,
+        "negative": 0
+      }
+    },
+    "01a1e73b-7c18-7210-8d83-d9fc7a8fb833": {
+      "session_id": "01a1e73b-7c18-7210-8d83-d9fc7a8fb833",
+      "label": "negative",
+      "project_group": "game::meowdoku",
+      "model": "goldthread-27b",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 229,
+        "gold_steps": 213,
+        "admitted_steps": 212,
+        "rescued_steps": 10,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 1,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 313
+      },
+      "dpo_pruned": 17,
+      "dpo_review": 10,
+      "dpo_negative": 11,
+      "diagnostics": 27,
+      "dpo_written": 6,
+      "dpo_written_parts": {
+        "pruned": 6,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1e796-4ee6-7533-bb7e-51a98d8e8281": {
+      "session_id": "01a1e796-4ee6-7533-bb7e-51a98d8e8281",
+      "label": "negative",
+      "project_group": "game::cookingmadness",
+      "model": "goldthread-27b",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 199,
+        "gold_steps": 176,
+        "admitted_steps": 174,
+        "rescued_steps": 12,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 2,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 254
+      },
+      "dpo_pruned": 24,
+      "dpo_review": 12,
+      "dpo_negative": 12,
+      "diagnostics": 35,
+      "dpo_written": 2,
+      "dpo_written_parts": {
+        "pruned": 2,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1e7df-1a31-71f2-956b-552323207449": {
+      "session_id": "01a1e7df-1a31-71f2-956b-552323207449",
+      "label": "negative",
+      "project_group": "game::puzzle",
+      "model": "goldthread-27b",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 189,
+        "gold_steps": 177,
+        "admitted_steps": 174,
+        "rescued_steps": 4,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 3,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 270
+      },
+      "dpo_pruned": 13,
+      "dpo_review": 4,
+      "dpo_negative": 6,
+      "diagnostics": 19,
+      "dpo_written": 6,
+      "dpo_written_parts": {
+        "pruned": 6,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1e82e-ad96-7083-a6dd-6d33b58dbcd9": {
+      "session_id": "01a1e82e-ad96-7083-a6dd-6d33b58dbcd9",
+      "label": "negative",
+      "project_group": "game::jigsawcard",
+      "model": "goldthread-27b",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 348,
+        "gold_steps": 327,
+        "admitted_steps": 325,
+        "rescued_steps": 44,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 2,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 386
+      },
+      "dpo_pruned": 24,
+      "dpo_review": 44,
+      "dpo_negative": 45,
+      "diagnostics": 67,
+      "dpo_written": 3,
+      "dpo_written_parts": {
+        "pruned": 3,
+        "review": 0,
+        "negative": 0
+      }
+    },
+    "01a1e8d9-74c7-7335-907a-23553e6ed205": {
+      "session_id": "01a1e8d9-74c7-7335-907a-23553e6ed205",
+      "label": "negative",
+      "project_group": "game::riddle",
+      "model": "goldthread-27b",
+      "split": "train",
+      "effective_state": "unreviewed",
+      "full_sft_allowed": true,
+      "subsegment_only": false,
+      "funnel": {
+        "raw_steps": 536,
+        "gold_steps": 495,
+        "admitted_steps": 491,
+        "rescued_steps": 22,
+        "human_kept_steps": 0,
+        "excluded_steps": 0,
+        "pathology_dropped": 4,
+        "synthesized_dropped": 0,
+        "empty_dropped": 0,
+        "blocked_or_subsegment_dropped": 0,
+        "weighted_steps": 666
+      },
+      "dpo_pruned": 45,
+      "dpo_review": 23,
+      "dpo_negative": 24,
+      "diagnostics": 66,
+      "dpo_written": 5,
+      "dpo_written_parts": {
+        "pruned": 5,
+        "review": 0,
         "negative": 0
       }
     },
@@ -1088,24 +1945,24 @@
       "funnel": {
         "raw_steps": 417,
         "gold_steps": 394,
-        "admitted_steps": 237,
+        "admitted_steps": 231,
         "rescued_steps": 22,
         "human_kept_steps": 0,
-        "excluded_steps": 0,
+        "excluded_steps": 20,
         "pathology_dropped": 0,
-        "synthesized_dropped": 157,
+        "synthesized_dropped": 143,
         "empty_dropped": 0,
         "blocked_or_subsegment_dropped": 0,
-        "weighted_steps": 366
+        "weighted_steps": 356
       },
       "dpo_pruned": 25,
       "dpo_review": 11,
       "dpo_negative": 0,
       "diagnostics": 202,
-      "dpo_written": 32,
+      "dpo_written": 28,
       "dpo_written_parts": {
-        "pruned": 21,
-        "review": 11,
+        "pruned": 18,
+        "review": 10,
         "negative": 0
       }
     },
@@ -1120,25 +1977,25 @@
       "subsegment_only": false,
       "funnel": {
         "raw_steps": 436,
-        "gold_steps": 414,
-        "admitted_steps": 276,
-        "rescued_steps": 32,
+        "gold_steps": 415,
+        "admitted_steps": 266,
+        "rescued_steps": 31,
         "human_kept_steps": 0,
-        "excluded_steps": 0,
+        "excluded_steps": 24,
         "pathology_dropped": 1,
-        "synthesized_dropped": 136,
-        "empty_dropped": 1,
+        "synthesized_dropped": 124,
+        "empty_dropped": 0,
         "blocked_or_subsegment_dropped": 0,
-        "weighted_steps": 400
+        "weighted_steps": 383
       },
-      "dpo_pruned": 24,
-      "dpo_review": 25,
+      "dpo_pruned": 23,
+      "dpo_review": 24,
       "dpo_negative": 0,
       "diagnostics": 190,
-      "dpo_written": 37,
+      "dpo_written": 35,
       "dpo_written_parts": {
-        "pruned": 15,
-        "review": 22,
+        "pruned": 16,
+        "review": 19,
         "negative": 0
       }
     },
@@ -1154,67 +2011,69 @@
       "funnel": {
         "raw_steps": 310,
         "gold_steps": 291,
-        "admitted_steps": 239,
+        "admitted_steps": 234,
         "rescued_steps": 37,
         "human_kept_steps": 0,
-        "excluded_steps": 0,
+        "excluded_steps": 9,
         "pathology_dropped": 1,
-        "synthesized_dropped": 51,
+        "synthesized_dropped": 47,
         "empty_dropped": 0,
         "blocked_or_subsegment_dropped": 0,
-        "weighted_steps": 415
+        "weighted_steps": 405
       },
-      "dpo_pruned": 20,
+      "dpo_pruned": 19,
       "dpo_review": 31,
       "dpo_negative": 0,
       "diagnostics": 108,
-      "dpo_written": 43,
+      "dpo_written": 40,
       "dpo_written_parts": {
-        "pruned": 14,
+        "pruned": 11,
         "review": 29,
         "negative": 0
       }
     }
   },
-  "weighted_steps": 5553,
+  "weighted_steps": 4561,
   "dpo_by_source": {
-    "stage2_pruned": 338,
-    "review_rewrite": 391
+    "stage2_pruned": 288,
+    "review_rewrite": 324
   },
   "diagnostics_by_pathology": {
-    "over_rumination_doubt_loop": 286,
-    "over_rumination_length": 369,
-    "mental_hex_checkmark": 160,
-    "tool_logical_failure": 92,
-    "tool_execution_error": 374,
-    "missing_thinking_block": 1281,
-    "cross_dir_violation": 14,
+    "over_rumination_doubt_loop": 368,
+    "over_rumination_length": 427,
+    "mental_hex_checkmark": 174,
+    "tool_logical_failure": 114,
+    "tool_execution_error": 537,
+    "missing_thinking_block": 1364,
+    "cross_dir_violation": 19,
     "hallucinated_source_search": 10
   },
   "label_counts": {
-    "positive": 27,
-    "negative": 6
+    "positive": 31,
+    "pending": 7,
+    "negative": 21
   },
   "review_states": {
-    "auto_gold": 28,
-    "approved": 4,
-    "auto_reject": 1
+    "auto_reject": 2,
+    "unreviewed": 26,
+    "auto_gold": 26,
+    "approved": 5
   },
   "dpo_review": {
-    "checked": 845,
+    "checked": 991,
     "swapped": 0,
-    "dropped": 116,
+    "dropped": 379,
     "pending": 0,
-    "invalid": 67
+    "invalid": 165
   },
   "draft": {
-    "plan_hash": "b81306503c652a1c",
-    "build_id": "b81306503c652a1c",
-    "sft_included": 3144,
-    "trajectory_included": 27,
-    "dpo_included": 729,
-    "sft_excluded": 739,
-    "trajectory_excluded": 5,
-    "dpo_excluded": 17
+    "plan_hash": "70e9fffa424b1533",
+    "build_id": "70e9fffa424b1533",
+    "sft_included": 2582,
+    "trajectory_included": 25,
+    "dpo_included": 612,
+    "sft_excluded": 2693,
+    "trajectory_excluded": 30,
+    "dpo_excluded": 167
   }
 }

@@ -399,13 +399,33 @@ def curate_steps(
                     raise ValueError(f"首个助手步 {mid_s} 不允许 prune")
                 if act == "rewrite":
                     rewritten = str(spec.get("rewritten") or "").strip()
-                    if not rewritten:
-                        raise ValueError(f"步骤 {mid_s} action=rewrite 时 rewritten 不能为空")
-                    if not stage2_gold._rewrite_ok(rewritten, target_msg):  # noqa: SLF001
+                    rewritten_text = str(spec.get("rewritten_text") or "").strip()
+                    if not rewritten and not rewritten_text:
                         raise ValueError(
-                            f"步骤 {mid_s} rewrite 未通过安全阀校验（空壳、超长或跨语种翻译）"
+                            f"步骤 {mid_s} action=rewrite 时 rewritten 与 rewritten_text 不能同时为空"
                         )
-                    merged_steps[mid_s] = {**spec, "action": act, "rewritten": rewritten}
+                    normalized_spec: Dict[str, Any] = {**spec, "action": act}
+                    if rewritten:
+                        if not stage2_gold._rewrite_ok(rewritten, target_msg):  # noqa: SLF001
+                            raise ValueError(
+                                f"步骤 {mid_s} rewrite 未通过安全阀校验（空壳、超长或跨语种翻译）"
+                            )
+                        normalized_spec["rewritten"] = rewritten
+                    else:
+                        normalized_spec.pop("rewritten", None)
+                    if rewritten_text:
+                        if target_msg.get("tool_calls"):
+                            raise ValueError(
+                                f"步骤 {mid_s} 含工具调用，不允许通过 rewritten_text 改写中间正文"
+                            )
+                        if not stage2_gold._text_rewrite_ok(rewritten_text, target_msg):  # noqa: SLF001
+                            raise ValueError(
+                                f"步骤 {mid_s} rewritten_text 未通过安全阀校验（过短、超长、伪标签或跨语种翻译）"
+                            )
+                        normalized_spec["rewritten_text"] = rewritten_text
+                    else:
+                        normalized_spec.pop("rewritten_text", None)
+                    merged_steps[mid_s] = normalized_spec
                 else:
                     merged_steps[mid_s] = {**spec, "action": act}
 

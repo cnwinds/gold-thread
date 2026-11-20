@@ -95,30 +95,23 @@ def purify(
     polling_normalized = 0
 
     i = 0
+    pending_popped_await: Optional[Dict[str, Any]] = None
     while i < len(units):
         cur = units[i]
         if cur["type"] != "assistant_turn":
+            pending_popped_await = None
             kept.append(cur)
             i += 1
             continue
 
         msg = cur["msg"]
         popped_await = msg.pop("popped_await_msg", None)
+        if isinstance(popped_await, dict):
+            pending_popped_await = popped_await
         msg.setdefault("raw_thinking", msg.get("thinking") or "")
         msg.setdefault("raw_text", msg.get("text") or "")
         tcs = msg.get("tool_calls", [])
         trs = cur["tools"]
-        if isinstance(popped_await, dict) and tcs and not _unverified_edit(cur):
-            pruned.append(
-                {
-                    "reason": "premature_stop_folded",
-                    "has_dpo": True,
-                    "context_units": copy.deepcopy(kept),
-                    "chosen_msg": copy.deepcopy(msg),
-                    "rejected_msg": copy.deepcopy(popped_await),
-                    "dropped_msg_id": popped_await.get("id"),
-                }
-            )
 
         if i + 1 < len(units) and units[i + 1]["type"] == "assistant_turn":
             nxt = units[i + 1]
@@ -132,6 +125,23 @@ def purify(
                 record = _rule_fold(cur, nxt, gcfg, kept)
                 if record is not None:
                     pruned.append(record)
+                    if (
+                        isinstance(pending_popped_await, dict)
+                        and cur["msg"].get("tool_calls")
+                        and not any(t.get("isError") for t in cur["tools"])
+                        and not _unverified_edit(cur)
+                    ):
+                        pruned.append(
+                            {
+                                "reason": "premature_stop_folded",
+                                "has_dpo": True,
+                                "context_units": copy.deepcopy(kept),
+                                "chosen_msg": copy.deepcopy(cur["msg"]),
+                                "rejected_msg": copy.deepcopy(pending_popped_await),
+                                "dropped_msg_id": pending_popped_await.get("id"),
+                            }
+                        )
+                    pending_popped_await = None
                     kept.append(cur)
                     folded += 1
                     i += 2
@@ -255,6 +265,24 @@ def purify(
                         tc["arguments"]["command"] = norm_cmd
                         msg["flags"] = sorted(set(msg.get("flags", []) + ["polling_normalized"]))
                         polling_normalized += 1
+
+        if isinstance(pending_popped_await, dict):
+            if (
+                tcs
+                and not any(t.get("isError") for t in trs)
+                and not _unverified_edit(cur)
+            ):
+                pruned.append(
+                    {
+                        "reason": "premature_stop_folded",
+                        "has_dpo": True,
+                        "context_units": copy.deepcopy(kept),
+                        "chosen_msg": copy.deepcopy(msg),
+                        "rejected_msg": copy.deepcopy(pending_popped_await),
+                        "dropped_msg_id": pending_popped_await.get("id"),
+                    }
+                )
+            pending_popped_await = None
 
         kept.append(cur)
         i += 1
@@ -493,6 +521,29 @@ def _rewrite_ok(new: str, msg: Dict[str, Any]) -> bool:
     return len(new) <= cap
 
 
+def _prose_only(text: str) -> str:
+    """剥离 Markdown 围栏代码块与行内反引号符号，还原自然语言主体以准确判定语种。"""
+    s = re.sub(r"```[\s\S]*?```", " ", text or "")
+    return re.sub(r"`[^`\n]+`", " ", s)
+
+
+def _text_rewrite_ok(new_text: str, msg: Dict[str, Any]) -> bool:
+    """校验无工具收尾/回复步对外正文改写：禁止作用在工具步、禁止注入伪标签、保留语种且控长。"""
+    if msg.get("tool_calls"):
+        return False
+    new_s = (new_text or "").strip()
+    if len(new_s) < 20:
+        return False
+    lowered = new_s.lower()
+    if "<tool_call>" in lowered or "</tool_call>" in lowered or "<think>" in lowered or "</think>" in lowered:
+        return False
+    old = (msg.get("raw_text") or msg.get("text") or "").strip()
+    if old and not rewrite_preserves_language(_prose_only(old), _prose_only(new_s)):
+        return False
+    cap = max(int(len(old) * 2.5), 8000)
+    return len(new_s) <= cap
+
+
 def purify_by_judge(
     flow: List[Dict[str, Any]],
     cfg: Dict[str, Any],
@@ -621,6 +672,13 @@ def purify_by_judge(
                 else:
                     msg["flags"] = sorted(set(msg.get("flags", []) + ["thinking_backfilled"]))
                     backfilled += 1
+            new_txt = str(d.get("rewritten_text") or "").strip()
+            if new_txt and _text_rewrite_ok(new_txt, msg):
+                old_txt = (msg.get("raw_text") or msg.get("text") or "").strip()
+                msg["raw_text"] = msg.get("raw_text") or old_txt
+                msg["text"] = new_txt
+                msg["judge_reason"] = d.get("reason") or msg.get("judge_reason") or "judge_rewrite_text"
+                msg["flags"] = sorted(set(msg.get("flags", []) + ["text_rewritten"]))
 
 
         if act == "exclude":
@@ -812,12 +870,19 @@ def _extract_prev_gold_decisions(prev_gold_rec: Optional[Dict[str, Any]]) -> Dic
                 "action": "exclude",
                 "reason": str(m.get("exclude_reason") or "prev_gold_exclude"),
             }
-        elif m.get("judge_reason") and (m.get("thinking") or "").strip():
-            out[mid] = {
+        elif m.get("judge_reason") and (
+            (m.get("thinking") or "").strip()
+            or ("text_rewritten" in (m.get("flags") or []) and (m.get("text") or "").strip())
+        ):
+            rec_d: Dict[str, Any] = {
                 "action": "rewrite",
-                "rewritten": str(m["thinking"]).strip(),
                 "reason": str(m["judge_reason"]),
             }
+            if (m.get("thinking") or "").strip():
+                rec_d["rewritten"] = str(m["thinking"]).strip()
+            if "text_rewritten" in (m.get("flags") or []) and (m.get("text") or "").strip():
+                rec_d["rewritten_text"] = str(m["text"]).strip()
+            out[mid] = rec_d
         elif "seam_repaired" in (m.get("flags") or []) and (m.get("thinking") or "").strip():
             out[mid] = {
                 "action": "rewrite",
@@ -885,15 +950,19 @@ def apply_step_decisions(
     excluded = 0
 
     i = 0
+    pending_popped_await: Optional[Dict[str, Any]] = None
     while i < len(units):
         cur = units[i]
         if cur["type"] != "assistant_turn":
+            pending_popped_await = None
             kept.append((cur, i))
             i += 1
             continue
 
         msg = cur["msg"]
         popped_await = msg.pop("popped_await_msg", None)
+        if isinstance(popped_await, dict):
+            pending_popped_await = popped_await
         mid = str(msg.get("id") or "")
         tcs = msg.get("tool_calls", [])
         trs = cur["tools"]
@@ -904,17 +973,23 @@ def apply_step_decisions(
 
             if act == "prune":
                 if i <= 1 or i == first_asst_idx or pruned_n >= prune_budget:
-                    if isinstance(popped_await, dict) and tcs and not _unverified_edit(cur):
-                        pruned.append({
-                            "reason": "premature_stop_folded",
-                            "has_dpo": True,
-                            "unit_index": i,
-                            "context_units": copy.deepcopy([ku for ku, _ in kept]),
-                            "chosen_msg": copy.deepcopy(msg),
-                            "rejected_msg": copy.deepcopy(popped_await),
-                            "dropped_msg_id": popped_await.get("id"),
-                            "by": "flow",
-                        })
+                    if isinstance(pending_popped_await, dict):
+                        if (
+                            tcs
+                            and not any(t.get("isError") for t in trs)
+                            and not _unverified_edit(cur)
+                        ):
+                            pruned.append({
+                                "reason": "premature_stop_folded",
+                                "has_dpo": True,
+                                "unit_index": i,
+                                "context_units": copy.deepcopy([ku for ku, _ in kept]),
+                                "chosen_msg": copy.deepcopy(msg),
+                                "rejected_msg": copy.deepcopy(pending_popped_await),
+                                "dropped_msg_id": pending_popped_await.get("id"),
+                                "by": "flow",
+                            })
+                        pending_popped_await = None
                     kept.append((cur, i))
                     i += 1
                     continue
@@ -949,7 +1024,7 @@ def apply_step_decisions(
 
             if act == "rewrite":
                 new_rw = str(d.get("rewritten") or "").strip()
-                if _rewrite_ok(new_rw, msg):
+                if new_rw and _rewrite_ok(new_rw, msg):
                     old = (msg.get("raw_thinking") or msg.get("thinking") or "").strip()
                     msg["raw_thinking"] = msg.get("raw_thinking") or old
                     msg["thinking"] = new_rw
@@ -960,6 +1035,13 @@ def apply_step_decisions(
                     else:
                         msg["flags"] = sorted(set(msg.get("flags", []) + ["thinking_backfilled"]))
                         think_backfilled += 1
+                new_txt = str(d.get("rewritten_text") or "").strip()
+                if new_txt and _text_rewrite_ok(new_txt, msg):
+                    old_txt = (msg.get("raw_text") or msg.get("text") or "").strip()
+                    msg["raw_text"] = msg.get("raw_text") or old_txt
+                    msg["text"] = new_txt
+                    msg["judge_reason"] = d.get("reason") or msg.get("judge_reason") or "agent_rewrite_text"
+                    msg["flags"] = sorted(set(msg.get("flags", []) + ["text_rewritten"]))
                 if gcfg.get("silent_intermediate_steps", True) and tcs and (msg.get("text") or "").strip():
                     msg["raw_text"] = msg.get("raw_text") or msg.get("text")
                     msg["text"] = ""
@@ -985,35 +1067,29 @@ def apply_step_decisions(
                     msg["flags"] = sorted(set(msg.get("flags", []) + ["silent_executed"]))
                     silent_cleared += 1
 
-            if (isinstance(popped_await, dict) and tcs and not msg.get("excluded")
-                    and not _unverified_edit(cur)):
-                pruned.append({
-                    "reason": "premature_stop_folded",
-                    "has_dpo": True,
-                    "unit_index": i,
-                    "context_units": copy.deepcopy([ku for ku, _ in kept]),
-                    "chosen_msg": copy.deepcopy(msg),
-                    "rejected_msg": copy.deepcopy(popped_await),
-                    "dropped_msg_id": popped_await.get("id"),
-                    "by": "flow",
-                })
+            if isinstance(pending_popped_await, dict):
+                if (
+                    tcs
+                    and not msg.get("excluded")
+                    and not any(t.get("isError") for t in trs)
+                    and not _unverified_edit(cur)
+                ):
+                    pruned.append({
+                        "reason": "premature_stop_folded",
+                        "has_dpo": True,
+                        "unit_index": i,
+                        "context_units": copy.deepcopy([ku for ku, _ in kept]),
+                        "chosen_msg": copy.deepcopy(msg),
+                        "rejected_msg": copy.deepcopy(pending_popped_await),
+                        "dropped_msg_id": pending_popped_await.get("id"),
+                        "by": "flow",
+                    })
+                pending_popped_await = None
             kept.append((cur, i))
             i += 1
             continue
 
         # 未被 step_decisions 提及的步：沿用确定性规则提纯（A/B/C/D/E）
-        if isinstance(popped_await, dict) and tcs and not _unverified_edit(cur):
-            pruned.append({
-                "reason": "premature_stop_folded",
-                "has_dpo": True,
-                "unit_index": i,
-                "context_units": copy.deepcopy([ku for ku, _ in kept]),
-                "chosen_msg": copy.deepcopy(msg),
-                "rejected_msg": copy.deepcopy(popped_await),
-                "dropped_msg_id": popped_await.get("id"),
-                "by": "flow",
-            })
-
         if i + 1 < len(units) and units[i + 1]["type"] == "assistant_turn":
             nxt = units[i + 1]
             nxt_msg = nxt["msg"]
@@ -1027,6 +1103,23 @@ def apply_step_decisions(
                     if record is not None:
                         record["unit_index"] = i
                         pruned.append(record)
+                        if (
+                            isinstance(pending_popped_await, dict)
+                            and cur["msg"].get("tool_calls")
+                            and not any(t.get("isError") for t in cur["tools"])
+                            and not _unverified_edit(cur)
+                        ):
+                            pruned.append({
+                                "reason": "premature_stop_folded",
+                                "has_dpo": True,
+                                "unit_index": i,
+                                "context_units": copy.deepcopy([ku for ku, _ in kept]),
+                                "chosen_msg": copy.deepcopy(cur["msg"]),
+                                "rejected_msg": copy.deepcopy(pending_popped_await),
+                                "dropped_msg_id": pending_popped_await.get("id"),
+                                "by": "flow",
+                            })
+                        pending_popped_await = None
                         kept.append((cur, i))
                         folded += 1
                         i += 2
@@ -1135,6 +1228,24 @@ def apply_step_decisions(
             msg["text"] = ""
             msg["flags"] = sorted(set(msg.get("flags", []) + ["silent_executed"]))
             silent_cleared += 1
+
+        if isinstance(pending_popped_await, dict):
+            if (
+                tcs
+                and not any(t.get("isError") for t in trs)
+                and not _unverified_edit(cur)
+            ):
+                pruned.append({
+                    "reason": "premature_stop_folded",
+                    "has_dpo": True,
+                    "unit_index": i,
+                    "context_units": copy.deepcopy([ku for ku, _ in kept]),
+                    "chosen_msg": copy.deepcopy(msg),
+                    "rejected_msg": copy.deepcopy(pending_popped_await),
+                    "dropped_msg_id": pending_popped_await.get("id"),
+                    "by": "flow",
+                })
+            pending_popped_await = None
 
         kept.append((cur, i))
         i += 1

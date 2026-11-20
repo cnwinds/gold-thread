@@ -577,6 +577,73 @@ def test_session_sft_exclusion_shows_zero_sft_and_preserves_dpo(tmp_path: Path) 
     gamma_pack_row = {s["session_id"]: s for s in pack_gold["sessions"]}[sid3]
     assert gamma_pack_row["sft_windows"] < gamma_pack_row["sft_lf_rows"]
 
+    # 冻结历史包后整项目停用 gamma：历史计数/状态/包标记必须完全冻结，实时停用仅走 workspace_usage 叠加
+    frozen_fields = (
+        "project_group",
+        "split",
+        "raw_steps",
+        "gold_steps",
+        "sft_windows",
+        "sft_lf_rows",
+        "dpo_count",
+        "sft_excluded",
+        "dpo_excluded",
+        "snapshot_status",
+        "readonly",
+    )
+    before = {s["session_id"]: {k: s.get(k) for k in frozen_fields} for s in pack_gold["sessions"]}
+    before_gamma_usage = copy.deepcopy(gamma_pack_row["workspace_usage"])
+    assert before_gamma_usage["in_workspace"] is True
+    assert before_gamma_usage["session_excluded"] is False
+
+    curate_tools.curate_exclude(
+        scopes=["project:game::gamma"],
+        reason="整项 gamma 停用，验证历史包冻结与工作区实时叠加分离",
+        cfg=cfg,
+    )
+
+    pack_after = lineage_graph.list_virtual_dataset_gold(h1, cfg=cfg)
+    after_rows = {s["session_id"]: s for s in pack_after["sessions"]}
+    # 历史包所有行的冻结字段与包内 SFT/DPO 标记、CAS 状态保持不变
+    for sid, snap in before.items():
+        assert {k: after_rows[sid].get(k) for k in frozen_fields} == snap
+    gamma_after = after_rows[sid3]
+    assert gamma_after["workspace_usage"]["in_workspace"] is True
+    assert gamma_after["workspace_usage"]["session_excluded"] is True
+    assert gamma_after["workspace_usage"]["session_exclusion_scope"] == "project"
+    assert gamma_after["workspace_usage"]["sft_excluded"] is True
+    assert gamma_after["workspace_usage"]["dpo_excluded"] is True
+
+    # 工作区黄金列表：实时停用后 gamma 的行计数归零，并携带同形状的停用状态
+    ws_gold = lineage_graph.list_virtual_dataset_gold("workspace", cfg=cfg)
+    gamma_ws_row = {s["session_id"]: s for s in ws_gold["sessions"]}[sid3]
+    assert gamma_ws_row["sft_windows"] == 0
+    assert gamma_ws_row["dpo_count"] == 0
+    assert gamma_ws_row["sft_excluded"] is True
+    assert gamma_ws_row["dpo_excluded"] is True
+    assert gamma_ws_row["workspace_usage"] == gamma_after["workspace_usage"]
+
+    # 抽屉与列表共用同一 workspace_usage 形状/取值
+    drawer = lineage_graph.get_virtual_dataset_session_lineage(h1, sid3, cfg=cfg)
+    assert drawer["workspace_usage"] == gamma_after["workspace_usage"]
+    drawer_ws = lineage_graph.get_virtual_dataset_session_lineage("workspace", sid3, cfg=cfg)
+    assert drawer_ws["workspace_usage"] == gamma_ws_row["workspace_usage"]
+
+    # 恢复后实时叠加归零，历史包仍应保持冻结结果
+    curate_tools.curate_exclude(
+        scopes=["project:game::gamma"],
+        restore=True,
+        reason="恢复 gamma 以清理测试沙箱状态",
+        cfg=cfg,
+    )
+    restored = {s["session_id"]: s for s in lineage_graph.list_virtual_dataset_gold(h1, cfg=cfg)["sessions"]}
+    assert restored[sid3]["workspace_usage"]["session_excluded"] is False
+    assert restored[sid3]["workspace_usage"]["sft_excluded"] is False
+    assert {k: restored[sid3].get(k) for k in frozen_fields} == before[sid3]
+    restored_ws = {s["session_id"]: s for s in lineage_graph.list_virtual_dataset_gold("workspace", cfg=cfg)["sessions"]}
+    assert restored_ws[sid3]["workspace_usage"]["session_excluded"] is False
+    assert restored_ws[sid3]["sft_windows"] == 4
+
 
 def test_audit_hardening_gate_staging_dpo_validation_and_pyc_filter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

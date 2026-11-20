@@ -49,7 +49,7 @@ DEFAULTS: Dict[str, Any] = {
     },
     "labeling": {
         "positive_model_patterns": ["^deepseek", "^glm-"],
-        "negative_model_patterns": ["qwen"],
+        "negative_model_patterns": ["qwen", "^goldthread"],
         "dominant_ratio_min": 0.6,
         "unknown_label": "pending",
     },

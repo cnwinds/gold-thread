@@ -44,6 +44,7 @@ labeling:
   - "^minimax"
   negative_model_patterns:
   - "qwen"
+  - "^goldthread"
   # 主导模型出现歧义（第二模型占比超过该值）时降到 pending 待复核
   dominant_ratio_min: 0.6
   unknown_label: "pending"

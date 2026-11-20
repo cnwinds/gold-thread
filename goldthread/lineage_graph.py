@@ -122,6 +122,38 @@ def _session_snapshot_status(
     return "exact"
 
 
+def _workspace_usage(
+    sid: str,
+    draft: Dict[str, Any],
+    raw_sessions: Dict[str, Any],
+    gold_sessions: Dict[str, Any],
+) -> Dict[str, Any]:
+    """会话在**当前工作区**的实时停用叠加（历史包列表与抽屉共用同一形状）。
+
+    归属项目一律以当前 raw/gold 索引为准，历史快照里的项目名不参与判定；
+    会话已被移出工作区时不继承任何实时停用。
+    """
+    in_workspace = (sid in raw_sessions) or (sid in gold_sessions)
+    live_project = ""
+    if in_workspace:
+        live_project = str(
+            (gold_sessions.get(sid) or {}).get("project_group")
+            or (raw_sessions.get(sid) or {}).get("project_group")
+            or ""
+        )
+    usage = dataset_draft.session_kind_exclusions(draft, sid, live_project) if in_workspace else {}
+    return {
+        "in_workspace": in_workspace,
+        "project_group": live_project or "unknown",
+        "session_excluded": bool(usage.get("session_excluded")),
+        "session_exclusion_scope": str(usage.get("session_exclusion_scope") or ""),
+        "sft_excluded": bool(usage.get("sft_excluded")),
+        "sft_exclusion_scope": str(usage.get("sft_exclusion_scope") or ""),
+        "dpo_excluded": bool(usage.get("dpo_excluded")),
+        "dpo_exclusion_scope": str(usage.get("dpo_exclusion_scope") or ""),
+    }
+
+
 def _pack_node_summary(zp: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     man = _read_zip_json(zp, ("goldthread-train/data/MANIFEST.json", "data/MANIFEST.json", "MANIFEST.json"))
     len_stats = _read_zip_json(
@@ -670,14 +702,24 @@ def list_virtual_dataset_train(
     split: str = "",
     project: str = "",
     q: str = "",
+    session_id: str = "",
     offset: int = 0,
     limit: int = 50,
 ) -> Dict[str, Any]:
-    """读取虚拟数据集冻结的训练切片（SFT / DPO），支持筛选与分页。"""
+    """读取虚拟数据集冻结的训练切片（SFT / DPO），支持筛选与分页。
+
+    ``session_id`` 为精确匹配（metadata.session_id 优先，回退顶层字段），
+    在分页前生效；配套的单类型查询只读取该类型文件，未命中会话的行
+    不做预览/长度等昂贵压缩，返回的 raw_row 始终是完整原始行。
+    """
     cfg = cfg or load_config()
     norm_id = normalize_pack_id(dataset_id)
+    sid_exact = (session_id or "").strip()
     rows_all: List[Dict[str, Any]] = []
     projects_set: set[str] = set()
+
+    def _wanted(raw_row: Dict[str, Any]) -> bool:
+        return not sid_exact or _row_session_id(raw_row) == sid_exact
 
     if norm_id == "workspace":
         train_dir = stage_dirs(cfg)["train"]
@@ -687,8 +729,12 @@ def list_virtual_dataset_train(
             ("dpo_preference_pairs.train.jsonl", "dpo", "train"),
             ("dpo_preference_pairs.eval.jsonl", "dpo", "eval"),
         ]
+        if sid_exact and kind in ("sft", "dpo"):
+            file_specs = [spec for spec in file_specs if spec[1] == kind]
         for fname, k_tag, sp_tag in file_specs:
             for idx, r in enumerate(read_jsonl(train_dir / fname)):
+                if not _wanted(r):
+                    continue
                 rows_all.append(_compact_train_row(r, k_tag, sp_tag, f"{fname}:{idx}"))
     else:
         zp, _man = _resolve_pack_zip(norm_id, cfg)
@@ -698,8 +744,12 @@ def list_virtual_dataset_train(
             ("dpo.train.lf.jsonl", "dpo", "train"),
             ("dpo.eval.lf.jsonl", "dpo", "eval"),
         ]
+        if sid_exact and kind in ("sft", "dpo"):
+            file_specs = [spec for spec in file_specs if spec[1] == kind]
         for fname, k_tag, sp_tag in file_specs:
             for idx, r in enumerate(_read_zip_jsonl(zp, fname)):
+                if not _wanted(r):
+                    continue
                 rows_all.append(_compact_train_row(r, k_tag, sp_tag, f"{fname}:{idx}"))
 
     for item in rows_all:
@@ -731,9 +781,15 @@ def list_virtual_dataset_train(
     }
 
 
+def _row_session_id(row: Dict[str, Any]) -> str:
+    """原始训练行的会话 ID：metadata.session_id 优先，回退顶层 session_id。"""
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    return str(meta.get("session_id") or row.get("session_id") or "")
+
+
 def _compact_train_row(row: Dict[str, Any], kind: str, split: str, fallback_id: str) -> Dict[str, Any]:
     meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-    sid = str(meta.get("session_id") or row.get("session_id") or "")
+    sid = _row_session_id(row)
     proj = str(meta.get("project_group") or row.get("project_group") or "")
     sample_id = str(row.get("sample_id") or meta.get("sample_id") or fallback_id)
     stage = str(meta.get("stage") or meta.get("source") or row.get("source") or "")
@@ -874,6 +930,7 @@ def list_virtual_dataset_gold(
                 "cas_gold_sha256": "",
                 "snapshot_status": "workspace",
                 "readonly": False,
+                "workspace_usage": _workspace_usage(sid, draft, raw_sessions, gold_sessions),
             }
             if project and pg != project:
                 continue
@@ -949,6 +1006,8 @@ def list_virtual_dataset_gold(
             "cas_raw_sha256": str(files.get("raw_file") or ""),
             "snapshot_status": status,
             "readonly": True,
+            # 冻结计数/切分/SFT-DPO 标记保持历史快照语义，实时停用另走 workspace_usage 叠加
+            "workspace_usage": _workspace_usage(sid, draft, raw_sessions, gold_sessions),
         }
         if project and pg != project:
             continue
@@ -1203,19 +1262,32 @@ def get_virtual_dataset_session_lineage(
         raw_thinking = str(rm.get("raw_thinking") if "raw_thinking" in rm else (rm.get("thinking") or ""))
         if gm and not raw_thinking and gm.get("raw_thinking"):
             raw_thinking = str(gm.get("raw_thinking") or "")
+        raw_text = str(rm.get("raw_text") if "raw_text" in rm else (rm.get("text") or ""))
+        if gm and not raw_text and gm.get("raw_text"):
+            raw_text = str(gm.get("raw_text") or "")
 
         if gm:
             gold_thinking = str(eff_rewrites.get(mid) or gm.get("thinking") or "")
             flags = list(gm.get("flags") or [])
             is_excluded = bool(gm.get("excluded")) or (mid in eff_excluded) or (sd_step.get("action") == "exclude")
+            text_val = str(sd_step.get("rewritten_text") or gm.get("text") or "")
             changed = bool(raw_thinking.strip() != gold_thinking.strip())
-            state = "excluded" if is_excluded else ("rewritten" if (changed or sd_step.get("action") == "rewrite") else "kept")
-            text_val = str(gm.get("text") or "")
+            text_changed = bool(raw_text.strip() != text_val.strip())
+            state = (
+                "excluded"
+                if is_excluded
+                else (
+                    "rewritten"
+                    if (changed or text_changed or "text_rewritten" in flags or sd_step.get("action") == "rewrite")
+                    else "kept"
+                )
+            )
         else:
             gold_thinking = ""
             flags = []
             is_excluded = sd_step.get("action") == "exclude"
             changed = False
+            text_changed = False
             text_val = str(rm.get("text") or "")
             state = "pruned" if (pr or gold_asst) else "kept"
 
@@ -1234,7 +1306,9 @@ def get_virtual_dataset_session_lineage(
                 "raw_thinking": raw_thinking,
                 "gold_thinking": gold_thinking,
                 "changed": changed,
+                "raw_text": raw_text,
                 "text": text_val,
+                "text_changed": text_changed,
                 "flags": flags,
                 "excluded": is_excluded,
                 "in_gold": bool(gm),
@@ -1243,8 +1317,7 @@ def get_virtual_dataset_session_lineage(
         )
 
     ws_draft = dataset_draft.load_draft(cfg)
-    ws_in_corpus = (full_sid in raw_sessions) or (full_sid in gold_sessions)
-    ws_usage = dataset_draft.session_kind_exclusions(ws_draft, full_sid, project_group) if ws_in_corpus else {}
+    workspace_usage = _workspace_usage(full_sid, ws_draft, raw_sessions, gold_sessions)
 
     mrep = ann.get("model_report") or gold_rec.get("model_report") or None
     ledger_events = ledger.read_ledger(cfg=cfg, sid=full_sid, limit=20)
@@ -1255,11 +1328,7 @@ def get_virtual_dataset_session_lineage(
         "snapshot_status": snapshot_status,
         "cas_fidelity": cas_fidelity,
         "cas_files": cas_files,
-        "workspace_usage": {
-            "in_workspace": ws_in_corpus,
-            "sft_excluded": bool(ws_usage.get("sft_excluded")),
-            "dpo_excluded": bool(ws_usage.get("dpo_excluded")),
-        },
+        "workspace_usage": workspace_usage,
         "meta": {
             "session_id": full_sid,
             "project_group": project_group,

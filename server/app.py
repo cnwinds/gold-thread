@@ -3526,6 +3526,9 @@ def api_session_lineage(sid: str) -> Dict[str, Any]:
         )
         if gm and not raw_thinking and gm.get("raw_thinking"):
             raw_thinking = str(gm.get("raw_thinking") or "")
+        raw_text = str(rm.get("raw_text") if "raw_text" in rm else (rm.get("text") or ""))
+        if gm and not raw_text and gm.get("raw_text"):
+            raw_text = str(gm.get("raw_text") or "")
 
         if gm:
             gold_thinking = str(eff_rewrites.get(mid) or gm.get("thinking") or "")
@@ -3536,11 +3539,14 @@ def api_session_lineage(sid: str) -> Dict[str, Any]:
                 or (sd_step.get("action") == "exclude")
                 or ((hr_items.get(mid) or {}).get("step") == "exclude")
             )
+            text_val = str(sd_step.get("rewritten_text") or gm.get("text") or "")
             changed = bool(raw_thinking.strip() != gold_thinking.strip())
+            text_changed = bool(raw_text.strip() != text_val.strip())
             if is_excluded:
                 state = "excluded"
             elif (
                 changed
+                or text_changed
                 or any(
                     f in flags
                     for f in (
@@ -3548,6 +3554,7 @@ def api_session_lineage(sid: str) -> Dict[str, Any]:
                         "thinking_backfilled",
                         "thinking_synthesized",
                         "seam_repaired",
+                        "text_rewritten",
                     )
                 )
                 or sd_step.get("action") == "rewrite"
@@ -3557,12 +3564,12 @@ def api_session_lineage(sid: str) -> Dict[str, Any]:
                 state = "folded"
             else:
                 state = "kept"
-            text_val = str(gm.get("text") or "")
         else:
             gold_thinking = ""
             flags = []
             is_excluded = sd_step.get("action") == "exclude"
             changed = False
+            text_changed = False
             text_val = str(rm.get("text") or "")
             if (
                 mid in folded_into
@@ -3613,7 +3620,9 @@ def api_session_lineage(sid: str) -> Dict[str, Any]:
                 "raw_thinking": raw_thinking,
                 "gold_thinking": gold_thinking,
                 "changed": changed,
+                "raw_text": raw_text,
                 "text": text_val,
+                "text_changed": text_changed,
                 "reason": " · ".join(reason_parts),
                 "flags": flags,
                 "pathologies": pathologies,
@@ -3647,7 +3656,9 @@ def api_session_lineage(sid: str) -> Dict[str, Any]:
                 "raw_thinking": str(rej.get("raw_thinking") or rej.get("thinking") or pr.get("rejected_thinking") or ""),
                 "gold_thinking": "",
                 "changed": False,
+                "raw_text": str(rej.get("raw_text") or rej.get("text") or ""),
                 "text": str(rej.get("text") or ""),
+                "text_changed": False,
                 "reason": str(pr.get("reason") or "pruned"),
                 "flags": [],
                 "pathologies": [],
@@ -3813,6 +3824,7 @@ def api_virtual_dataset_train(
     split: str = Query(""),
     project: str = Query(""),
     q: str = Query(""),
+    session_id: str = Query(""),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
 ) -> Dict[str, Any]:
@@ -3825,6 +3837,7 @@ def api_virtual_dataset_train(
             split=split,
             project=project,
             q=q,
+            session_id=session_id,
             offset=offset,
             limit=limit,
         )
