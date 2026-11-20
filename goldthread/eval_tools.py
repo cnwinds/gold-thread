@@ -696,6 +696,8 @@ def eval_pack(
     hist_total = hist_with_think = 0
     missing_assistant_targets = 0
     missing_target_thinking = 0
+    invalid_target_think_tags = 0
+    invalid_think_examples: List[Dict[str, Any]] = []
     short_target_thinking = 0
     stop_targets = 0
     premature_stop_targets = 0
@@ -711,18 +713,16 @@ def eval_pack(
     for ds_key in ("sft.train", "sft.eval"):
         rows = datasets.get(ds_key) or []
         f_hist = f_hist_th = 0
-        for row in rows:
-            convs = row.get("conversations") or row.get("messages") or []
-            last_role = (
-                str((convs[-1].get("from") or convs[-1].get("role") or "")).strip()
-                if convs and isinstance(convs[-1], dict)
-                else ""
-            )
-            turns = _sft_assistant_turns(row)
-            if not turns or last_role not in ("gpt", "assistant"):
+        for row_number, row in enumerate(rows, start=1):
+            conversations = row.get("conversations")
+            sharegpt = isinstance(conversations, list) and bool(conversations)
+            convs = conversations if sharegpt else row.get("messages") or []
+            role_key, expected_role = ("from", "gpt") if sharegpt else ("role", "assistant")
+            if not convs or not isinstance(convs[-1], dict) or convs[-1].get(role_key) != expected_role:
                 missing_assistant_targets += 1
                 missing_target_thinking += 1
                 continue
+            turns = _sft_assistant_turns(row)
             for has, _body, _has_tc, _full in turns[:-1]:
                 f_hist += 1
                 hist_total += 1
@@ -734,6 +734,18 @@ def eval_pack(
                 missing_target_thinking += 1
             elif len(t_body.strip()) < 20:
                 short_target_thinking += 1
+            opens = t_full.count(_OPEN_THINK)
+            closes = t_full.count(_CLOSE_THINK)
+            # ShareGPT/LF requires inline tags; OpenAI may carry reasoning_content separately.
+            if (sharegpt or opens or closes) and not (
+                opens == closes == 1 and t_full.index(_OPEN_THINK) < t_full.index(_CLOSE_THINK)
+            ):
+                invalid_target_think_tags += 1
+                if len(invalid_think_examples) < 5:
+                    invalid_think_examples.append({
+                        "dataset": ds_key, "row_number": row_number, "sample_id": row.get("sample_id"),
+                        "opens": opens, "closes": closes,
+                    })
             if not t_has_tc:
                 stop_targets += 1
                 if _is_premature_stop(row, t_full):
@@ -838,6 +850,13 @@ def eval_pack(
             "code": "missing_target_thinking",
             "message": f"目标步缺少 <think> 块 ({missing_target_thinking} 条)",
         })
+    if invalid_target_think_tags > 0:
+        violations.append({
+            "severity": "error",
+            "code": "invalid_target_think_tags",
+            "message": f"SFT 目标步须恰好一对顺序正确的 <think> 标签 ({invalid_target_think_tags} 条)",
+            "examples": invalid_think_examples,
+        })
     if short_target_thinking > 0:
         violations.append({
             "severity": "warning",
@@ -923,6 +942,7 @@ def eval_pack(
         "empty_target_thinking": empty_target_thinking,
         "missing_assistant_targets": missing_assistant_targets,
         "missing_target_thinking": missing_target_thinking,
+        "invalid_target_think_tags": invalid_target_think_tags,
         "short_target_thinking": short_target_thinking,
         # 5) 中途假收尾
         "stop_targets": stop_targets,

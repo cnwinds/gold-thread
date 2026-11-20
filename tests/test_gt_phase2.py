@@ -580,6 +580,52 @@ def test_gate_check_fails_with_exit_code_2_on_polluted_pack(tmp_path: Path) -> N
     assert cli.main(["--config", str(cfg_path), "--json", "gate", "check", str(bad_zip)]) == 2
 
 
+@pytest.mark.parametrize(("target", "target_role", "error_code"), [
+    ("<think>Confirm the measured total before reporting it.</think>Done.", "gpt", None),
+    ("<think>Confirm the total.</think><think>Double-check it.</think>Done.", "gpt", "invalid_target_think_tags"),
+    ("</think>Confirm the measured total.<think>Done.", "gpt", "invalid_target_think_tags"),
+    ("<think>Confirm the measured total. Done.", "gpt", "invalid_target_think_tags"),
+    ("<think>Confirm the total.</think><think>Double-check it.</think>Done.", "assistant", "missing_assistant_target"),
+])
+def test_gate_checks_exactly_one_ordered_think_pair_in_sft_target(
+    tmp_path: Path, target: str, target_role: str, error_code: str | None,
+) -> None:
+    cfg, cfg_path = _make_sandbox_cfg(tmp_path)
+    path = tmp_path / "think-pairs.zip"
+    manifest = {
+        "format": {"tool_call": "coder-xml"},
+        "length_gate": {"sft.train": {}, "sft.eval": {}},
+    }
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("goldthread-train/data/MANIFEST.json", json.dumps(manifest))
+        for split in ("train", "eval"):
+            row = {
+                "sample_id": f"step::{split}::m1",
+                "metadata": {"project_group": f"game::{split}"},
+                "conversations": [
+                    {"from": "system", "value": "Report measurements."},
+                    {"from": "human", "value": "What is the baseline?"},
+                    {"from": "gpt", "value": "<think>Check the baseline.</think>Baseline is 5."},
+                    {"from": "human", "value": "Confirm the total."},
+                    {"from": target_role, "value": target} if split == "train" else
+                    {"from": "gpt", "value": "<think>Confirm the measured total.</think>Total is 7."},
+                ],
+            }
+            zf.writestr(f"goldthread-train/data/sft.{split}.lf.jsonl", json.dumps(row) + "\n")
+
+    gate = build_tools.gate_check(path, cfg=cfg)
+    assert gate["passed"] is (error_code is None), gate["violations"]
+    assert cli.main(["--config", str(cfg_path), "gate", "check", str(path), "--json"]) == (0 if error_code is None else 2)
+    if error_code:
+        violations = {item["code"]: item for item in gate["violations"]}
+        assert error_code in violations
+        if error_code == "invalid_target_think_tags":
+            example = violations[error_code]["examples"][0]
+            assert example["dataset"] == "sft.train"
+            assert example["row_number"] == 1
+            assert example["sample_id"] == "step::train::m1"
+
+
 # ---------------------------------------------------------------------------
 # 4. gt assist turns / judge / dpo 显式调用与 --apply 留痕
 # ---------------------------------------------------------------------------

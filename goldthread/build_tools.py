@@ -79,9 +79,14 @@ def gate_check(
         },
         {
             "name": "target_thinking_present",
-            "passed": (ev["missing_target_thinking"] == 0 and ev["thinking_shape"] != "mixed"),
+            "passed": (
+                ev["missing_target_thinking"] == 0
+                and ev["invalid_target_think_tags"] == 0
+                and ev["thinking_shape"] != "mixed"
+            ),
             "detail": (
                 f"missing_target_thinking={ev['missing_target_thinking']}, "
+                f"invalid_target_think_tags={ev['invalid_target_think_tags']}, "
                 f"thinking_shape={ev['thinking_shape']}"
             ),
         },
